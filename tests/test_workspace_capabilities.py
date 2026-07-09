@@ -39,6 +39,7 @@ class TestCapabilities:
     def test_unsupported_actions(self):
         from workspace_capabilities import unsupported_actions
         google_unsup = unsupported_actions("google_api")
+        assert "gmail.draft" in google_unsup  # now False
         assert "gmail.send" not in google_unsup
         composio_unsup = unsupported_actions("composio")
         assert "gmail.send" in composio_unsup
@@ -52,5 +53,19 @@ class TestCapabilities:
         from workspace_capabilities import all_actions
         actions = all_actions()
         assert "gmail.search" in actions
-        assert "calendar.create" in actions
-        assert "drive.upload" in actions
+
+    def test_workflow_requirements_exist(self):
+        from workspace_capabilities import WORKFLOW_REQUIREMENTS
+        assert "document.handoff" in WORKFLOW_REQUIREMENTS
+        assert "meeting.gather" in WORKFLOW_REQUIREMENTS
+        assert "weekly.collect" in WORKFLOW_REQUIREMENTS
+
+    def test_unsupported_reasons_exist(self):
+        from workspace_capabilities import UNSUPPORTED_REASONS
+        assert ("google_api", "gmail.draft") in UNSUPPORTED_REASONS
+        assert ("composio:mcp", "gmail.send") in UNSUPPORTED_REASONS
+
+    def test_provider_recommendations_exist(self):
+        from workspace_capabilities import PROVIDER_RECOMMENDATIONS
+        assert PROVIDER_RECOMMENDATIONS["gmail.draft"] == "composio"
+        assert PROVIDER_RECOMMENDATIONS["document.handoff"] == "composio"

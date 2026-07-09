@@ -20,6 +20,8 @@ SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
 if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
+from action_result_cli import print_result
+
 try:
     from config_loader import load_config  # type: ignore
 except Exception as exc:  # pragma: no cover
@@ -30,26 +32,6 @@ except Exception as exc:  # pragma: no cover
 def get_client(config: Any):
     from workspace_client import get_workspace_client
     return get_workspace_client(config)
-
-def _print_result(result: dict, summary: bool, label: str) -> None:
-    if summary:
-        success = result.get("success", False)
-        icon = "✅" if success else "❌"
-        provider = result.get("provider", "?")
-        audited = "yes" if result.get("audited") else "no"
-        target = result.get("target", "")
-        print(f"{icon} {label}" + (f": {target}" if target else ""))
-        print(f"Provider: {provider}")
-        print(f"Audited: {audited}")
-        data = result.get("data", {})
-        for key in ("id", "path", "display_url", "htmlLink", "webViewLink"):
-            if key in data:
-                print(f"{key}: {data[key]}")
-        if result.get("error"):
-            print(f"Error: {result['error']}")
-    else:
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-
 
 def cmd_search(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
@@ -72,7 +54,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
     result = client.drive_upload(args.file, parent_id=args.parent)
-    _print_result(result, args.summary, "Drive file uploaded")
+    print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
 
@@ -83,7 +65,7 @@ def cmd_download(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
     result = client.drive_download(args.file_id, args.output)
-    _print_result(result, args.summary, "Drive file downloaded")
+    print_result(result, args.summary, "Drive file downloaded")
     return 0 if result.get("success") else 1
 
 

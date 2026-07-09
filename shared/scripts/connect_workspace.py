@@ -507,6 +507,70 @@ def cmd_composio_debug_tool(config: dict[str, Any], toolkit: str) -> int:
         return 1
 
 
+def cmd_capabilities(config: dict[str, Any], provider_override: str | None = None) -> int:
+    """Print provider capabilities — supported and unsupported actions."""
+    from workspace_capabilities import (
+        get_capabilities, unsupported_actions, recommend_provider_for,
+        get_unsupported_reason, WORKFLOW_REQUIREMENTS,
+    )
+
+    # Determine which provider to show
+    if provider_override:
+        provider = provider_override
+        if provider == "composio":
+            integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
+            workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+            mode = workspace.get("mode", "mcp")
+            provider = f"composio:{mode}"
+    else:
+        integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
+        workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+        provider = workspace.get("provider", "google_api")
+        mode = workspace.get("mode", "direct")
+        if provider == "composio":
+            provider = f"composio:{mode}"
+
+    caps = get_capabilities(provider)
+    if not caps:
+        print(f"Unknown provider: {provider}")
+        return 1
+
+    print(f"Workspace provider: {provider}")
+    print()
+
+    # Supported actions
+    supported = [a for a, v in caps.items() if v]
+    print("Supported:")
+    for action in sorted(supported):
+        note = ""
+        if action == "gmail.send":
+            note = "  destructive / requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1"
+        print(f"  ✅ {action}{note}")
+    print()
+
+    # Unsupported actions
+    unsupported = unsupported_actions(provider)
+    if unsupported:
+        print("Unsupported:")
+        for action in sorted(unsupported):
+            reason = get_unsupported_reason(provider, action)
+            rec = recommend_provider_for(action)
+            print(f"  ❌ {action}  {reason}; use provider={rec}")
+    print()
+
+    # Derived workflow capabilities
+    print("Workflows:")
+    for wf_name, requirements in sorted(WORKFLOW_REQUIREMENTS.items()):
+        missing = [a for a in requirements if not caps.get(a, False)]
+        if not missing:
+            print(f"  ✅ {wf_name}")
+        else:
+            rec = recommend_provider_for(wf_name)
+            print(f"  ❌ {wf_name}  missing: {', '.join(missing)}; use provider={rec}")
+
+    return 0
+
+
 def _main() -> int:
     parser = argparse.ArgumentParser(
         description="Workspace provider onboarding and status"
@@ -533,12 +597,16 @@ def _main() -> int:
                         help="Run a live test against a toolkit (gmail, googlecalendar, googledrive)")
     parser.add_argument("--debug-tool", metavar="TOOLKIT",
                         help="Debug: test all MCP meta-tools for a toolkit with full output")
+    parser.add_argument("--capabilities", action="store_true",
+                        help="Print provider capabilities (supported/unsupported actions and workflows)")
     args = parser.parse_args()
 
     config = _load_config(args.config)
 
     if args.status:
         return cmd_status(config)
+    elif args.capabilities:
+        return cmd_capabilities(config, provider_override=args.provider)
     elif args.provider == "google_api":
         return cmd_provider_google_api(config)
     elif args.provider == "composio" and args.connect:

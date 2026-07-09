@@ -169,9 +169,7 @@ CHIEF_OF_STAFF_AUTO_APPROVE=1 python skills/calendar-manager/scripts/calendar_ac
   --title "Test Event" --start 2026-07-10 --end 2026-07-10
 ```
 
-### 5. Gmail Draft (write) — Composio only
-
-### 5. Gmail Draft — NOT supported
+### 5. Gmail Draft — Not supported in Google service-account mode
 
 Google service-account mode does not currently support Gmail draft creation
 because the external google_api.py script has no draft subcommand.

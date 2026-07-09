@@ -21,6 +21,8 @@ SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
 if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
+from action_result_cli import print_result
+
 try:
     from config_loader import load_config  # type: ignore
 except Exception as exc:  # pragma: no cover
@@ -33,27 +35,6 @@ def get_client(config: Any):
     return get_workspace_client(config)
 
 
-def _print_result(result: dict[str, Any], summary: bool, action_label: str) -> None:
-    """Print result as JSON or human-readable summary."""
-    if summary:
-        success = result.get("success", False)
-        icon = "✅" if success else "❌"
-        provider = result.get("provider", "?")
-        audited = "yes" if result.get("audited") else "no"
-        target = result.get("target", "")
-        print(f"{icon} {action_label}" + (f": {target}" if target else ""))
-        print(f"Provider: {provider}")
-        print(f"Audited: {audited}")
-        data = result.get("data", {})
-        for key in ("id", "path", "display_url", "htmlLink", "webViewLink"):
-            if key in data:
-                print(f"{key}: {data[key]}")
-        if result.get("error"):
-            print(f"Error: {result['error']}")
-    else:
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-
-
 def cmd_upload(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
@@ -64,7 +45,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
     result = client.drive_upload(args.file, parent_id=args.parent)
-    _print_result(result, args.summary, "Drive file uploaded")
+    print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
 
@@ -87,10 +68,10 @@ def cmd_draft_email(args: argparse.Namespace) -> int:
     from workspace_capabilities import require_capability
     unsupported = require_capability(client, "gmail.draft", target=args.to)
     if unsupported:
-        _print_result(unsupported, args.summary, "Gmail draft created")
+        print_result(unsupported, args.summary, "Gmail draft created")
         return 1
     result = client.gmail_create_draft(args.to, args.subject, args.body, cc=args.cc)
-    _print_result(result, args.summary, "Gmail draft created")
+    print_result(result, args.summary, "Gmail draft created")
     return 0 if result.get("success") else 1
 
 
@@ -129,7 +110,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
                      f"Use provider=composio for full handoff, or pass --allow-partial to upload without drafting.",
             "audited": False,
         }
-        _print_result(combined, args.summary, "Document handoff not supported")
+        print_result(combined, args.summary, "Document handoff not supported")
         return 1
 
     # Step 1: Upload to Drive
@@ -142,7 +123,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
             "steps": {"drive_upload": upload_result, "gmail_draft": None},
             "error": upload_result.get("error", "drive upload failed"),
         }
-        _print_result(combined, args.summary, "Document handoff failed")
+        print_result(combined, args.summary, "Document handoff failed")
         return 1
 
     # If gmail.draft unsupported but --allow-partial, return partial result
@@ -155,7 +136,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
             "error": draft_unsupported["error"],
             "audited": False,
         }
-        _print_result(combined, args.summary, "Document handoff partial (draft unsupported)")
+        print_result(combined, args.summary, "Document handoff partial (draft unsupported)")
         return 1
 
     # Step 2: Extract share link from upload result
@@ -184,7 +165,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
         },
         "error": draft_result.get("error") if not draft_result.get("success") else None,
     }
-    _print_result(combined, args.summary, "Document handoff completed")
+    print_result(combined, args.summary, "Document handoff completed")
     return 0 if combined["success"] else 1
 
 

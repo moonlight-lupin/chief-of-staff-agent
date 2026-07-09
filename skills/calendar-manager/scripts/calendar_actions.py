@@ -21,6 +21,8 @@ SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
 if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
+from action_result_cli import print_result
+
 try:
     from config_loader import load_config  # type: ignore
 except Exception as exc:  # pragma: no cover
@@ -31,26 +33,6 @@ except Exception as exc:  # pragma: no cover
 def get_client(config: Any):
     from workspace_client import get_workspace_client
     return get_workspace_client(config)
-
-
-def _print_result(result: dict, summary: bool, label: str) -> None:
-    if summary:
-        success = result.get("success", False)
-        icon = "✅" if success else "❌"
-        provider = result.get("provider", "?")
-        audited = "yes" if result.get("audited") else "no"
-        target = result.get("target", "")
-        print(f"{icon} {label}" + (f": {target}" if target else ""))
-        print(f"Provider: {provider}")
-        print(f"Audited: {audited}")
-        data = result.get("data", {})
-        for key in ("id", "path", "display_url", "htmlLink", "webViewLink"):
-            if key in data:
-                print(f"{key}: {data[key]}")
-        if result.get("error"):
-            print(f"Error: {result['error']}")
-    else:
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
 
 
 def extract_meet_link(event: dict[str, Any]) -> str | None:
@@ -131,7 +113,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         attendees=attendees,
         description=args.description,
     )
-    _print_result(result, args.summary, "Calendar event created")
+    print_result(result, args.summary, "Calendar event created")
     return 0 if result.get("success") else 1
 
 
@@ -153,7 +135,7 @@ def cmd_update(args: argparse.Namespace) -> int:
         print("No fields to update", file=sys.stderr)
         return 1
     result = client.calendar_update(args.event_id, **fields)
-    _print_result(result, args.summary, "Calendar event updated")
+    print_result(result, args.summary, "Calendar event updated")
     return 0 if result.get("success") else 1
 
 
