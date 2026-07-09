@@ -551,3 +551,161 @@ def deliver_email_digest(
         "pending_action": action,
         "action_id": action["id"] if action else None,
     }
+
+
+# ─── Act-on-Suggestion Bridge ─────────────────────────────────
+
+# Safe read actions that can be executed directly without approval queue.
+# These never mutate external systems.
+SAFE_READ_ACTIONS = {"calendar.list", "drive.search", "gmail.search"}
+
+# Write/destructive actions that must go through the approval queue.
+# These create pending actions but never execute directly.
+WRITE_ACTIONS = {
+    "gmail.send", "gmail.draft", "gmail.archive", "gmail.trash",
+    "calendar.create", "calendar.update", "calendar.cancel",
+    "drive.upload", "drive.trash", "drive.download",
+}
+
+
+def act_on_suggestion(
+    config: Any,
+    suggestion_id: str,
+    dry_run: bool = False,
+    download_path: str | None = None,
+) -> dict[str, Any]:
+    """Act on a suggestion — safely bridges suggestions to execution.
+
+    For safe read actions (calendar.list, drive.search, gmail.search):
+      - Executes the read directly (no mutation, no approval needed)
+      - Marks suggestion as acted_on
+
+    For write/destructive actions (gmail.send, gmail.draft, etc.):
+      - Creates a pending action in the approval queue
+      - Does NOT execute — operator must approve separately
+      - Marks suggestion as acted_on (pending action created)
+
+    For dry_run:
+      - Shows what would happen without executing or creating pending actions
+
+    Returns result dict with:
+    - success: bool
+    - mode: "read_executed" | "pending_created" | "dry_run" | "error"
+    - action_type: the suggestion's action_type
+    - details: execution result or pending action or dry-run plan
+    """
+    sug = get_suggestion(config, suggestion_id)
+    if not sug:
+        return {"success": False, "mode": "error", "error": f"Suggestion not found: {suggestion_id}"}
+    if sug["state"] != "suggested":
+        return {"success": False, "mode": "error",
+                "error": f"Suggestion not in 'suggested' state (state={sug['state']})"}
+
+    action_type = sug["action_type"]
+    event_id = sug.get("event_id", "")
+    event_summary = sug.get("event_summary", "")
+
+    # Dry-run: show plan without doing anything
+    if dry_run:
+        is_safe = action_type in SAFE_READ_ACTIONS
+        is_write = action_type in WRITE_ACTIONS
+        return {
+            "success": True,
+            "mode": "dry_run",
+            "action_type": action_type,
+            "suggestion_id": suggestion_id,
+            "title": sug["title"],
+            "execution_risk": sug.get("execution_risk", "unknown"),
+            "would_execute_directly": is_safe,
+            "would_create_pending": is_write,
+            "requires_approval": sug.get("requires_approval", False),
+            "event_summary": event_summary,
+        }
+
+    # Safe read actions — execute directly
+    if action_type in SAFE_READ_ACTIONS:
+        from workspace_client import get_workspace_client
+        from workspace_capabilities import require_capability
+        client = get_workspace_client(config)
+
+        unsupported = require_capability(client, action_type, target=event_id)
+        if unsupported:
+            return {"success": False, "mode": "error",
+                    "action_type": action_type,
+                    "error": f"{action_type} not supported by {client.provider_name}",
+                    "details": unsupported}
+
+        try:
+            if action_type == "calendar.list":
+                result = client.calendar_list(start="", end="")
+            elif action_type == "drive.search":
+                result = client.drive_search(query="", max_results=10)
+            elif action_type == "gmail.search":
+                result = client.gmail_search(query="", max_results=10)
+            else:
+                return {"success": False, "mode": "error",
+                        "action_type": action_type,
+                        "error": f"Safe read action {action_type} has no handler"}
+        except Exception as exc:
+            return {"success": False, "mode": "error",
+                    "action_type": action_type, "error": str(exc)}
+
+        # Mark suggestion as acted_on
+        mark_acted_on(config, suggestion_id, notes=f"Read executed: {action_type}")
+        return {
+            "success": True,
+            "mode": "read_executed",
+            "action_type": action_type,
+            "suggestion_id": suggestion_id,
+            "result": result,
+        }
+
+    # Write/destructive actions — create pending action only
+    if action_type in WRITE_ACTIONS:
+        from pending_actions import create_pending_action
+        from workspace_client import get_workspace_client
+        from workspace_capabilities import require_capability
+        client = get_workspace_client(config)
+
+        unsupported = require_capability(client, action_type, target=event_id)
+        if unsupported:
+            return {"success": False, "mode": "error",
+                    "action_type": action_type,
+                    "error": f"{action_type} not supported by {client.provider_name}",
+                    "details": unsupported}
+
+        # Create pending action — operator must approve and execute separately
+        action = create_pending_action(
+            config=config,
+            action_type=action_type,
+            provider=client.provider_name,
+            target=event_id,
+            payload={
+                "source": "suggestion",
+                "suggestion_id": suggestion_id,
+                "event_id": event_id,
+                "event_summary": event_summary,
+                "suggestion_title": sug["title"],
+            },
+            summary=f"Suggestion act: {sug['title']} ({action_type})",
+        )
+
+        # Mark suggestion as acted_on (pending action created)
+        mark_acted_on(config, suggestion_id,
+                      notes=f"Pending action created: {action['id'] if action else 'failed'}")
+        return {
+            "success": True,
+            "mode": "pending_created",
+            "action_type": action_type,
+            "suggestion_id": suggestion_id,
+            "pending_action": action,
+            "action_id": action["id"] if action else None,
+            "message": f"Pending action created — approve with: send_email.py approve --action-id {action['id'] if action else '?'}"
+                       if action_type == "gmail.send" else
+                       f"Pending action created — approve with: delete_actions.py approve --action-id {action['id'] if action else '?'}",
+        }
+
+    # Unknown action type
+    return {"success": False, "mode": "error",
+            "action_type": action_type,
+            "error": f"Unknown action type: {action_type}"}

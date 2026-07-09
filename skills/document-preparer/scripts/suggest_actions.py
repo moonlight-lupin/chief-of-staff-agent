@@ -194,8 +194,8 @@ def cmd_notify(args: argparse.Namespace) -> int:
 
     if args.channel == "cli":
         deliver_cli_digest(cfg, digest)
-        # Mark suggestions as notified
-        sug_ids = [s["id"] for s in list_suggestions(cfg, state=args.state, limit=args.limit)]
+        # Mark suggestions as notified — use digest items so filtering aligns
+        sug_ids = [item["id"] for item in digest["items"]]
         marked = mark_notified(cfg, sug_ids)
         if not args.summary:
             print_json({"delivered": True, "channel": "cli", "marked_notified": marked})
@@ -217,6 +217,34 @@ def cmd_notify(args: argparse.Namespace) -> int:
         return 0 if result.get("success") else 1
 
     return 1
+
+
+def cmd_act(args: argparse.Namespace) -> int:
+    """Act on a suggestion — safe reads execute, writes create pending actions."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from suggested_actions import act_on_suggestion
+    result = act_on_suggestion(cfg, args.suggestion_id, dry_run=args.dry_run)
+    if args.summary:
+        mode = result.get("mode", "error")
+        if mode == "dry_run":
+            print(f"Dry-run for: {result.get('title', '?')}")
+            print(f"Action: {result.get('action_type', '?')}")
+            print(f"Would execute directly: {result.get('would_execute_directly', False)}")
+            print(f"Would create pending: {result.get('would_create_pending', False)}")
+            print(f"Requires approval: {result.get('requires_approval', False)}")
+            print(f"Execution risk: {result.get('execution_risk', '?')}")
+        elif mode == "read_executed":
+            print(f"✅ Read executed: {result.get('action_type', '?')}")
+        elif mode == "pending_created":
+            print(f"📋 Pending action created: {result.get('action_type', '?')}")
+            print(f"   {result.get('message', '')}")
+        else:
+            print(f"❌ {result.get('error', 'unknown error')}")
+    else:
+        print_json(result)
+    return 0 if result.get("success") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -264,6 +292,10 @@ def build_parser() -> argparse.ArgumentParser:
     notify.add_argument("--min-confidence", type=float)
     notify.add_argument("--limit", type=int, default=20)
 
+    act = sub.add_parser("act", help="Act on a suggestion (safe read or create pending action)")
+    act.add_argument("--suggestion-id", required=True)
+    act.add_argument("--dry-run", action="store_true", help="Show what would happen without executing")
+
     return parser
 
 
@@ -289,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_digest(args)
         elif args.command == "notify":
             return cmd_notify(args)
+        elif args.command == "act":
+            return cmd_act(args)
         else:
             parser.error("unknown command")
             return 2
