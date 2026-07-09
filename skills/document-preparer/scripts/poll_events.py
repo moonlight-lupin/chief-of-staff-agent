@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Polling-based event ingestion connectors.
 
-Polls Gmail and Calendar for new items and ingests them as events
+Polls Gmail, Calendar, and Drive for new items and ingests them as events
 via the event_store. Uses idempotency keys so re-polling is safe.
 
 No automatic destructive action is triggered. Events are classified
 and surfaced for operator action through the approval queue.
 
 Usage:
-    python poll_events.py --config <CONFIG> gmail [--max 10]
+    python poll_events.py --config <CONFIG> gmail [--limit 10]
     python poll_events.py --config <CONFIG> calendar [--days 1]
-    python poll_events.py --config <CONFIG> all [--max 10] [--days 1]
+    python poll_events.py --config <CONFIG> drive [--limit 10]
+    python poll_events.py --config <CONFIG> all [--limit 10] [--days 1]
 """
 from __future__ import annotations
 
@@ -187,7 +188,8 @@ def poll_drive(config: Any, max_results: int = 10) -> dict[str, Any]:
         mime = str(file_item.get("mimeType") or "")
         shared = bool(file_item.get("sharedWithMeTime") or file_item.get("shared"))
 
-        event_type = "document_shared" if shared else "document_shared"
+        # For now all Drive events are document_shared. Future: document_modified
+        event_type = "document_shared"
         payload = {
             "name": name,
             "mimeType": mime,
@@ -221,11 +223,11 @@ def cmd_poll(args: argparse.Namespace) -> int:
 
     results = {}
     if args.source in ("gmail", "all"):
-        results["gmail"] = poll_gmail(cfg, max_results=args.max)
+        results["gmail"] = poll_gmail(cfg, max_results=args.limit)
     if args.source in ("calendar", "all"):
         results["calendar"] = poll_calendar(cfg, days=args.days)
     if args.source in ("drive", "all"):
-        results["drive"] = poll_drive(cfg, max_results=args.max)
+        results["drive"] = poll_drive(cfg, max_results=args.limit)
 
     if args.summary:
         for source, res in results.items():
@@ -244,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--summary", action="store_true", help="Print human-readable summary")
     parser.add_argument("source", choices=["gmail", "calendar", "drive", "all"],
                         help="What to poll")
-    parser.add_argument("--max", type=int, default=10, help="Max emails to poll")
+    parser.add_argument("--limit", type=int, default=10, help="Max items to poll (emails or files)")
     parser.add_argument("--days", type=int, default=1, help="Calendar lookahead in days")
     return parser
 

@@ -286,7 +286,7 @@ class TestPollAll:
             import poll_events
             buf = io.StringIO()
             with redirect_stdout(buf):
-                rc = poll_events.main(["--summary", "all", "--max", "10", "--days", "1"])
+                rc = poll_events.main(["--summary", "all", "--limit", "10", "--days", "1"])
         assert rc == 0
         out = buf.getvalue()
         assert "gmail:" in out
@@ -313,7 +313,7 @@ class TestPollAll:
             import poll_events
             buf = io.StringIO()
             with redirect_stdout(buf):
-                rc = poll_events.main(["drive", "--max", "5"])
+                rc = poll_events.main(["drive", "--limit", "5"])
         assert rc == 0
         data = json.loads(buf.getvalue())
         assert "drive" in data
