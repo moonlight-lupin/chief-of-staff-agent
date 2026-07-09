@@ -8,6 +8,7 @@ Usage:
     python connect_workspace.py --provider composio --connect gmail
     python connect_workspace.py --provider composio --connect googlecalendar
     python connect_workspace.py --provider composio --mcp-url
+    python connect_workspace.py --provider composio --mcp-info
 """
 from __future__ import annotations
 
@@ -66,17 +67,15 @@ def cmd_status(config: dict[str, Any]) -> int:
             result["healthy"] = False
             result["error"] = str(exc)
     elif provider == "composio":
-        result["api_key_set"] = bool(os.getenv("COMPOSIO_MCP_KEY"))
+        result["mcp_key_set"] = bool(os.getenv("COMPOSIO_MCP_KEY"))
         result["user_id"] = workspace.get("user_id", "")
         # Check connections
         try:
             from providers.composio_workspace import load_session_meta, ComposioWorkspaceClient
             meta = load_session_meta(config)
             if meta:
-                result["session_id"] = meta.get("session_id", "")
                 result["connections"] = meta.get("connections", {})
             else:
-                result["session_id"] = None
                 result["connections"] = {}
             # Try health check + refresh connection statuses
             try:
@@ -272,54 +271,30 @@ def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
 
 
 def cmd_composio_mcp_url(config: dict[str, Any]) -> int:
-    """Print MCP endpoint URL for the current Composio session."""
+    """Print the MCP endpoint URL from config (no session required)."""
     print("=== Composio MCP Endpoint ===\n")
 
-    try:
-        from providers.composio_workspace import ComposioWorkspaceClient, load_session_meta
-    except ImportError as exc:
-        print(f"❌ {exc}")
-        return 1
+    workspace = config.get("integrations", {}).get("workspace", {})
+    mcp_cfg = workspace.get("mcp", {})
+    endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
+    key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
 
-    meta = load_session_meta(config)
-    if not meta or not meta.get("session_id"):
-        print("❌ No Composio session found. Run --connect gmail first.")
-        return 1
+    print(f"Endpoint: {endpoint}")
+    print(f"Key env:  {key_env}")
+    print(f"Key set:  {'✅' if os.getenv(key_env) else '❌'}")
 
-    # Check if MCP is configured in metadata
-    mcp = meta.get("mcp", {})
-    if mcp.get("url"):
-        print(f"MCP URL: {mcp['url']}")
-        return 0
-
-    # Try to get MCP URL from session
-    try:
-        client = ComposioWorkspaceClient(config)
-        session = client._get_or_create_session()
-
-        # Composio sessions may expose MCP endpoint info
-        mcp_url = None
-        if hasattr(session, "mcp_url"):
-            mcp_url = session.mcp_url
-        elif hasattr(session, "experimental"):
-            exp = session.experimental
-            if hasattr(exp, "mcp_url"):
-                mcp_url = exp.mcp_url
-
-        if mcp_url:
-            print(f"MCP URL: {mcp_url}")
-            # Save to metadata
-            meta["mcp"] = {"enabled": True, "url": mcp_url, "headers_stored": False}
-            from providers.composio_workspace import save_session_meta
-            save_session_meta(config, meta)
+    if os.getenv(key_env):
+        try:
+            sys.path.insert(0, str(_SCRIPT_DIR))
+            from mcp_client import MCPClient
+            client = MCPClient(endpoint=endpoint, key_env=key_env)
+            client.initialize()
+            print(f"Initialized: ✅ (session: {client.session_id})")
             return 0
-        else:
-            print("⚠️  MCP endpoint not available for this session.")
-            print("    MCP mode will be fully supported in v0.1.6.")
+        except Exception as exc:
+            print(f"Initialized: ❌ ({exc})")
             return 1
-    except Exception as exc:
-        print(f"❌ Failed to get MCP URL: {exc}")
-        return 1
+    return 1
 
 
 def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:

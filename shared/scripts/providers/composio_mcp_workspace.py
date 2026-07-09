@@ -241,6 +241,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def gmail_create_draft(self, to: str, subject: str, body: str,
                            cc: str | None = None) -> dict[str, Any]:
         from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.draft", to=to, subject=subject):
+            return ActionResult(success=False, action="gmail.draft", provider=self.provider_name,
+                                target=to, error="cancelled by guardrail").to_dict()
         try:
             args: dict[str, Any] = {"to": to, "subject": subject, "body": body}
             if cc:
@@ -248,11 +252,15 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             data = self._execute_composio_tool("GMAIL_CREATE_EMAIL_DRAFT", args)
             audit_workspace_action(self.config, "composio", "gmail.create_draft",
                                    "GMAIL_CREATE_EMAIL_DRAFT", target=to)
-            return {"success": True, "data": data} if not isinstance(data, dict) else data
+            return ActionResult(success=True, action="gmail.draft", provider=self.provider_name,
+                                tool_slug="GMAIL_CREATE_EMAIL_DRAFT", target=to,
+                                data=data if isinstance(data, dict) else {}, audited=True).to_dict()
         except Exception as exc:
             audit_workspace_action(self.config, "composio", "gmail.create_draft",
                                    "GMAIL_CREATE_EMAIL_DRAFT", target=to, status="failed")
-            return {"error": str(exc), "success": False}
+            return ActionResult(success=False, action="gmail.draft", provider=self.provider_name,
+                                tool_slug="GMAIL_CREATE_EMAIL_DRAFT", target=to,
+                                error=str(exc), audited=True).to_dict()
 
     # --- Calendar ---
 
@@ -272,6 +280,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                         attendees: list[str] | None = None,
                         description: str | None = None) -> dict[str, Any]:
         from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("calendar.create", title=title):
+            return ActionResult(success=False, action="calendar.create", provider=self.provider_name,
+                                target=title, error="cancelled by guardrail").to_dict()
         try:
             args: dict[str, Any] = {
                 "title": title,
@@ -285,24 +297,36 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             data = self._execute_composio_tool("GOOGLECALENDAR_CREATE_EVENT", args)
             audit_workspace_action(self.config, "composio", "calendar.create",
                                    "GOOGLECALENDAR_CREATE_EVENT", target=title)
-            return {"success": True, "data": data} if not isinstance(data, dict) else data
+            return ActionResult(success=True, action="calendar.create", provider=self.provider_name,
+                                tool_slug="GOOGLECALENDAR_CREATE_EVENT", target=title,
+                                data=data if isinstance(data, dict) else {}, audited=True).to_dict()
         except Exception as exc:
             audit_workspace_action(self.config, "composio", "calendar.create",
                                    "GOOGLECALENDAR_CREATE_EVENT", target=title, status="failed")
-            return {"error": str(exc), "success": False}
+            return ActionResult(success=False, action="calendar.create", provider=self.provider_name,
+                                tool_slug="GOOGLECALENDAR_CREATE_EVENT", target=title,
+                                error=str(exc), audited=True).to_dict()
 
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
         from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("calendar.update", event_id=event_id):
+            return ActionResult(success=False, action="calendar.update", provider=self.provider_name,
+                                target=event_id, error="cancelled by guardrail").to_dict()
         try:
             args = {"event_id": event_id, **fields}
             data = self._execute_composio_tool("GOOGLECALENDAR_UPDATE_EVENT", args)
             audit_workspace_action(self.config, "composio", "calendar.update",
                                    "GOOGLECALENDAR_UPDATE_EVENT", target=event_id)
-            return {"success": True, "data": data} if not isinstance(data, dict) else data
+            return ActionResult(success=True, action="calendar.update", provider=self.provider_name,
+                                tool_slug="GOOGLECALENDAR_UPDATE_EVENT", target=event_id,
+                                data=data if isinstance(data, dict) else {}, audited=True).to_dict()
         except Exception as exc:
             audit_workspace_action(self.config, "composio", "calendar.update",
                                    "GOOGLECALENDAR_UPDATE_EVENT", target=event_id, status="failed")
-            return {"error": str(exc), "success": False}
+            return ActionResult(success=False, action="calendar.update", provider=self.provider_name,
+                                tool_slug="GOOGLECALENDAR_UPDATE_EVENT", target=event_id,
+                                error=str(exc), audited=True).to_dict()
 
     # --- Drive ---
 
@@ -319,6 +343,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
     def drive_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
         from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("drive.upload", file=file_path):
+            return ActionResult(success=False, action="drive.upload", provider=self.provider_name,
+                                target=file_path, error="cancelled by guardrail").to_dict()
         try:
             args: dict[str, Any] = {"file_path": file_path}
             if parent_id:
@@ -326,14 +354,22 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             data = self._execute_composio_tool("GOOGLEDRIVE_UPLOAD_FILE", args)
             audit_workspace_action(self.config, "composio", "drive.upload",
                                    "GOOGLEDRIVE_UPLOAD_FILE", target=file_path)
-            return {"success": True, "data": data} if not isinstance(data, dict) else data
+            return ActionResult(success=True, action="drive.upload", provider=self.provider_name,
+                                tool_slug="GOOGLEDRIVE_UPLOAD_FILE", target=file_path,
+                                data=data if isinstance(data, dict) else {}, audited=True).to_dict()
         except Exception as exc:
             audit_workspace_action(self.config, "composio", "drive.upload",
                                    "GOOGLEDRIVE_UPLOAD_FILE", target=file_path, status="failed")
-            return {"error": str(exc), "success": False}
+            return ActionResult(success=False, action="drive.upload", provider=self.provider_name,
+                                tool_slug="GOOGLEDRIVE_UPLOAD_FILE", target=file_path,
+                                error=str(exc), audited=True).to_dict()
 
     def drive_download(self, file_id: str, output_path: str) -> dict[str, Any]:
         from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("drive.download", file_id=file_id):
+            return ActionResult(success=False, action="drive.download", provider=self.provider_name,
+                                target=file_id, error="cancelled by guardrail").to_dict()
         try:
             data = self._execute_composio_tool("GOOGLEDRIVE_DOWNLOAD_FILE", {
                 "file_id": file_id,
@@ -341,11 +377,16 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             })
             audit_workspace_action(self.config, "composio", "drive.download",
                                    "GOOGLEDRIVE_DOWNLOAD_FILE", target=file_id)
-            return {"success": True, "path": output_path, "data": data}
+            return ActionResult(success=True, action="drive.download", provider=self.provider_name,
+                                tool_slug="GOOGLEDRIVE_DOWNLOAD_FILE", target=file_id,
+                                data={"path": output_path, **(data if isinstance(data, dict) else {})},
+                                audited=True).to_dict()
         except Exception as exc:
             audit_workspace_action(self.config, "composio", "drive.download",
                                    "GOOGLEDRIVE_DOWNLOAD_FILE", target=file_id, status="failed")
-            return {"error": str(exc), "success": False}
+            return ActionResult(success=False, action="drive.download", provider=self.provider_name,
+                                tool_slug="GOOGLEDRIVE_DOWNLOAD_FILE", target=file_id,
+                                error=str(exc), audited=True).to_dict()
 
     # --- Health ---
 

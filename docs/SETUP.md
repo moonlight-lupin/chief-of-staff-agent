@@ -123,10 +123,12 @@ To switch from Google to Composio (or vice versa), just change `integrations.wor
 Run `python shared/scripts/doctor.py` to check all components:
 
 ```
-✅ workspace_provider: pass — composio sdk
-✅ composio_api_key: set
+✅ workspace_provider: pass — composio mcp
+✅ COMPOSIO_MCP_KEY: set
+✅ mcp_initialize: pass
+✅ meta_tools: COMPOSIO_MANAGE_CONNECTIONS, COMPOSIO_MULTI_EXECUTE_TOOL
 ✅ composio_user_id: acme-alicia
-⚠️ composio_gmail: not connected — run connect_workspace.py --provider composio --connect gmail
+⚠️ gmail: not connected — run connect_workspace.py --provider composio --connect gmail
 ```
 
 ## Architecture
@@ -134,7 +136,10 @@ Run `python shared/scripts/doctor.py` to check all components:
 ```
 WorkspaceClient (ABC)
 ├── GoogleWorkspaceClient  (wraps google_api.py subprocess)
-└── ComposioWorkspaceClient  (wraps Composio SDK session.execute)
+└── ComposioMCPWorkspaceClient  (routes through connect.composio.dev/mcp)
+    └── MCPClient (JSON-RPC over SSE)
+        ├── COMPOSIO_MANAGE_CONNECTIONS  (connect toolkits)
+        └── COMPOSIO_MULTI_EXECUTE_TOOL  (execute tool by slug)
 ```
 
 Skills call `get_workspace_client(config)` → get the right backend automatically.

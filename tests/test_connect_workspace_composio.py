@@ -87,7 +87,7 @@ class TestConnectWorkspaceComposio:
         rc, out, err = run_connect("--status", config_path=composio_config_file)
         data = json.loads(out)
         assert data["provider"] == "composio"
-        assert "api_key_set" in data
+        assert "mcp_key_set" in data
 
     def test_composio_provider_info(self, composio_config_file):
         rc, out, err = run_connect("--provider", "composio", config_path=composio_config_file)

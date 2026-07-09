@@ -43,8 +43,10 @@ def mcp_config():
 @pytest.fixture
 def mcp_key():
     os.environ["COMPOSIO_MCP_KEY"] = "test-key"
+    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
     yield
     os.environ.pop("COMPOSIO_MCP_KEY", None)
+    os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
 
 
 @pytest.fixture
