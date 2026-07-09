@@ -66,7 +66,7 @@ def cmd_status(config: dict[str, Any]) -> int:
             result["healthy"] = False
             result["error"] = str(exc)
     elif provider == "composio":
-        result["api_key_set"] = bool(os.getenv("COMPOSIO_API_KEY"))
+        result["api_key_set"] = bool(os.getenv("COMPOSIO_MCP_KEY"))
         result["user_id"] = workspace.get("user_id", "")
         # Check connections
         try:
@@ -150,15 +150,7 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
 def cmd_composio_connect(config: dict[str, Any], toolkit: str) -> int:
     """Connect a Composio toolkit via MCP COMPOSIO_MANAGE_CONNECTIONS."""
     print(f"=== Composio Connect: {toolkit} ===\n")
-
-    integrations = config.get("integrations", {})
-    workspace = integrations.get("workspace", {})
-    mode = workspace.get("mode", "mcp")
-
-    if mode == "mcp":
-        return _cmd_composio_connect_mcp(config, toolkit)
-    else:
-        return _cmd_composio_connect_sdk(config, toolkit)
+    return _cmd_composio_connect_mcp(config, toolkit)
 
 
 def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
@@ -224,56 +216,14 @@ def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
         return 1
 
 
-def _cmd_composio_connect_sdk(config: dict[str, Any], toolkit: str) -> int:
-    """Connect via SDK session.authorize (legacy)."""
-    if not os.getenv("COMPOSIO_API_KEY"):
-        print("❌ COMPOSIO_API_KEY not set")
-        return 1
-
-    try:
-        from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
-        from providers.composio_mcp_workspace import save_session_meta, load_session_meta
-    except ImportError as exc:
-        print(f"❌ {exc}")
-        return 1
-
-    try:
-        client = ComposioSDKWorkspaceClient(config)
-        session = client._get_or_create_session()
-        print(f"✅ Session: {getattr(session, 'session_id', 'unknown')}")
-        conn_request = session.authorize(toolkit)
-        redirect_url = getattr(conn_request, "redirect_url", None)
-        if not redirect_url and isinstance(getattr(conn_request, "data", None), dict):
-            redirect_url = conn_request.data.get("redirect_url")
-        if not redirect_url and isinstance(conn_request, dict):
-            redirect_url = conn_request.get("redirect_url")
-        if redirect_url:
-            print(f"\n👉 Connect Link:\n   {redirect_url}")
-        meta = load_session_meta(config) or {}
-        if "connections" not in meta:
-            meta["connections"] = {}
-        meta["connections"][toolkit] = {"status": "pending"}
-        save_session_meta(config, meta)
-        return 0
-    except Exception as exc:
-        print(f"❌ {exc}")
-        return 1
-
-
 def cmd_composio_connections(config: dict[str, Any]) -> int:
     """Show connection status for all toolkits."""
-    mode = config.get("integrations", {}).get("workspace", {}).get("mode", "mcp")
     print("=== Composio Connections ===\n")
 
     try:
-        if mode == "mcp":
-            from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
-            client = ComposioMCPWorkspaceClient(config)
-            statuses = client.refresh_connection_statuses()
-        else:
-            from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
-            client = ComposioSDKWorkspaceClient(config)
-            statuses = client.refresh_connection_statuses()
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(config)
+        statuses = client.refresh_connection_statuses()
 
         for tk, status in statuses.items():
             icon = "✅" if status == "connected" else "⚠️"
@@ -373,83 +323,63 @@ def cmd_composio_mcp_url(config: dict[str, Any]) -> int:
 
 
 def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
-    """Print Composio onboarding info — mode-aware."""
+    """Print Composio onboarding info — MCP mode only."""
     integrations = config.get("integrations", {})
     workspace = integrations.get("workspace", {})
     mode = workspace.get("mode", "mcp")
 
     print("=== Composio Provider Setup ===\n")
-    print(f"Mode: {mode}\n")
 
-    if mode == "mcp":
-        mcp_cfg = workspace.get("mcp", {})
-        endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
-        key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
+    if mode == "sdk":
+        print("❌ SDK mode was removed in v0.1.9.\n")
+        print("Migration:")
+        print("  1. Change mode to 'mcp' in company.yaml")
+        print("  2. Set COMPOSIO_MCP_KEY in .env")
+        print("  3. Run: python connect_workspace.py --provider composio --connections")
+        return 1
 
-        print(f"✅ Endpoint: {endpoint}")
-        if os.getenv(key_env):
-            print(f"✅ {key_env}: set")
-        else:
-            print(f"❌ {key_env}: NOT set")
+    mcp_cfg = workspace.get("mcp", {})
+    endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
+    key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
 
-        user_id = workspace.get("user_id", "")
-        if user_id:
-            print(f"✅ user_id: {user_id}")
-        else:
-            print("⚠️  user_id not set in config")
-
-        # Show meta tools if initialized
-        if os.getenv(key_env):
-            try:
-                sys.path.insert(0, str(_SCRIPT_DIR))
-                from mcp_client import MCPClient
-                client = MCPClient(endpoint=endpoint, key_env=key_env)
-                client.initialize()
-                tools = client.list_tools()
-                tool_names = [t.get("name", "?") for t in tools]
-                print(f"✅ MCP initialized: {len(tools)} meta tools")
-                for name in tool_names:
-                    print(f"   - {name}")
-            except Exception as exc:
-                print(f"⚠️  MCP initialize failed: {exc}")
-
-        if print_steps or not os.getenv(key_env):
-            print("\nNext steps:")
-            print(f"  1. Set {key_env} in .env (from https://connect.composio.dev)")
-            print("  2. Set integrations.workspace.user_id in company.yaml")
-            print("  3. python connect_workspace.py --provider composio --connect gmail")
-            print("  4. python connect_workspace.py --provider composio --connect googlecalendar")
-            print("  5. python connect_workspace.py --provider composio --connect googledrive")
-            print("  6. python connect_workspace.py --status")
-
-        return 0 if os.getenv(key_env) else 1
-
+    print(f"✅ Mode: mcp")
+    print(f"✅ Endpoint: {endpoint}")
+    if os.getenv(key_env):
+        print(f"✅ {key_env}: set")
     else:
-        # SDK mode
-        api_key = os.getenv("COMPOSIO_API_KEY")
-        if api_key:
-            print("✅ COMPOSIO_API_KEY is set")
-        else:
-            print("❌ COMPOSIO_API_KEY not set")
+        print(f"❌ {key_env}: NOT set")
 
-        user_id = workspace.get("user_id", "")
-        if user_id:
-            print(f"✅ user_id: {user_id}")
+    user_id = workspace.get("user_id", "")
+    if user_id:
+        print(f"✅ user_id: {user_id}")
+    else:
+        print("⚠️  user_id not set in config")
 
+    # Show meta tools if initialized
+    if os.getenv(key_env):
         try:
-            from composio import Composio  # noqa
-            print("✅ composio SDK installed")
-        except ImportError:
-            print("❌ composio SDK not installed — run: pip install composio-core")
+            sys.path.insert(0, str(_SCRIPT_DIR))
+            from mcp_client import MCPClient
+            client = MCPClient(endpoint=endpoint, key_env=key_env)
+            client.initialize()
+            tools = client.list_tools()
+            tool_names = [t.get("name", "?") for t in tools]
+            print(f"✅ MCP initialized: {len(tools)} meta tools")
+            for name in tool_names:
+                print(f"   - {name}")
+        except Exception as exc:
+            print(f"⚠️  MCP initialize failed: {exc}")
 
-        if print_steps or not api_key:
-            print("\nNext steps:")
-            print("  1. pip install composio-core")
-            print("  2. Set COMPOSIO_API_KEY in .env")
-            print("  3. Set integrations.workspace.user_id in company.yaml")
-            print("  4. python connect_workspace.py --provider composio --connect gmail")
+    if print_steps or not os.getenv(key_env):
+        print("\nNext steps:")
+        print(f"  1. Set {key_env} in .env (from https://connect.composio.dev)")
+        print("  2. Set integrations.workspace.user_id in company.yaml")
+        print("  3. python connect_workspace.py --provider composio --connect gmail")
+        print("  4. python connect_workspace.py --provider composio --connect googlecalendar")
+        print("  5. python connect_workspace.py --provider composio --connect googledrive")
+        print("  6. python connect_workspace.py --status")
 
-        return 0 if api_key else 1
+    return 0 if os.getenv(key_env) else 1
 
 
 def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, tools_only: bool = False) -> int:

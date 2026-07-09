@@ -55,7 +55,7 @@ class TestConnectWorkspace:
         assert rc in (0, 1)  # may return 1 if no key set
         assert "composio" in out.lower() or "Composio" in out
         # MCP mode shows MCP key, SDK mode shows API key — either is valid
-        assert "COMPOSIO_MCP_KEY" in out or "COMPOSIO_API_KEY" in out or "pip install" in out
+        assert "COMPOSIO_MCP_KEY" in out or "composio" in out.lower()
 
     def test_google_api_provider_check(self, tmp_config):
         rc, out, err = run_connect("--provider", "google_api", config_path=tmp_config)

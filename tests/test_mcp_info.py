@@ -52,8 +52,11 @@ delivery:
 integrations:
   workspace:
     provider: composio
-    mode: sdk
+    mode: mcp
     user_id: "test-mcp-user"
+    mcp:
+      endpoint: "https://connect.composio.dev/mcp"
+      key_env: "COMPOSIO_MCP_KEY"
     toolkits:
       - gmail
       - googlecalendar

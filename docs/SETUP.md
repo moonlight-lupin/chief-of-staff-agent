@@ -41,20 +41,20 @@ python shared/scripts/doctor.py
 python shared/scripts/connect_workspace.py --provider google_api
 ```
 
-### Option 2: Composio (easier onboarding, managed auth)
+### Option 2: Composio MCP (easier onboarding, managed auth)
 
-1. Install the plugin + Composio SDK:
+1. Install the plugin:
 ```bash
 cd ~/.hermes/plugins
 git clone https://github.com/moonlight-lupin/chief-of-staff-agent.git chief-of-staff
-pip install composio-core
+pip install requests
 ```
 
-2. Get your Composio API key from [dashboard.composio.dev/settings](https://dashboard.composio.dev/settings)
+2. Get your Composio MCP key from [connect.composio.dev](https://connect.composio.dev)
 
 3. Set it in `.env`:
 ```
-COMPOSIO_API_KEY=your_key_here
+COMPOSIO_MCP_KEY=your_key_here
 ```
 
 4. Run bootstrap:
@@ -67,7 +67,10 @@ python shared/scripts/bootstrap.py --company "Your Company" --jurisdiction SG --
 integrations:
   workspace:
     provider: composio
-    mode: sdk
+    mode: mcp
+    mcp:
+      endpoint: "https://connect.composio.dev/mcp"
+      key_env: "COMPOSIO_MCP_KEY"
     user_id: "your-stable-user-id"  # e.g. "acme-alicia"
     toolkits:
       - gmail
@@ -135,3 +138,18 @@ WorkspaceClient (ABC)
 ```
 
 Skills call `get_workspace_client(config)` → get the right backend automatically.
+## Migration from SDK mode (v0.1.8 and earlier)
+
+If you previously used `provider: composio, mode: sdk`:
+
+1. Change `mode` to `mcp` in `company.yaml`
+2. Set `COMPOSIO_MCP_KEY` in `.env` (from https://connect.composio.dev)
+3. Add the `mcp` section to your config:
+   ```yaml
+   mcp:
+     endpoint: "https://connect.composio.dev/mcp"
+     key_env: "COMPOSIO_MCP_KEY"
+   ```
+4. Run: `python connect_workspace.py --provider composio --connections`
+5. Remove `composio-core` from your pip dependencies (no longer needed)
+

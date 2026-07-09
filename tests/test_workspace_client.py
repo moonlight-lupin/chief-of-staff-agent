@@ -46,7 +46,7 @@ def composio_config():
         "integrations": {
             "workspace": {
                 "provider": "composio",
-                "mode": "sdk",
+                "mode": "mcp",
             }
         }
     }
@@ -78,9 +78,10 @@ class TestWorkspaceClientFactory:
             "integrations": {
                 "workspace": {
                     "provider": "composio",
-                    "mode": "sdk",
+                    "mode": "mcp",
                     "user_id": "test-user",
                     "toolkits": ["gmail", "googlecalendar", "googledrive"],
+                    "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
                 }
             },
             "paths": {
@@ -90,9 +91,9 @@ class TestWorkspaceClientFactory:
 
     def test_returns_composio_client(self, composio_config):
         from workspace_client import get_workspace_client
-        from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = get_workspace_client(composio_config)
-        assert isinstance(client, ComposioSDKWorkspaceClient)
+        assert isinstance(client, ComposioMCPWorkspaceClient)
 
     def test_defaults_to_google_when_no_integrations(self, no_integrations_config):
         from workspace_client import get_workspace_client

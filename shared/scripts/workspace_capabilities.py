@@ -40,17 +40,6 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "drive.upload": True,
         "drive.download": True,
     },
-    "composio:sdk": {
-        "gmail.search": True,
-        "gmail.draft": True,
-        "gmail.send": False,
-        "calendar.list": True,
-        "calendar.create": True,
-        "calendar.update": True,
-        "drive.search": True,
-        "drive.upload": True,
-        "drive.download": True,
-    },
 }
 
 

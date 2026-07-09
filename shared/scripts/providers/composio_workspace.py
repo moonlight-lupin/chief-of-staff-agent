@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Composio workspace provider — mode router facade.
+"""Composio workspace provider — MCP backend alias.
 
-Routes to the appropriate backend based on config:
-  mode: mcp → ComposioMCPWorkspaceClient (default, live-tested)
-  mode: sdk → ComposioSDKWorkspaceClient  (legacy, requires composio SDK package)
+All Composio workspace operations route through the MCP backend
+(connect.composio.dev/mcp). The legacy SDK backend was removed in v0.1.9.
 
-This file re-exports helpers and the mode-appropriate client class.
-The factory in workspace_client.py imports from here for backward compat.
+This file re-exports helpers and the MCP client class for backward compat.
 """
 from __future__ import annotations
 
@@ -20,7 +18,7 @@ if str(_PARENT) not in sys.path:
 
 from workspace_client import WorkspaceClient
 
-# Re-export shared helpers from the MCP backend (canonical location)
+# Re-export shared helpers from the MCP backend
 from providers.composio_mcp_workspace import (
     load_session_meta,
     save_session_meta,
@@ -29,7 +27,7 @@ from providers.composio_mcp_workspace import (
 
 
 def get_composio_client(config: Any) -> WorkspaceClient:
-    """Return the right Composio client based on mode."""
+    """Return the Composio MCP client. SDK mode is no longer supported."""
     integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
     workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
     mode = str(workspace.get("mode", "mcp"))
@@ -38,15 +36,18 @@ def get_composio_client(config: Any) -> WorkspaceClient:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         return ComposioMCPWorkspaceClient(config)
     elif mode == "sdk":
-        from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
-        return ComposioSDKWorkspaceClient(config)
+        raise ValueError(
+            "Composio SDK backend was removed in v0.1.9. "
+            "Change mode to 'mcp' and set COMPOSIO_MCP_KEY in your .env file. "
+            "See docs/SETUP.md for migration instructions."
+        )
     else:
-        raise ValueError(f"Unknown Composio mode: {mode}. Use 'mcp' or 'sdk'.")
+        raise ValueError(f"Unknown Composio mode: {mode}. Use 'mcp'.")
 
 
-# Backward compat: ComposioWorkspaceClient name routes to MCP by default
+# Backward compat: ComposioWorkspaceClient name routes to MCP
 class ComposioWorkspaceClient(WorkspaceClient):
-    """Facade that delegates to the mode-appropriate Composio backend."""
+    """Facade that delegates to the MCP backend."""
 
     def __new__(cls, config: Any) -> WorkspaceClient:
         return get_composio_client(config)

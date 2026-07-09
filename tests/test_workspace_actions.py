@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Tests for workspace write actions — Gmail draft, Calendar create/update, Drive upload/download."""
+"""Tests for workspace write actions — Gmail draft, Calendar create/update, Drive upload/download.
+
+MCP action tests are in test_composio_mcp_workspace.py.
+This file covers:
+- Provider capability reporting (composio:mcp, google_api)
+- Google provider write methods (mocked subprocess)
+- Cross-provider capability checks
+"""
 
 import sys
 import os
@@ -22,9 +29,10 @@ def composio_config():
         "integrations": {
             "workspace": {
                 "provider": "composio",
-                "mode": "sdk",
+                "mode": "mcp",
                 "user_id": "test-user",
                 "toolkits": ["gmail", "googlecalendar", "googledrive"],
+                "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
                 "tools_allowlist": {
                     "gmail": {"read": ["GMAIL_FETCH_EMAILS"], "write_safe": ["GMAIL_CREATE_EMAIL_DRAFT"]},
                     "googlecalendar": {"read": ["GOOGLECALENDAR_FIND_EVENT"], "write_safe": ["GOOGLECALENDAR_CREATE_EVENT"]},
@@ -37,175 +45,20 @@ def composio_config():
 
 
 @pytest.fixture
-def tmp_project():
-    with tempfile.TemporaryDirectory(dir="/root") as d:
-        os.environ["CHIEF_OF_STAFF_PROJECT_ROOT"] = d
-        yield Path(d)
-        os.environ.pop("CHIEF_OF_STAFF_PROJECT_ROOT", None)
-
-
-class TestComposioGmailDraft:
-    def test_gmail_create_draft_calls_tool(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = {"id": "draft_123"}
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        result = client.gmail_create_draft("client@test.com", "Re: Proposal", "Draft body")
-
-        assert result.get("id") == "draft_123" or result.get("success") is True
-        mock_session.execute.assert_called_once()
-        call_args = mock_session.execute.call_args
-        assert call_args[0][0] == "GMAIL_CREATE_EMAIL_DRAFT"
-        assert call_args[1]["arguments"]["to"] == "client@test.com"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-    def test_gmail_create_draft_with_cc(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = {"id": "draft_456"}
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        client.gmail_create_draft("a@test.com", "Subject", "Body", cc="b@test.com")
-        call_args = mock_session.execute.call_args
-        assert call_args[1]["arguments"]["cc"] == "b@test.com"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-
-class TestComposioCalendarCreate:
-    def test_calendar_create_calls_tool(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = {"id": "evt_123"}
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        result = client.calendar_create("Team Meeting", "2026-07-10", "2026-07-10",
-                                        attendees=["a@test.com"], description="Weekly sync")
-
-        mock_session.execute.assert_called_once()
-        call_args = mock_session.execute.call_args
-        assert call_args[0][0] == "GOOGLECALENDAR_CREATE_EVENT"
-        assert call_args[1]["arguments"]["title"] == "Team Meeting"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-
-class TestComposioCalendarUpdate:
-    def test_calendar_update_calls_tool(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = {"id": "evt_123", "updated": True}
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        result = client.calendar_update("evt_123", title="Updated Meeting")
-
-        mock_session.execute.assert_called_once()
-        call_args = mock_session.execute.call_args
-        assert call_args[0][0] == "GOOGLECALENDAR_UPDATE_EVENT"
-        assert call_args[1]["arguments"]["event_id"] == "evt_123"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-
-class TestComposioDrive:
-    def test_drive_search_calls_tool(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = [{"id": "file1", "name": "NDA.pdf"}]
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        result = client.drive_search("name = 'NDA'", max_results=5)
-
-        assert len(result) == 1
-        assert result[0]["name"] == "NDA.pdf"
-        mock_session.execute.assert_called_once()
-        assert mock_session.execute.call_args[0][0] == "GOOGLEDRIVE_FIND_FILE"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-    def test_drive_upload_calls_tool(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = {"id": "file_new", "name": "report.pdf"}
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        result = client.drive_upload("/tmp/report.pdf", parent_id="folder_123")
-
-        mock_session.execute.assert_called_once()
-        call_args = mock_session.execute.call_args
-        assert call_args[0][0] == "GOOGLEDRIVE_UPLOAD_FILE"
-        assert call_args[1]["arguments"]["file_path"] == "/tmp/report.pdf"
-        assert call_args[1]["arguments"]["parent_id"] == "folder_123"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-    def test_drive_download_calls_tool(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_result = MagicMock()
-        mock_result.data = {"downloaded": True}
-        mock_session.execute.return_value = mock_result
-        client._session = mock_session
-
-        result = client.drive_download("file_abc", "/tmp/downloaded.pdf")
-
-        assert result["success"] is True
-        mock_session.execute.assert_called_once()
-        assert mock_session.execute.call_args[0][0] == "GOOGLEDRIVE_DOWNLOAD_FILE"
-        os.environ.pop("COMPOSIO_API_KEY", None)
-
-    def test_drive_search_returns_empty_on_error(self, composio_config, tmp_project):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-
-        mock_session = MagicMock()
-        mock_session.execute.side_effect = Exception("Not connected")
-        client._session = mock_session
-
-        assert client.drive_search("test") == []
-        os.environ.pop("COMPOSIO_API_KEY", None)
+def mcp_key():
+    os.environ["COMPOSIO_MCP_KEY"] = "fake"
+    yield
+    os.environ.pop("COMPOSIO_MCP_KEY", None)
 
 
 class TestProviderCapabilities:
-    def test_composio_supports(self, composio_config):
-        from providers.composio_workspace import ComposioWorkspaceClient
-        os.environ["COMPOSIO_API_KEY"] = "fake"
-        client = ComposioWorkspaceClient(composio_config)
-        assert client.provider_name in ("composio", "composio:mcp", "composio:sdk")
+    def test_composio_mcp_supports(self, composio_config, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(composio_config)
+        assert client.provider_name == "composio:mcp"
         assert client.supports("gmail.search") is True
         assert client.supports("gmail.send") is False
         assert client.supports("drive.upload") is True
-        os.environ.pop("COMPOSIO_API_KEY", None)
 
     def test_google_supports(self):
         from providers.google_workspace import GoogleWorkspaceClient
@@ -215,13 +68,45 @@ class TestProviderCapabilities:
         assert client.supports("gmail.send") is True
         assert client.supports("calendar.create") is True
 
-    def test_unsupported_action_raises_not_implemented(self):
-        from workspace_client import WorkspaceClient
-        # ABC methods with default raise should work
+    def test_capabilities_matrix_has_mcp(self):
+        from workspace_capabilities import get_capabilities
+        caps = get_capabilities("composio:mcp")
+        assert caps["gmail.search"] is True
+        assert caps["gmail.send"] is False
+
+    def test_capabilities_matrix_no_sdk(self):
+        """composio:sdk should no longer exist in capabilities."""
+        from workspace_capabilities import get_capabilities
+        caps = get_capabilities("composio:sdk")
+        assert caps == {}  # SDK caps removed in v0.1.9
+
+
+class TestGoogleProviderWriteActions:
+    """Google provider write methods — mocked subprocess."""
+
+    @pytest.fixture
+    def google_client(self):
+        from providers.google_workspace import GoogleWorkspaceClient
         with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake")):
-            from providers.google_workspace import GoogleWorkspaceClient
-            client = GoogleWorkspaceClient({"google": {}})
-            # calendar_update is implemented for Google, but let's test the ABC default
-            # by checking a method that delegates to the base class for an unknown provider
-            caps = client.capabilities()
-            assert "gmail.send" in caps
+            return GoogleWorkspaceClient({"google": {"delegate_email": "test@test.com"}})
+
+    def test_gmail_create_draft(self, google_client):
+        with patch.object(google_client, "_run", return_value=(0, '{"id": "draft_1"}', "")):
+            result = google_client.gmail_create_draft("a@test.com", "Subject", "Body")
+        assert result.get("id") == "draft_1"
+
+    def test_calendar_create(self, google_client):
+        with patch.object(google_client, "_run", return_value=(0, '{"id": "evt_1"}', "")):
+            result = google_client.calendar_create("Meeting", "2026-07-10", "2026-07-10")
+        assert result.get("id") == "evt_1"
+
+    def test_calendar_update(self, google_client):
+        with patch.object(google_client, "_run", return_value=(0, '{"id": "evt_1"}', "")):
+            result = google_client.calendar_update("evt_1", title="Updated")
+        assert result.get("id") == "evt_1"
+
+    def test_drive_download(self, google_client):
+        with patch.object(google_client, "_run", return_value=(0, "", "")):
+            result = google_client.drive_download("file_123", "/tmp/downloaded.pdf")
+        assert result["success"] is True
+        assert result["path"] == "/tmp/downloaded.pdf"

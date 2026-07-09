@@ -67,13 +67,6 @@ class TestComposioMCPFactory:
         client = ComposioMCPWorkspaceClient(mcp_config)
         assert client.provider_name == "composio:mcp"
 
-    def test_sdk_mode_returns_sdk_client(self, mcp_config):
-        mcp_config["integrations"]["workspace"]["mode"] = "sdk"
-        from workspace_client import get_workspace_client
-        from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
-        client = get_workspace_client(mcp_config)
-        assert isinstance(client, ComposioSDKWorkspaceClient)
-
 
 class TestComposioMCPGmail:
     def test_gmail_search_calls_multi_execute(self, mcp_config, mcp_key, tmp_project):

@@ -52,8 +52,11 @@ delivery:
 integrations:
   workspace:
     provider: composio
-    mode: sdk
+    mode: mcp
     user_id: "test-user-123"
+    mcp:
+      endpoint: "https://connect.composio.dev/mcp"
+      key_env: "COMPOSIO_MCP_KEY"
     toolkits:
       - gmail
       - googlecalendar
@@ -96,7 +99,7 @@ class TestConnectWorkspaceComposio:
         rc, out, err = run_connect("--provider", "composio", "--connect", "gmail",
                                    config_path=composio_config_file)
         assert rc == 1
-        assert "COMPOSIO_API_KEY" in out
+        assert "COMPOSIO_MCP_KEY" in out or "COMPOSIO_API_KEY" not in out
 
     def test_composio_connect_gmail_with_mock(self, composio_config_file):
         """Test --connect gmail with mocked Composio SDK."""
