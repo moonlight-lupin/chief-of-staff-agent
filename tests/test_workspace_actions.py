@@ -82,31 +82,35 @@ class TestProviderCapabilities:
 
 
 class TestGoogleProviderWriteActions:
-    """Google provider write methods — mocked subprocess."""
+    """Google provider write methods — mocked subprocess, ActionResult shape."""
 
     @pytest.fixture
     def google_client(self):
+        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
         from providers.google_workspace import GoogleWorkspaceClient
         with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake")):
-            return GoogleWorkspaceClient({"google": {"delegate_email": "test@test.com"}})
+            return GoogleWorkspaceClient({"google": {"delegate_email": "test@test.com", "account_alias": "test"}})
 
-    def test_gmail_create_draft(self, google_client):
-        with patch.object(google_client, "_run", return_value=(0, '{"id": "draft_1"}', "")):
-            result = google_client.gmail_create_draft("a@test.com", "Subject", "Body")
-        assert result.get("id") == "draft_1"
+    def test_gmail_create_draft_not_supported(self, google_client):
+        """gmail_create_draft returns 'not supported' for google_api provider."""
+        result = google_client.gmail_create_draft("a@test.com", "Subject", "Body")
+        assert result["success"] is False
+        assert "not supported" in result["error"].lower()
 
     def test_calendar_create(self, google_client):
         with patch.object(google_client, "_run", return_value=(0, '{"id": "evt_1"}', "")):
             result = google_client.calendar_create("Meeting", "2026-07-10", "2026-07-10")
-        assert result.get("id") == "evt_1"
+        assert result["success"] is True
+        assert result["data"]["id"] == "evt_1"
 
     def test_calendar_update(self, google_client):
         with patch.object(google_client, "_run", return_value=(0, '{"id": "evt_1"}', "")):
             result = google_client.calendar_update("evt_1", title="Updated")
-        assert result.get("id") == "evt_1"
+        assert result["success"] is True
+        assert result["data"]["id"] == "evt_1"
 
     def test_drive_download(self, google_client):
         with patch.object(google_client, "_run", return_value=(0, "", "")):
             result = google_client.drive_download("file_123", "/tmp/downloaded.pdf")
         assert result["success"] is True
-        assert result["path"] == "/tmp/downloaded.pdf"
+        assert result["data"]["path"] == "/tmp/downloaded.pdf"

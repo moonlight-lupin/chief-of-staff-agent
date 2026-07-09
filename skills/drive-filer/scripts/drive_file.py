@@ -31,6 +31,25 @@ def get_client(config: Any):
     from workspace_client import get_workspace_client
     return get_workspace_client(config)
 
+def _print_result(result: dict, summary: bool, label: str) -> None:
+    if summary:
+        success = result.get("success", False)
+        icon = "✅" if success else "❌"
+        provider = result.get("provider", "?")
+        audited = "yes" if result.get("audited") else "no"
+        target = result.get("target", "")
+        print(f"{icon} {label}" + (f": {target}" if target else ""))
+        print(f"Provider: {provider}")
+        print(f"Audited: {audited}")
+        data = result.get("data", {})
+        for key in ("id", "path", "display_url", "htmlLink", "webViewLink"):
+            if key in data:
+                print(f"{key}: {data[key]}")
+        if result.get("error"):
+            print(f"Error: {result['error']}")
+    else:
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
 
 def cmd_search(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
@@ -53,7 +72,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
     result = client.drive_upload(args.file, parent_id=args.parent)
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    _print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
 
@@ -64,13 +83,14 @@ def cmd_download(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
     result = client.drive_download(args.file_id, args.output)
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    _print_result(result, args.summary, "Drive file downloaded")
     return 0 if result.get("success") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Drive file operations via WorkspaceClient")
     parser.add_argument("--config", help="Path to company.yaml")
+    parser.add_argument("--summary", action="store_true", help="Print human-readable summary")
     sub = parser.add_subparsers(dest="command", required=True)
 
     search = sub.add_parser("search", help="Search Google Drive files")

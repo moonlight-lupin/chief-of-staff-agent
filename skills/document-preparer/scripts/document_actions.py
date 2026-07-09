@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Document preparation + Drive upload via WorkspaceClient.
+"""Document preparation + Drive upload + Gmail draft via WorkspaceClient.
 
 Commands:
     document_actions.py upload --file /tmp/generated.docx --parent <folder_id>
     document_actions.py search --query "NDA" --max 5
-    document_actions.py draft-email --to client@test.com --subject "NDA for review" --body "Please find attached..."
+    document_actions.py draft-email --to client@test.com --subject "NDA for review" --body "..."
+    document_actions.py handoff --file /tmp/NDA.docx --parent <id> --to client@x.com --subject "NDA" --body "..."
 """
 from __future__ import annotations
 
@@ -32,8 +33,28 @@ def get_client(config: Any):
     return get_workspace_client(config)
 
 
+def _print_result(result: dict[str, Any], summary: bool, action_label: str) -> None:
+    """Print result as JSON or human-readable summary."""
+    if summary:
+        success = result.get("success", False)
+        icon = "✅" if success else "❌"
+        provider = result.get("provider", "?")
+        audited = "yes" if result.get("audited") else "no"
+        target = result.get("target", "")
+        print(f"{icon} {action_label}" + (f": {target}" if target else ""))
+        print(f"Provider: {provider}")
+        print(f"Audited: {audited}")
+        data = result.get("data", {})
+        for key in ("id", "path", "display_url", "htmlLink", "webViewLink"):
+            if key in data:
+                print(f"{key}: {data[key]}")
+        if result.get("error"):
+            print(f"Error: {result['error']}")
+    else:
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
-    """Upload a generated document to Drive."""
     cfg = load_config(args.config)
     if cfg is None:
         print("Could not load config", file=sys.stderr)
@@ -43,15 +64,13 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
     result = client.drive_upload(args.file, parent_id=args.parent)
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    _print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    """Search Drive for existing documents."""
     cfg = load_config(args.config)
     if cfg is None:
-        print("Could not load config", file=sys.stderr)
         return 1
     client = get_client(cfg)
     results = client.drive_search(args.query, max_results=args.max)
@@ -60,20 +79,80 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_draft_email(args: argparse.Namespace) -> int:
-    """Create a Gmail draft with document context (e.g. 'Please find attached NDA')."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    client = get_client(cfg)
+    result = client.gmail_create_draft(args.to, args.subject, args.body, cc=args.cc)
+    _print_result(result, args.summary, "Gmail draft created")
+    return 0 if result.get("success") else 1
+
+
+def cmd_handoff(args: argparse.Namespace) -> int:
+    """Combined workflow: upload file to Drive, then create Gmail draft with link.
+
+    Flow:
+    1. Upload file to Drive
+    2. Extract share link from upload result
+    3. Create Gmail draft with Drive link in body
+    4. Return combined summary
+    """
     cfg = load_config(args.config)
     if cfg is None:
         print("Could not load config", file=sys.stderr)
         return 1
+    if not os.path.isfile(args.file):
+        print(f"File not found: {args.file}", file=sys.stderr)
+        return 1
     client = get_client(cfg)
-    result = client.gmail_create_draft(args.to, args.subject, args.body, cc=args.cc)
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-    return 0 if result.get("success") else 1
+
+    # Step 1: Upload to Drive
+    upload_result = client.drive_upload(args.file, parent_id=args.parent)
+    if not upload_result.get("success"):
+        combined = {
+            "success": False,
+            "action": "document.handoff",
+            "provider": upload_result.get("provider", "?"),
+            "steps": {"drive_upload": upload_result, "gmail_draft": None},
+            "error": upload_result.get("error", "drive upload failed"),
+        }
+        _print_result(combined, args.summary, "Document handoff failed")
+        return 1
+
+    # Step 2: Extract share link from upload result
+    upload_data = upload_result.get("data", {})
+    drive_link = (
+        upload_data.get("webViewLink")
+        or upload_data.get("htmlLink")
+        or upload_data.get("display_url")
+        or upload_data.get("link")
+        or ""
+    )
+
+    # Step 3: Create Gmail draft with Drive link in body
+    body_with_link = args.body
+    if drive_link:
+        body_with_link = f"{args.body}\n\nDrive link: {drive_link}"
+    draft_result = client.gmail_create_draft(args.to, args.subject, body_with_link, cc=args.cc)
+
+    combined = {
+        "success": draft_result.get("success", False),
+        "action": "document.handoff",
+        "provider": upload_result.get("provider", "?"),
+        "steps": {
+            "drive_upload": upload_result,
+            "gmail_draft": draft_result,
+        },
+        "error": draft_result.get("error") if not draft_result.get("success") else None,
+    }
+    _print_result(combined, args.summary, "Document handoff completed")
+    return 0 if combined["success"] else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Document + Drive operations via WorkspaceClient")
     parser.add_argument("--config", help="Path to company.yaml")
+    parser.add_argument("--summary", action="store_true", help="Print human-readable summary instead of JSON")
     sub = parser.add_subparsers(dest="command", required=True)
 
     upload = sub.add_parser("upload", help="Upload a document to Drive")
@@ -90,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--body", required=True)
     draft.add_argument("--cc")
 
+    handoff = sub.add_parser("handoff", help="Upload to Drive + create Gmail draft in one command")
+    handoff.add_argument("--file", required=True, help="Local file to upload")
+    handoff.add_argument("--parent", help="Parent folder ID")
+    handoff.add_argument("--to", required=True, help="Draft recipient email")
+    handoff.add_argument("--subject", required=True)
+    handoff.add_argument("--body", required=True, help="Email body (Drive link appended automatically)")
+    handoff.add_argument("--cc")
+
     return parser
 
 
@@ -103,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_search(args)
         elif args.command == "draft-email":
             return cmd_draft_email(args)
+        elif args.command == "handoff":
+            return cmd_handoff(args)
         else:
             parser.error("unknown command")
             return 2

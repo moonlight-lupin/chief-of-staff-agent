@@ -36,35 +36,101 @@ def get_client(config: Any):
     return get_workspace_client(config)
 
 
+def _find_event(events: list[dict[str, Any]], event_id: str) -> dict[str, Any] | None:
+    """Find an event by ID from a list of calendar events."""
+    for event in events:
+        if event.get("id") == event_id:
+            return event
+    return None
+
+
+def _extract_attendees(event: dict[str, Any]) -> list[str]:
+    """Extract attendee emails from a calendar event."""
+    attendees = []
+    for attendee in event.get("attendees", []) or []:
+        if isinstance(attendee, dict):
+            email = attendee.get("email") or attendee.get("displayName")
+            if email:
+                attendees.append(email)
+        elif isinstance(attendee, str):
+            attendees.append(attendee)
+    return attendees
+
+
+def _get_event_dates(event: dict[str, Any]) -> tuple[str, str]:
+    """Extract start/end dates from a calendar event."""
+    start = event.get("start", {})
+    end = event.get("end", {})
+    if isinstance(start, dict):
+        start = start.get("dateTime") or start.get("date") or ""
+    if isinstance(end, dict):
+        end = end.get("dateTime") or end.get("date") or ""
+    return str(start), str(end)
+
+
 def cmd_gather(args: argparse.Namespace) -> int:
-    """Gather all context for a meeting in one call."""
+    """Gather all context for a meeting in one call.
+
+    Uses event_id to locate the matching calendar event, extract attendees,
+    and define the context window. Falls back to manual attendees if provided.
+    """
     cfg = load_config(args.config)
     if cfg is None:
         print("Could not load config", file=sys.stderr)
         return 1
     client = get_client(cfg)
 
-    result: dict[str, Any] = {"event_id": args.event_id}
+    # Fetch calendar events for a 7-day window to find the event
+    today = date.today()
+    cal_start = today.isoformat()
+    cal_end = (today + timedelta(days=7)).isoformat()
+    events = client.calendar_list(cal_start, cal_end)
 
-    # Gmail context per attendee
+    # Find the specific event
+    event = _find_event(events, args.event_id)
+    if not event:
+        result: dict[str, Any] = {
+            "event": None,
+            "error": f"Event {args.event_id} not found in {cal_start} to {cal_end}",
+            "recent_related_events": events,
+        }
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        return 1
+
+    # Extract event details
+    event_title = event.get("summary") or event.get("title") or "Untitled"
+    event_start, event_end = _get_event_dates(event)
+
+    # Determine attendees: use --attendees if passed, else extract from event
     if args.attendees:
         attendees = [a.strip() for a in args.attendees.split(",")]
-        gmail_items = []
-        for email in attendees:
-            messages = client.gmail_search(f"from:{email}", max_results=3)
-            gmail_items.append({"attendee": email, "messages": messages})
-        result["gmail_context"] = gmail_items
-
-    # Calendar context (today + 2 days)
-    start = date.today().isoformat()
-    end = (date.today() + timedelta(days=2)).isoformat()
-    result["calendar_events"] = client.calendar_list(start, end)
-
-    # Drive context
-    if args.drive_query:
-        result["drive_files"] = client.drive_search(args.drive_query, max_results=5)
     else:
-        result["drive_files"] = []
+        attendees = _extract_attendees(event)
+
+    result = {
+        "event": {
+            "id": event.get("id"),
+            "title": event_title,
+            "start": event_start,
+            "end": event_end,
+            "attendees": attendees,
+        },
+    }
+
+    # Gmail context per attendee
+    gmail_items = []
+    for email in attendees:
+        messages = client.gmail_search(f"from:{email}", max_results=3)
+        gmail_items.append({"attendee": email, "messages": messages})
+    result["gmail_context"] = gmail_items
+
+    # Recent related events (same window, excluding the target event)
+    related = [e for e in events if e.get("id") != args.event_id]
+    result["recent_related_events"] = related
+
+    # Drive context: use event title or --drive-query
+    drive_query = args.drive_query or event_title
+    result["drive_files"] = client.drive_search(drive_query, max_results=5)
 
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0

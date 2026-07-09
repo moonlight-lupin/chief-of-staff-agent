@@ -29,13 +29,20 @@ user:
   email: "alicia@acme-advisory.example"
   phone: "+65 9123 4567"
 
-# Google Workspace integration is handled by the external google-workspace skill.
+# Google Workspace integration.
+# Actual Google auth is performed by the external google-workspace skill via google_api.py.
+# Chief-of-Staff calls google_api.py through GoogleWorkspaceClient with --account and --as flags.
 google:
-  # Service account JSON with domain-wide delegation, if used.
+  # Service account JSON with domain-wide delegation.
+  # Checked by Chief-of-Staff doctor/setup. Must exist for service-account auth.
   service_account_path: "~/.hermes/secrets/acme-google-service-account.json"
-  # Workspace domain and delegated user for Gmail/Calendar/Drive actions.
+  # Workspace domain.
   domain: "acme-advisory.example"
+  # Delegated user — passed to google_api.py as --as for impersonation.
   delegate_email: "alicia@acme-advisory.example"
+  # Account alias — passed to google_api.py as --account.
+  # Must match the account configured in google_api.py (e.g. "phronesis", "acme-advisory").
+  account_alias: "acme-advisory"
   # Root Drive folder ID for the numbered folder structure.
   drive_root_folder_id: "1A2B3C4D5E6F_example_root_id"
 

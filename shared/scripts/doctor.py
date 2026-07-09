@@ -216,25 +216,77 @@ def _check_google_workspace(fix: bool, data: dict[str, Any] | None, config_path:
 
 
 def _check_google_auth(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    # Check if active provider is composio — skip Google auth check if so
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = workspace.get("provider", "google_api")
+    if provider != "google_api":
+        return CheckResult("google_auth", "warn", f"skipped — active provider is {provider}")
+
     google = (data or {}).get("google") if isinstance((data or {}).get("google"), dict) else {}
     if not google or not google.get("delegate_email"):
         return CheckResult("google_auth", "warn", "skipped: google config incomplete")
-    # Use WorkspaceClient for provider-neutral auth check
+
+    # Google provider: run detailed service-account checks
+    details: list[str] = []
+    all_pass = True
+
+    # Check google_api.py script exists
     try:
         sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
-        from workspace_client import get_workspace_client
-        client = get_workspace_client(data or {})
-        healthy = client.health_check()
-        if healthy:
-            return CheckResult("google_auth", "pass", "workspace provider health check succeeded")
+        from providers.google_workspace import _find_google_api_script
+        script = _find_google_api_script()
+        details.append(f"google_api_script: found")
+    except FileNotFoundError:
+        details.append("google_api_script: NOT found")
+        all_pass = False
+        script = None
+
+    # Check service account file
+    sa_path = str(google.get("service_account_path", ""))
+    if sa_path:
+        sa = Path(sa_path).expanduser()
+        if sa.exists():
+            details.append(f"google_service_account_file: found")
         else:
-            return CheckResult("google_auth", "warn", "workspace provider health check returned False")
-    except FileNotFoundError as exc:
-        return CheckResult("google_auth", "warn", f"skipped: {exc}")
-    except NotImplementedError as exc:
-        return CheckResult("google_auth", "warn", f"skipped: {exc}")
-    except Exception as exc:
-        return CheckResult("google_auth", "warn", f"workspace provider check failed: {exc}")
+            details.append(f"google_service_account_file: NOT found at {sa}")
+            all_pass = False
+    else:
+        details.append("google_service_account_file: not configured")
+        all_pass = False
+
+    # Check account_alias
+    account_alias = str(google.get("account_alias", ""))
+    if account_alias:
+        details.append(f"google_account_alias: {account_alias}")
+    else:
+        details.append("google_account_alias: NOT set")
+        all_pass = False
+
+    # Check delegate_email
+    delegate = str(google.get("delegate_email", ""))
+    if delegate:
+        details.append(f"google_delegate_email: {delegate}")
+    else:
+        details.append("google_delegate_email: NOT set")
+        all_pass = False
+
+    # Health check: calendar list with delegation flags
+    if all_pass:
+        try:
+            from workspace_client import get_workspace_client
+            client = get_workspace_client(data or {})
+            healthy = client.health_check()
+            if healthy:
+                details.append(f"google_auth: calendar list succeeded through --account {account_alias} --as {delegate}")
+            else:
+                details.append("google_auth: health check returned False")
+                all_pass = False
+        except Exception as exc:
+            details.append(f"google_auth: failed — {exc}")
+            all_pass = False
+
+    return CheckResult("google_auth", "pass" if all_pass else "warn", "; ".join(details))
 
 
 def _check_jurisdiction_pack(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:

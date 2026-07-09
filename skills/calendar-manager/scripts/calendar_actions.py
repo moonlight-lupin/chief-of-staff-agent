@@ -33,6 +33,26 @@ def get_client(config: Any):
     return get_workspace_client(config)
 
 
+def _print_result(result: dict, summary: bool, label: str) -> None:
+    if summary:
+        success = result.get("success", False)
+        icon = "✅" if success else "❌"
+        provider = result.get("provider", "?")
+        audited = "yes" if result.get("audited") else "no"
+        target = result.get("target", "")
+        print(f"{icon} {label}" + (f": {target}" if target else ""))
+        print(f"Provider: {provider}")
+        print(f"Audited: {audited}")
+        data = result.get("data", {})
+        for key in ("id", "path", "display_url", "htmlLink", "webViewLink"):
+            if key in data:
+                print(f"{key}: {data[key]}")
+        if result.get("error"):
+            print(f"Error: {result['error']}")
+    else:
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+
+
 def extract_meet_link(event: dict[str, Any]) -> str | None:
     for key in ("hangoutLink", "meet_link", "meetLink"):
         if event.get(key):
@@ -111,7 +131,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         attendees=attendees,
         description=args.description,
     )
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    _print_result(result, args.summary, "Calendar event created")
     return 0 if result.get("success") else 1
 
 
@@ -133,13 +153,14 @@ def cmd_update(args: argparse.Namespace) -> int:
         print("No fields to update", file=sys.stderr)
         return 1
     result = client.calendar_update(args.event_id, **fields)
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    _print_result(result, args.summary, "Calendar event updated")
     return 0 if result.get("success") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Calendar operations via WorkspaceClient")
     parser.add_argument("--config", help="Path to company.yaml")
+    parser.add_argument("--summary", action="store_true", help="Print human-readable summary")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="List Meet-enabled calendar events")
