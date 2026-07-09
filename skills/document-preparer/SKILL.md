@@ -14,7 +14,15 @@ metadata:
 
 ## Overview
 
-Document Preparer creates business documents from `.docx` templates and turns existing `.docx` files into reusable templates. Phase 1 deliberately supports `.docx` only. Google Docs support is deferred; when a Google Doc is involved, export it to DOCX through `google-workspace`, process locally, then optionally upload/file the result through Drive Filer.
+Document Preparer creates business documents from `.docx` templates and turns existing `.docx` files into reusable templates. Phase 1 deliberately supports `.docx` only. Google Docs support is deferred; when a Google Doc is involved, export it to DOCX, process locally, then upload/file the result through `WorkspaceClient`:
+
+```bash
+python skills/document-preparer/scripts/document_actions.py upload --file /tmp/generated.docx --parent <folder_id>
+python skills/document-preparer/scripts/document_actions.py search --query "NDA" --max 5
+python skills/document-preparer/scripts/document_actions.py draft-email --to client@test.com --subject "NDA for review" --body "Please find attached..."
+```
+
+`WorkspaceClient` routes to Google API or Composio MCP. Upload and draft creation use guardrails and return `ActionResult` objects.
 
 The bundled `doc_utils.py` script provides token extraction, template filling, template creation, and registry updates.
 

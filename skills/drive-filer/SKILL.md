@@ -16,14 +16,15 @@ metadata:
 
 Drive Filer keeps the company Google Drive clean by filing incoming attachments, generated documents, research outputs, invoices, travel artifacts, and local project files into the numbered Chief of Staff folder structure. Filing decisions are config-driven through `company.yaml` folder IDs and `drive-map.yaml` pattern rules.
 
-All Google Drive calls go through the external `google-workspace` skill:
+All Google Drive calls go through the shared `WorkspaceClient` layer:
 
 ```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive {command}
+python skills/drive-filer/scripts/drive_file.py search --query "NDA" --max 10
+python skills/drive-filer/scripts/drive_file.py upload --file /tmp/report.pdf --parent <folder_id>
+python skills/drive-filer/scripts/drive_file.py download --file-id <id> --output /tmp/downloaded.pdf
 ```
 
-Never use ad-hoc Google SDK calls inside this skill.
+`WorkspaceClient` routes to Google API or Composio MCP. Upload/download use guardrails and return `ActionResult` objects. Filing rules are still resolved by `drive_map.py` which uses config-driven pattern matching.
 
 ## When to Use
 

@@ -58,7 +58,16 @@ Minimum required local files are resolved from `shared/config/company.yaml`:
 {wiki_path}/
 ```
 
-Google Calendar access uses the `google-workspace` script. Drive filing and self-sign activity may be inferred from YAML links, wiki logs, document filenames, Drive listings, or skill logs if present.
+Google Calendar and Drive access go through the shared `WorkspaceClient` layer:
+
+```bash
+python skills/weekly-review/scripts/workspace_collect.py all --week-start 2026-07-06
+python skills/weekly-review/scripts/workspace_collect.py gmail --query "is:unread"
+python skills/weekly-review/scripts/workspace_collect.py calendar --start 2026-07-06 --end 2026-07-10
+python skills/weekly-review/scripts/workspace_collect.py drive --query ""
+```
+
+`WorkspaceClient` routes to Google API or Composio MCP. All operations are read-only.
 
 ## Time Windows
 

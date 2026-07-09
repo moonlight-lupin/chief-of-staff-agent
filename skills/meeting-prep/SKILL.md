@@ -32,8 +32,8 @@ Do **not** use this skill for scheduling or modifying meetings; use `calendar-ma
 
 | Source | What to pull | How |
 |---|---|---|
-| Calendar event | Title, start/end, attendees, organizer, Meet link, description, event ID | Input from user or Calendar Manager cron; if needed query Calendar via `google_api.py` |
-| Gmail | Recent threads with attendees from the last 90 days | Use `google_api.py` and `client_recent_threads` / attendee-specific query templates |
+| Calendar event | Title, start/end, attendees, organizer, Meet link, description, event ID | Input from user or Calendar Manager cron; query via `workspace_actions.py calendar-context` |
+| Gmail | Recent threads with attendees from the last 90 days | Use `workspace_actions.py gmail-context` with attendee-specific queries |
 | Note Taker wiki | Pages mentioning the contact, company, aliases, or deal | Search `paths.wiki_path` for names/domains |
 | Pipeline Manager | Deal/client/prospect status | Read `{project_root}/pipeline.yaml` |
 | Bookkeeper | Invoice/payment status for client | Read `{project_root}/invoices.yaml` |
@@ -44,20 +44,16 @@ Configuration comes from `shared/config/company.yaml`; use `paths.project_root`,
 
 ## Google API Command Pattern
 
-All Gmail/Calendar calls must use the external `google-workspace` skill script:
+All Gmail/Calendar/Drive reads go through the shared `WorkspaceClient` layer:
 
 ```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} {service} {command}
+python skills/meeting-prep/scripts/workspace_actions.py gather --event-id <id> --attendees a@x.com,b@y.com
+python skills/meeting-prep/scripts/workspace_actions.py gmail-context --query "from:a@x.com" --max 5
+python skills/meeting-prep/scripts/workspace_actions.py calendar-context --start 2026-07-09 --end 2026-07-16
+python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "meeting notes" --max 5
 ```
 
-For attendee-specific Gmail searches, prefer the configured query template `client_recent_threads` in `shared/config/queries.yaml`:
-
-```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} gmail search \
-  --query 'newer_than:90d ({client_name} OR from:{contact_email} OR to:{contact_email})' \
-  --max-results 50
+`WorkspaceClient` routes to Google API or Composio MCP. All operations are read-only.
 ```
 
 For ad hoc attendee searches when there is no pipeline client name, use a narrow attendee email query:

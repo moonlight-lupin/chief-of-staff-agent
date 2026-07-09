@@ -16,14 +16,15 @@ metadata:
 
 Calendar Manager is the Chief of Staff plugin's operational layer for Google Calendar. It lists upcoming commitments, creates Google Meet-enabled events, safely modifies or deletes events, and runs the pre-meeting reminder pipeline that invokes `meeting-prep` shortly before meetings.
 
-All Google Calendar access is delegated to the external `google-workspace` skill. Do not call Google APIs directly from this skill. Every Google call must use:
+All Google Calendar access goes through the shared `WorkspaceClient` layer:
 
 ```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar {command}
+python skills/calendar-manager/scripts/calendar_actions.py scan --today
+python skills/calendar-manager/scripts/calendar_actions.py create --title "Team Sync" --start 2026-07-10 --end 2026-07-10
+python skills/calendar-manager/scripts/calendar_actions.py update --event-id <id> --title "New Title"
 ```
 
-`{account}` and `{delegate}` come from `company.yaml` under `google.account` or `google.service_account_path` and `google.delegate_email`. If `google.account` is absent, use the configured service account path exactly as the `google-workspace` skill expects.
+`WorkspaceClient` routes to Google API or Composio MCP depending on `company.yaml` config. Write actions (create/update) use guardrails (`CHIEF_OF_STAFF_AUTO_APPROVE=1`) and return standardized `ActionResult` objects.
 
 ## When to Use
 
