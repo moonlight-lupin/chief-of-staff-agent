@@ -88,6 +88,16 @@ def ensure_google_config(config: Any) -> None:
             raise FileNotFoundError(f"Google credentials not configured: {path}")
 
 
+def ensure_workspace_config(config: Any) -> None:
+    """Provider-aware config check — only validates Google config when provider is google_api."""
+    integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = workspace.get("provider", "google_api")
+    if provider != "google_api":
+        return
+    ensure_google_config(config)
+
+
 def _get_workspace_client(config: Any):
     """Get a WorkspaceClient from config. Falls back to google_api if no integrations section."""
     import os as _os
@@ -99,7 +109,7 @@ def _get_workspace_client(config: Any):
 
 
 def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
-    ensure_google_config(config)
+    ensure_workspace_config(config)
     queries_file = sibling_or_shared(config, "queries.yaml")
     queries_data = load_yaml(queries_file)
     queries = queries_data.get("queries", []) or []
@@ -133,7 +143,7 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
 
 
 def collect_calendar(config: Any, project_root: Path) -> list[dict[str, Any]]:
-    ensure_google_config(config)
+    ensure_workspace_config(config)
     client = _get_workspace_client(config)
     start = date.today().isoformat()
     end = (date.today() + timedelta(days=2)).isoformat()

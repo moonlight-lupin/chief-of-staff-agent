@@ -279,6 +279,32 @@ class ComposioWorkspaceClient(WorkspaceClient):
         except Exception:
             return False
 
+    def refresh_connection_statuses(self) -> dict[str, str]:
+        """Query Composio for actual connection state and update session metadata.
+
+        Call this after browser authorization to update 'pending' → 'connected'.
+        """
+        session = self._get_or_create_session()
+        statuses: dict[str, str] = {}
+
+        for toolkit in self.toolkits:
+            try:
+                connected = bool(session.toolkits(toolkits=[toolkit], is_connected=True))
+                statuses[toolkit] = "connected" if connected else "pending"
+            except Exception:
+                statuses[toolkit] = "unknown"
+
+        # Update session metadata
+        meta = load_session_meta(self.config) or {}
+        meta.setdefault("connections", {})
+        for toolkit, status in statuses.items():
+            existing = meta["connections"].get(toolkit, {})
+            existing["status"] = status
+            meta["connections"][toolkit] = existing
+        save_session_meta(self.config, meta)
+        self._session_meta = meta
+        return statuses
+
     @staticmethod
     def _extract_result(result: Any) -> Any:
         """Extract data from Composio execute response."""

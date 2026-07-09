@@ -78,10 +78,15 @@ def cmd_status(config: dict[str, Any]) -> int:
             else:
                 result["session_id"] = None
                 result["connections"] = {}
-            # Try health check
+            # Try health check + refresh connection statuses
             try:
                 client = ComposioWorkspaceClient(config)
                 result["healthy"] = client.health_check()
+                # Refresh actual connection state from Composio
+                refreshed = client.refresh_connection_statuses()
+                result["connections"] = {
+                    tk: {"status": status} for tk, status in refreshed.items()
+                }
             except Exception as exc:
                 result["healthy"] = False
                 result["error"] = str(exc)

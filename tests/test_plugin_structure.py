@@ -36,7 +36,8 @@ class TestPluginStructure:
         assert data["name"] == "chief-of-staff"
         assert data["version"] == "0.1.5"
         assert data["license"] == "MIT"
-        assert "google-workspace" in data.get("requires_skills", [])
+        assert data["requires_skills"] == []
+        assert "google-workspace" in data.get("optional_skills", [])
 
     def test_init_registers_all_skills(self):
         content = (PLUGIN_ROOT / "__init__.py").read_text()

@@ -90,6 +90,41 @@ class TestComposioWorkspaceClient:
         with pytest.raises(ValueError, match="COMPOSIO_API_KEY"):
             client._get_composio()
 
+    def test_refresh_connection_statuses_updates_meta(self, composio_config, tmp_project_dir):
+        from providers.composio_workspace import (
+            ComposioWorkspaceClient, save_session_meta, load_session_meta
+        )
+        os.environ["COMPOSIO_API_KEY"] = "fake-key"
+
+        # Save initial metadata with pending status
+        save_session_meta(composio_config, {
+            "user_id": "test-user-123",
+            "session_id": "sess_existing",
+            "connections": {"gmail": {"status": "pending"}},
+        })
+
+        client = ComposioWorkspaceClient(composio_config)
+
+        mock_session = MagicMock()
+        # First call: gmail connected, googlecalendar not
+        def toolkits_mock(toolkits=None, is_connected=None):
+            if toolkits and "gmail" in toolkits and is_connected:
+                return [{"toolkit": "gmail"}]
+            return []
+        mock_session.toolkits.side_effect = toolkits_mock
+        client._session = mock_session
+
+        statuses = client.refresh_connection_statuses()
+        assert statuses["gmail"] == "connected"
+        assert statuses["googlecalendar"] == "pending"
+
+        # Verify metadata was updated
+        meta = load_session_meta(composio_config)
+        assert meta["connections"]["gmail"]["status"] == "connected"
+        assert meta["connections"]["googlecalendar"]["status"] == "pending"
+
+        os.environ.pop("COMPOSIO_API_KEY", None)
+
     def test_health_check_returns_false_when_not_connected(self, composio_config, tmp_project_dir):
         from providers.composio_workspace import ComposioWorkspaceClient
         os.environ["COMPOSIO_API_KEY"] = "fake-key"

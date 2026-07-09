@@ -381,24 +381,31 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
         details.append("user_id NOT set in config")
         all_pass = False
 
-    # Check session metadata
+    # Check session metadata and refresh connection statuses
     try:
         sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
-        from providers.composio_workspace import load_session_meta
+        from providers.composio_workspace import load_session_meta, ComposioWorkspaceClient
         meta = load_session_meta(data or {})
-        if meta and meta.get("session_id"):
+        if not meta or not meta.get("session_id"):
+            details.append("no session — run: connect_workspace.py --provider composio --connect gmail")
+            all_pass = False
+        else:
             details.append(f"session: {meta['session_id']}")
-            connections = meta.get("connections", {})
+            # Refresh actual connection state from Composio
+            try:
+                client = ComposioWorkspaceClient(data or {})
+                refreshed = client.refresh_connection_statuses()
+                connections = refreshed
+            except Exception:
+                connections = {tk: meta.get("connections", {}).get(tk, {}).get("status", "unknown") for tk in ("gmail", "googlecalendar")}
+
             for tk in ("gmail", "googlecalendar"):
-                status = connections.get(tk, {}).get("status", "unknown")
+                status = connections.get(tk, "unknown")
                 if status == "connected":
                     details.append(f"{tk}: connected")
                 else:
                     details.append(f"{tk}: not connected — run: connect_workspace.py --provider composio --connect {tk}")
                     all_pass = False
-        else:
-            details.append("no session — run: connect_workspace.py --provider composio --connect gmail")
-            all_pass = False
     except Exception as exc:
         details.append(f"session check failed: {exc}")
         all_pass = False
