@@ -145,7 +145,7 @@ def _risk_for_action(action_type: str) -> str:
 
 def _provider_for_action(action_type: str) -> str:
     """Recommend provider for an action type."""
-    from workspace_capabilities import recommend_provider_for, supports
+    from workspace_capabilities import recommend_provider_for
     rec = recommend_provider_for(action_type)
     return rec or "unknown"
 
@@ -225,7 +225,9 @@ def generate_suggestions(config: Any, event: dict[str, Any]) -> list[dict[str, A
             "title": template["title"],
             "reason": template["reason"],
             "confidence": template["confidence"],
-            "risk": template.get("risk", _risk_for_action(action_type)),
+            "suggestion_risk": template.get("risk", "low"),  # how risky is ignoring this
+            "execution_risk": _risk_for_action(action_type),  # how risky is the action itself
+            "risk": template.get("risk", "low"),  # backward compat — same as suggestion_risk
             "provider": _provider_for_action(action_type),
             "requires_approval": template["requires_approval"],
             "auto_execute": False,  # ALWAYS false
@@ -392,3 +394,160 @@ def cleanup_old_suggestions(config: Any, days: int = 30) -> int:
     if removed:
         _save(config, data, expected_version=expected_version)
     return removed
+
+
+# ─── Digest Renderer ──────────────────────────────────────────
+
+def render_digest(
+    config: Any,
+    state: str = "suggested",
+    min_confidence: float | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Render a structured digest of suggestions for notification.
+
+    Returns a digest dict with:
+    - total: count of suggestions in digest
+    - by_risk: breakdown by execution_risk
+    - by_action: breakdown by action_type
+    - requires_approval_count: how many need approval
+    - items: list of suggestion summaries (safe for display)
+    - text: human-readable text version
+
+    This does NOT execute, approve, or create pending actions.
+    """
+    suggestions = list_suggestions(
+        config, state=state, min_confidence=min_confidence, limit=limit
+    )
+
+    by_risk: dict[str, int] = {}
+    by_action: dict[str, int] = {}
+    approval_count = 0
+    items = []
+
+    for sug in suggestions:
+        exec_risk = sug.get("execution_risk", sug.get("risk", "low"))
+        by_risk[exec_risk] = by_risk.get(exec_risk, 0) + 1
+        action = sug.get("action_type", "unknown")
+        by_action[action] = by_action.get(action, 0) + 1
+        if sug.get("requires_approval"):
+            approval_count += 1
+
+        risk_icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(exec_risk, "?")
+        conf = f"{sug.get('confidence', 0):.0%}" if isinstance(sug.get("confidence"), (int, float)) else "?"
+        items.append({
+            "id": sug["id"],
+            "action_type": sug["action_type"],
+            "title": sug["title"],
+            "reason": sug["reason"],
+            "confidence": sug.get("confidence", 0),
+            "execution_risk": exec_risk,
+            "suggestion_risk": sug.get("suggestion_risk", "low"),
+            "provider": sug.get("provider", "unknown"),
+            "requires_approval": sug.get("requires_approval", False),
+            "event_summary": sug.get("event_summary", ""),
+        })
+
+    # Build text digest
+    lines = [f"📊 Suggestion Digest — {len(suggestions)} item(s)"]
+    if by_risk:
+        risk_summary = ", ".join(f"{k}: {v}" for k, v in sorted(by_risk.items()))
+        lines.append(f"Risk: {risk_summary}")
+    if approval_count:
+        lines.append(f"Requires approval: {approval_count}")
+    lines.append("")
+    for item in items:
+        risk_icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(item["execution_risk"], "?")
+        conf = f"{item['confidence']:.0%}" if isinstance(item.get("confidence"), (int, float)) else "?"
+        approval_tag = " [approval needed]" if item["requires_approval"] else ""
+        lines.append(f"{risk_icon} {item['action_type']} (conf={conf}){approval_tag}")
+        lines.append(f"   {item['title']}")
+        lines.append(f"   {item['reason']}")
+        if item.get("event_summary"):
+            lines.append(f"   Event: {item['event_summary']}")
+        lines.append("")
+
+    return {
+        "total": len(suggestions),
+        "by_risk": by_risk,
+        "by_action": by_action,
+        "requires_approval_count": approval_count,
+        "items": items,
+        "text": "\n".join(lines),
+    }
+
+
+# ─── Notification Delivery ────────────────────────────────────
+
+def mark_notified(config: Any, suggestion_ids: list[str]) -> int:
+    """Mark suggestions as notified/surfaced. Returns count marked."""
+    data = _load(config)
+    expected_version = data.get("_version", 0)
+    marked = 0
+    for sid in suggestion_ids:
+        sug = data["suggestions"].get(sid)
+        if sug and sug["state"] == "suggested":
+            sug["notified_at"] = _now()
+            marked += 1
+    if marked:
+        _save(config, data, expected_version=expected_version)
+    return marked
+
+
+def deliver_cli_digest(config: Any, digest: dict[str, Any]) -> bool:
+    """Deliver digest via CLI (stdout). Always succeeds."""
+    print(digest["text"])
+    return True
+
+
+def deliver_email_digest(
+    config: Any,
+    digest: dict[str, Any],
+    to: str,
+    subject: str = "Chief-of-Staff: Suggestion Digest",
+) -> dict[str, Any]:
+    """Deliver digest via email-to-self through the approval-safe channel.
+
+    Uses the approval queue (send_email.py prepare) to send the digest email.
+    This creates a pending action but does NOT auto-send — the operator must
+    approve the email send separately.
+
+    Returns the pending action dict, or error dict.
+    """
+    from pending_actions import create_pending_action
+    from workspace_client import get_workspace_client
+
+    client = get_workspace_client(config)
+
+    # Check if gmail.send is supported
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "gmail.send", target=to)
+    if unsupported:
+        return {
+            "success": False,
+            "error": "gmail.send not supported by current provider",
+            "details": unsupported,
+        }
+
+    # Create a pending action for the digest email — NOT auto-sent
+    body = digest["text"]
+    action = create_pending_action(
+        config=config,
+        action_type="gmail.send",
+        provider=client.provider_name,
+        target=to,
+        payload={
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "cc": None,
+            "source": "suggestion_digest",
+        },
+        summary=f"Suggestion digest email to {to} ({digest['total']} items)",
+    )
+    return {
+        "success": True,
+        "message": "Digest email prepared — approve to send",
+        "pending_action": action,
+        "action_id": action["id"] if action else None,
+    }

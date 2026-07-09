@@ -148,6 +148,77 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_digest(args: argparse.Namespace) -> int:
+    """Render a suggestion digest — no execution, no delivery."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from suggested_actions import render_digest
+    digest = render_digest(
+        cfg, state=args.state,
+        min_confidence=args.min_confidence, limit=args.limit,
+    )
+    if args.summary:
+        print(digest["text"])
+    else:
+        print_json(digest)
+    return 0
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Deliver suggestion digest via a channel.
+
+    CLI channel: prints digest to stdout.
+    Email channel: creates a pending action (NOT auto-sent) for operator approval.
+
+    Notification CANNOT approve, execute, or create pending actions
+    (except the email-to-self delivery which goes through approval queue).
+    """
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+
+    from suggested_actions import render_digest, deliver_cli_digest, deliver_email_digest, mark_notified, list_suggestions
+
+    digest = render_digest(
+        cfg, state=args.state,
+        min_confidence=args.min_confidence, limit=args.limit,
+    )
+
+    if digest["total"] == 0:
+        if args.summary:
+            print("No suggestions to notify")
+        else:
+            print_json({"delivered": False, "reason": "no_suggestions"})
+        return 0
+
+    if args.channel == "cli":
+        deliver_cli_digest(cfg, digest)
+        # Mark suggestions as notified
+        sug_ids = [s["id"] for s in list_suggestions(cfg, state=args.state, limit=args.limit)]
+        marked = mark_notified(cfg, sug_ids)
+        if not args.summary:
+            print_json({"delivered": True, "channel": "cli", "marked_notified": marked})
+        return 0
+
+    elif args.channel == "email":
+        if not args.to:
+            print("--to is required for email channel", file=sys.stderr)
+            return 1
+        result = deliver_email_digest(cfg, digest, to=args.to, subject=args.subject)
+        if args.summary:
+            if result.get("success"):
+                print(f"Digest email prepared ({digest['total']} items) — "
+                      f"approve with: send_email.py approve --action-id {result['action_id']}")
+            else:
+                print(f"Email delivery failed: {result.get('error', 'unknown')}")
+        else:
+            print_json(result)
+        return 0 if result.get("success") else 1
+
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Suggested actions — generate, list, dismiss")
     parser.add_argument("--config", help="Path to company.yaml")
@@ -179,6 +250,20 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup = sub.add_parser("cleanup", help="Remove old dismissed/acted_on suggestions")
     cleanup.add_argument("--days", type=int, default=30)
 
+    digest = sub.add_parser("digest", help="Render a suggestion digest")
+    digest.add_argument("--state", default="suggested", choices=["suggested", "dismissed", "acted_on"])
+    digest.add_argument("--min-confidence", type=float, help="Minimum confidence (0.0-1.0)")
+    digest.add_argument("--limit", type=int, default=20)
+
+    notify = sub.add_parser("notify", help="Deliver suggestion digest via channel")
+    notify.add_argument("--channel", required=True, choices=["cli", "email"],
+                        help="Delivery channel")
+    notify.add_argument("--to", help="Email recipient (for email channel)")
+    notify.add_argument("--subject", default="Chief-of-Staff: Suggestion Digest")
+    notify.add_argument("--state", default="suggested", choices=["suggested", "dismissed", "acted_on"])
+    notify.add_argument("--min-confidence", type=float)
+    notify.add_argument("--limit", type=int, default=20)
+
     return parser
 
 
@@ -200,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_summary(args)
         elif args.command == "cleanup":
             return cmd_cleanup(args)
+        elif args.command == "digest":
+            return cmd_digest(args)
+        elif args.command == "notify":
+            return cmd_notify(args)
         else:
             parser.error("unknown command")
             return 2
