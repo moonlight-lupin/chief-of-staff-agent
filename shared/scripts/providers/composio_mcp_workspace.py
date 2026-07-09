@@ -128,8 +128,13 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def _execute_composio_tool(self, tool_slug: str, input_data: dict[str, Any]) -> dict[str, Any]:
         """Core helper: call COMPOSIO_MULTI_EXECUTE_TOOL with a tool slug.
 
-        Live-validated payload shape (v0.1.8):
-            {"tools": [{"tool_slug": "...", "input": {...}}]}
+        Live-validated payload shape (v0.1.11):
+            {"tools": [{"tool_slug": "...", "arguments": {...}}]}
+
+        Note: 'arguments' is the correct field name for COMPOSIO_MULTI_EXECUTE_TOOL.
+        Earlier versions used 'input' which worked for some tools (Gmail) but
+        failed for others (Calendar Create) because the input dict was not
+        passed through to the underlying tool.
         """
         mcp = self._get_mcp()
         result = mcp.call_tool(
@@ -138,7 +143,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 "tools": [
                     {
                         "tool_slug": tool_slug,
-                        "input": input_data,
+                        "arguments": input_data,
                     }
                 ]
             },
@@ -286,9 +291,9 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                                 target=title, error="cancelled by guardrail").to_dict()
         try:
             args: dict[str, Any] = {
-                "title": title,
-                "start_time": f"{start}T00:00:00Z" if "T" not in start else start,
-                "end_time": f"{end}T23:59:59Z" if "T" not in end else end,
+                "summary": title,
+                "start_datetime": f"{start}T00:00:00Z" if "T" not in start else start,
+                "end_datetime": f"{end}T23:59:59Z" if "T" not in end else end,
             }
             if attendees:
                 args["attendees"] = attendees

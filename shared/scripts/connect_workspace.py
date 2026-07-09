@@ -481,7 +481,7 @@ def cmd_composio_debug_tool(config: dict[str, Any], toolkit: str) -> int:
         # Test each tool slug
         for tool_slug, input_data in tool_map[toolkit]:
             print(f"--- {tool_slug} ---")
-            print(f"Payload: {_json.dumps({'tools': [{'tool_slug': tool_slug, 'input': input_data}]}, indent=2)}")
+            print(f"Payload: {_json.dumps({'tools': [{'tool_slug': tool_slug, 'arguments': input_data}]}, indent=2)}")
             try:
                 result = client._execute_composio_tool(tool_slug, input_data)
                 # Show keys and summary

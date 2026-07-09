@@ -90,7 +90,7 @@ class TestComposioMCPGmail:
         assert call_args[0][0] == "COMPOSIO_MULTI_EXECUTE_TOOL"
         tools_arg = call_args[0][1]["tools"]
         assert tools_arg[0]["tool_slug"] == "GMAIL_FETCH_EMAILS"
-        assert tools_arg[0]["input"]["query"] == "is:unread"
+        assert tools_arg[0]["arguments"]["query"] == "is:unread"
 
     def test_gmail_create_draft_calls_multi_execute(self, mcp_config, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

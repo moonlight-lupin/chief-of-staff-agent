@@ -124,11 +124,11 @@ def cmd_update(args: argparse.Namespace) -> int:
     client = get_client(cfg)
     fields: dict[str, Any] = {}
     if args.title:
-        fields["title"] = args.title
+        fields["summary"] = args.title
     if args.start:
-        fields["start_time"] = args.start
+        fields["start_datetime"] = args.start
     if args.end:
-        fields["end_time"] = args.end
+        fields["end_datetime"] = args.end
     if not fields:
         print("No fields to update", file=sys.stderr)
         return 1

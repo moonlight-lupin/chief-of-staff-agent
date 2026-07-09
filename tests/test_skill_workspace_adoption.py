@@ -111,6 +111,11 @@ class TestCalendarManager:
             title="Sync", start="2026-07-10", end="2026-07-10",
             attendees=None, description=None,
         )
+        # Verify ActionResult shape
+        result = mock_workspace_client.calendar_create.return_value
+        assert "success" in result
+        assert "action" in result
+        assert "audited" in result
 
     def test_update_calls_calendar_update(self, fake_config, mock_workspace_client, auto_approve):
         with patch("calendar_actions.load_config", return_value=fake_config), \
@@ -118,7 +123,7 @@ class TestCalendarManager:
             import calendar_actions
             rc = calendar_actions.main(["update", "--event-id", "e1", "--title", "New"])
         assert rc == 0
-        mock_workspace_client.calendar_update.assert_called_once_with("e1", title="New")
+        mock_workspace_client.calendar_update.assert_called_once_with("e1", summary="New")
 
     def test_does_not_import_provider_internals(self):
         """Verify calendar_actions imports from workspace_client, not providers."""
