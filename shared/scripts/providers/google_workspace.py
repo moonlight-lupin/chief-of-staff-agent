@@ -124,7 +124,7 @@ class GoogleWorkspaceClient(WorkspaceClient):
         if not confirm_action("drive.upload", file=file_path):
             return ActionResult(success=False, action="drive.upload", provider=self._provider_name,
                                 target=file_path, error="cancelled by guardrail").to_dict()
-        cmd = self._build_cmd("drive", "upload", "--file", file_path)
+        cmd = self._build_cmd("drive", "upload", file_path)
         if parent_id:
             cmd.extend(["--parent", parent_id])
         rc, out, err = self._run(cmd)

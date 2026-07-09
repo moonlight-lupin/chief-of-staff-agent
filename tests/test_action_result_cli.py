@@ -71,7 +71,7 @@ class TestPrintResult:
         assert "Error: API timeout" in out
 
     def test_summary_mode_handoff_steps(self):
-        """Workflow result with steps dict — unsupported provider shows steps clearly."""
+        """Workflow result with steps dict — partial completion shows ⚠️."""
         result = {
             "success": False, "action": "document.handoff", "provider": "google_api",
             "steps": {
@@ -85,7 +85,9 @@ class TestPrintResult:
         with redirect_stdout(buf):
             print_result(result, summary=True, label="Document handoff")
         out = buf.getvalue()
-        assert "❌" in out  # unsupported, not partial
+        # Partial: drive uploaded but draft not attempted → ⚠️
+        assert "⚠️" in out
+        assert "partially completed" in out.lower()
         assert "drive_upload" in out
         assert "gmail_draft" in out
         assert "composio" in out

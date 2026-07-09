@@ -44,6 +44,28 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print(f"File not found: {args.file}", file=sys.stderr)
         return 1
     client = get_client(cfg)
+
+    # Preflight: check capability
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "drive.upload", target=args.file)
+    if unsupported:
+        print_result(unsupported, args.summary, "Drive file uploaded")
+        return 1
+
+    # Dry-run: show plan without executing
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "drive.upload (dry-run)",
+            "provider": client.provider_name,
+            "target": args.file,
+            "data": {"parent": args.parent or "(root)"},
+            "error": None,
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Drive file would be uploaded")
+        return 0
+
     result = client.drive_upload(args.file, parent_id=args.parent)
     print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
@@ -70,6 +92,19 @@ def cmd_draft_email(args: argparse.Namespace) -> int:
     if unsupported:
         print_result(unsupported, args.summary, "Gmail draft created")
         return 1
+    # Dry-run: show plan without executing
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "gmail.draft (dry-run)",
+            "provider": client.provider_name,
+            "target": args.to,
+            "data": {"subject": args.subject, "cc": args.cc or ""},
+            "error": None,
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Gmail draft would be created")
+        return 0
     result = client.gmail_create_draft(args.to, args.subject, args.body, cc=args.cc)
     print_result(result, args.summary, "Gmail draft created")
     return 0 if result.get("success") else 1
@@ -79,12 +114,14 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     """Combined workflow: upload file to Drive, then create Gmail draft with link.
 
     Flow:
-    1. Check drive.upload and gmail.draft capabilities
-    2. If gmail.draft unsupported and --allow-partial not set, fail cleanly before side effects
-    3. Upload file to Drive
-    4. Extract share link from upload result
-    5. Create Gmail draft with Drive link in body
-    6. Return combined summary
+    1. Check drive.upload and gmail.draft capabilities (preflight)
+    2. If --preflight, show execution plan and exit
+    3. If --dry-run, show plan with what would be done and exit
+    4. If gmail.draft unsupported and --allow-partial not set, fail cleanly before side effects
+    5. Upload file to Drive
+    6. Extract share link from upload result
+    7. Create Gmail draft with Drive link in body
+    8. Return combined summary
     """
     cfg = load_config(args.config)
     if cfg is None:
@@ -95,9 +132,60 @@ def cmd_handoff(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
 
-    # Check capabilities before any side effects
-    from workspace_capabilities import require_capability
-    draft_unsupported = require_capability(client, "gmail.draft", target=args.to)
+    # Preflight: check capabilities before any side effects
+    from workspace_capabilities import require_capability, workflow_supported
+    ok, missing = workflow_supported(client, "document.handoff")
+    draft_unsupported = require_capability(client, "gmail.draft", target=args.to) if "gmail.draft" in missing else None
+
+    # --preflight: show execution plan and exit (no side effects)
+    if args.preflight:
+        plan = {
+            "success": True,
+            "action": "document.handoff (preflight)",
+            "provider": client.provider_name,
+            "target": args.file,
+            "data": {
+                "file": args.file,
+                "parent": args.parent or "(root)",
+                "to": args.to,
+                "subject": args.subject,
+                "body_length": len(args.body),
+                "capabilities_ok": ok,
+                "missing": missing,
+            },
+            "steps": {
+                "drive_upload": "would upload" if ok or args.allow_partial else "blocked (capability)",
+                "gmail_draft": "would create" if ok else "unsupported by provider",
+            },
+            "error": None if ok else f"Missing capabilities: {', '.join(missing)}. Use provider=composio for full handoff.",
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Document handoff preflight")
+        return 0 if ok else 1
+
+    # --dry-run: show what would be done (no side effects)
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "document.handoff (dry-run)",
+            "provider": client.provider_name,
+            "target": args.file,
+            "data": {
+                "file": args.file,
+                "parent": args.parent or "(root)",
+                "to": args.to,
+                "subject": args.subject,
+                "body_preview": args.body[:100],
+            },
+            "steps": {
+                "drive_upload": "would upload to Drive" if ok or args.allow_partial else "skipped (capability)",
+                "gmail_draft": "would create Gmail draft" if ok else "skipped (capability)",
+            },
+            "error": None if ok else f"Missing capabilities: {', '.join(missing)}. Use provider=composio.",
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Document handoff would execute")
+        return 0
 
     if draft_unsupported and not args.allow_partial:
         # Fail cleanly without uploading (avoid partial side effects)
@@ -178,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     upload = sub.add_parser("upload", help="Upload a document to Drive")
     upload.add_argument("--file", required=True, help="Local file path")
     upload.add_argument("--parent", help="Parent folder ID")
+    upload.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
     search = sub.add_parser("search", help="Search Drive for documents")
     search.add_argument("--query", required=True)
@@ -188,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--subject", required=True)
     draft.add_argument("--body", required=True)
     draft.add_argument("--cc")
+    draft.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
     handoff = sub.add_parser("handoff", help="Upload to Drive + create Gmail draft in one command")
     handoff.add_argument("--file", required=True, help="Local file to upload")
@@ -198,6 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
     handoff.add_argument("--cc")
     handoff.add_argument("--allow-partial", action="store_true",
                          help="Upload to Drive even if gmail.draft is unsupported by provider")
+    handoff.add_argument("--dry-run", action="store_true", help="Show what would be done without executing")
+    handoff.add_argument("--preflight", action="store_true",
+                         help="Show execution plan with capability checks, then exit")
 
     return parser
 

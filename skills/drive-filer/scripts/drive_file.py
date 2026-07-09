@@ -53,6 +53,28 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print(f"File not found: {args.file}", file=sys.stderr)
         return 1
     client = get_client(cfg)
+
+    # Preflight: check capability
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "drive.upload", target=args.file)
+    if unsupported:
+        print_result(unsupported, args.summary, "Drive file uploaded")
+        return 1
+
+    # Dry-run: show plan without executing
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "drive.upload (dry-run)",
+            "provider": client.provider_name,
+            "target": args.file,
+            "data": {"parent": args.parent or "(root)"},
+            "error": None,
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Drive file would be uploaded")
+        return 0
+
     result = client.drive_upload(args.file, parent_id=args.parent)
     print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
@@ -64,6 +86,28 @@ def cmd_download(args: argparse.Namespace) -> int:
         print("Could not load config", file=sys.stderr)
         return 1
     client = get_client(cfg)
+
+    # Preflight: check capability
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "drive.download", target=args.file_id)
+    if unsupported:
+        print_result(unsupported, args.summary, "Drive file downloaded")
+        return 1
+
+    # Dry-run: show plan without executing
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "drive.download (dry-run)",
+            "provider": client.provider_name,
+            "target": args.file_id,
+            "data": {"output": args.output},
+            "error": None,
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Drive file would be downloaded")
+        return 0
+
     result = client.drive_download(args.file_id, args.output)
     print_result(result, args.summary, "Drive file downloaded")
     return 0 if result.get("success") else 1
@@ -82,10 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
     upload = sub.add_parser("upload", help="Upload a file to Drive")
     upload.add_argument("--file", required=True, help="Local file path")
     upload.add_argument("--parent", help="Parent folder ID")
+    upload.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
     download = sub.add_parser("download", help="Download a file from Drive")
     download.add_argument("--file-id", required=True)
     download.add_argument("--output", required=True, help="Local output path")
+    download.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
     return parser
 

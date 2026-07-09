@@ -34,7 +34,18 @@ def summarize_result(result: dict[str, Any], label: str | None = None) -> str:
     data = result.get("data", {})
 
     # Determine icon and label
-    if error and "not supported" in str(error).lower():
+    # Check for partial completion: steps exist, some succeeded, some didn't
+    is_partial = False
+    steps = result.get("steps")
+    if steps and not success:
+        has_success = any(s and s.get("success") for s in steps.values() if isinstance(s, dict))
+        has_failure = any(s is None or (isinstance(s, dict) and not s.get("success")) for s in steps.values())
+        is_partial = has_success and has_failure
+
+    if is_partial:
+        icon = "⚠️"
+        lines.append(f"{icon} {label or action} partially completed")
+    elif error and "not supported" in str(error).lower():
         icon = "❌"
         # If label already mentions "not supported" or "not available", use it directly
         if label and ("not supported" in label.lower() or "not available" in label.lower()):
@@ -46,9 +57,6 @@ def summarize_result(result: dict[str, Any], label: str | None = None) -> str:
     elif success:
         icon = "✅"
         lines.append(f"{icon} {label or action}" + (f": {target}" if target else ""))
-    elif error and "partial" in str(error).lower():
-        icon = "⚠️"
-        lines.append(f"{icon} {label or action} partially completed")
     else:
         icon = "❌"
         lines.append(f"{icon} {label or action} failed" + (f": {target}" if target else ""))
@@ -56,17 +64,20 @@ def summarize_result(result: dict[str, Any], label: str | None = None) -> str:
     lines.append(f"Provider: {provider}")
 
     # Handle workflow steps (document.handoff)
-    steps = result.get("steps")
     if steps:
         for step_name, step_result in steps.items():
             if step_result is None:
                 lines.append(f"{step_name}: not attempted")
-            elif step_result.get("success"):
+            elif isinstance(step_result, str):
+                lines.append(f"{step_name}: {step_result}")
+            elif isinstance(step_result, dict) and step_result.get("success"):
                 lines.append(f"{step_name}: ✅ completed")
-            elif step_result.get("error") and "not supported" in str(step_result.get("error", "")).lower():
+            elif isinstance(step_result, dict) and step_result.get("error") and "not supported" in str(step_result.get("error", "")).lower():
                 lines.append(f"{step_name}: ❌ unsupported")
-            else:
+            elif isinstance(step_result, dict):
                 lines.append(f"{step_name}: ❌ failed")
+            else:
+                lines.append(f"{step_name}: {step_result}")
         if not success and error and "not supported" in str(error).lower():
             from workspace_capabilities import recommend_provider_for
             rec = recommend_provider_for(action)

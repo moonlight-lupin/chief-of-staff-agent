@@ -105,6 +105,29 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     client = get_client(cfg)
+
+    # Preflight: check capability
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "calendar.create", target=args.title)
+    if unsupported:
+        print_result(unsupported, args.summary, "Calendar event created")
+        return 1
+
+    # Dry-run: show plan without executing
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "calendar.create (dry-run)",
+            "provider": client.provider_name,
+            "target": args.title,
+            "data": {"start": args.start, "end": args.end,
+                     "attendees": args.attendees or "", "description": args.description or ""},
+            "error": None,
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Calendar event would be created")
+        return 0
+
     attendees = [a.strip() for a in args.attendees.split(",")] if args.attendees else None
     result = client.calendar_create(
         title=args.title,
@@ -124,6 +147,14 @@ def cmd_update(args: argparse.Namespace) -> int:
         return 1
 
     client = get_client(cfg)
+
+    # Preflight: check capability
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "calendar.update", target=args.event_id)
+    if unsupported:
+        print_result(unsupported, args.summary, "Calendar event updated")
+        return 1
+
     fields: dict[str, Any] = {}
     if args.title:
         fields["summary"] = args.title
@@ -134,6 +165,21 @@ def cmd_update(args: argparse.Namespace) -> int:
     if not fields:
         print("No fields to update", file=sys.stderr)
         return 1
+
+    # Dry-run: show plan without executing
+    if args.dry_run:
+        plan = {
+            "success": True,
+            "action": "calendar.update (dry-run)",
+            "provider": client.provider_name,
+            "target": args.event_id,
+            "data": fields,
+            "error": None,
+            "audited": False,
+        }
+        print_result(plan, args.summary, "Calendar event would be updated")
+        return 0
+
     result = client.calendar_update(args.event_id, **fields)
     print_result(result, args.summary, "Calendar event updated")
     return 0 if result.get("success") else 1
@@ -156,12 +202,14 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
     create.add_argument("--attendees", help="Comma-separated email list")
     create.add_argument("--description")
+    create.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
     update = sub.add_parser("update", help="Update a calendar event")
     update.add_argument("--event-id", required=True)
     update.add_argument("--title")
     update.add_argument("--start")
     update.add_argument("--end")
+    update.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
     return parser
 
