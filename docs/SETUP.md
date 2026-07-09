@@ -143,6 +143,21 @@ WorkspaceClient (ABC)
 ```
 
 Skills call `get_workspace_client(config)` → get the right backend automatically.
+
+## Provider differences
+
+**Google service-account:**
+- Good for read/search, Calendar actions, Drive actions.
+- Gmail send exists but is destructive and blocked by default (`CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1`).
+- Gmail draft is not currently supported (google_api.py has no draft subcommand).
+- Best for: enterprise Google ops with service-account delegation.
+
+**Composio MCP:**
+- Supports Gmail search and draft creation.
+- Supports Calendar and Drive actions.
+- Recommended provider for document handoff workflows (upload + draft email).
+- Best for: managed-auth workflows that need Gmail drafts.
+
 ## Migration from SDK mode (v0.1.8 and earlier)
 
 If you previously used `provider: composio, mode: sdk`:

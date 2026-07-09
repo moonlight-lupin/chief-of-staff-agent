@@ -83,6 +83,12 @@ def cmd_draft_email(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
     client = get_client(cfg)
+    # Check capability before calling provider method
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "gmail.draft", target=args.to)
+    if unsupported:
+        _print_result(unsupported, args.summary, "Gmail draft created")
+        return 1
     result = client.gmail_create_draft(args.to, args.subject, args.body, cc=args.cc)
     _print_result(result, args.summary, "Gmail draft created")
     return 0 if result.get("success") else 1
@@ -92,10 +98,12 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     """Combined workflow: upload file to Drive, then create Gmail draft with link.
 
     Flow:
-    1. Upload file to Drive
-    2. Extract share link from upload result
-    3. Create Gmail draft with Drive link in body
-    4. Return combined summary
+    1. Check drive.upload and gmail.draft capabilities
+    2. If gmail.draft unsupported and --allow-partial not set, fail cleanly before side effects
+    3. Upload file to Drive
+    4. Extract share link from upload result
+    5. Create Gmail draft with Drive link in body
+    6. Return combined summary
     """
     cfg = load_config(args.config)
     if cfg is None:
@@ -105,6 +113,24 @@ def cmd_handoff(args: argparse.Namespace) -> int:
         print(f"File not found: {args.file}", file=sys.stderr)
         return 1
     client = get_client(cfg)
+
+    # Check capabilities before any side effects
+    from workspace_capabilities import require_capability
+    draft_unsupported = require_capability(client, "gmail.draft", target=args.to)
+
+    if draft_unsupported and not args.allow_partial:
+        # Fail cleanly without uploading (avoid partial side effects)
+        combined = {
+            "success": False,
+            "action": "document.handoff",
+            "provider": client.provider_name,
+            "steps": {"drive_upload": None, "gmail_draft": None},
+            "error": f"document.handoff requires gmail.draft, which is not supported by provider {client.provider_name}. "
+                     f"Use provider=composio for full handoff, or pass --allow-partial to upload without drafting.",
+            "audited": False,
+        }
+        _print_result(combined, args.summary, "Document handoff not supported")
+        return 1
 
     # Step 1: Upload to Drive
     upload_result = client.drive_upload(args.file, parent_id=args.parent)
@@ -117,6 +143,19 @@ def cmd_handoff(args: argparse.Namespace) -> int:
             "error": upload_result.get("error", "drive upload failed"),
         }
         _print_result(combined, args.summary, "Document handoff failed")
+        return 1
+
+    # If gmail.draft unsupported but --allow-partial, return partial result
+    if draft_unsupported:
+        combined = {
+            "success": False,
+            "action": "document.handoff",
+            "provider": client.provider_name,
+            "steps": {"drive_upload": upload_result, "gmail_draft": None},
+            "error": draft_unsupported["error"],
+            "audited": False,
+        }
+        _print_result(combined, args.summary, "Document handoff partial (draft unsupported)")
         return 1
 
     # Step 2: Extract share link from upload result
@@ -176,6 +215,8 @@ def build_parser() -> argparse.ArgumentParser:
     handoff.add_argument("--subject", required=True)
     handoff.add_argument("--body", required=True, help="Email body (Drive link appended automatically)")
     handoff.add_argument("--cc")
+    handoff.add_argument("--allow-partial", action="store_true",
+                         help="Upload to Drive even if gmail.draft is unsupported by provider")
 
     return parser
 

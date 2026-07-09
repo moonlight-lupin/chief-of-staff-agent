@@ -5,12 +5,13 @@ Each provider declares which workspace actions it supports.
 Skills can check client.supports("drive.upload") before calling.
 """
 from __future__ import annotations
+from typing import Any
 
 CAPABILITIES: dict[str, dict[str, bool]] = {
     "google_api": {
         "gmail.search": True,
-        "gmail.draft": True,
-        "gmail.send": True,
+        "gmail.draft": False,       # google_api.py has no draft subcommand
+        "gmail.send": True,         # supported but destructive / guardrailed
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
@@ -65,3 +66,27 @@ def all_actions() -> list[str]:
     for caps in CAPABILITIES.values():
         actions.update(caps.keys())
     return sorted(actions)
+
+
+def recommend_provider_for(action: str) -> str:
+    """Return a provider recommendation for a given action."""
+    if action in ("gmail.draft", "document.handoff"):
+        return "composio"
+    return "google_api or composio"
+
+
+def require_capability(client: Any, action: str, target: str | None = None) -> dict[str, Any] | None:
+    """Check if a client supports an action. Return None if supported,
+    or an ActionResult-shaped error dict if not supported."""
+    if not client.supports(action):
+        return {
+            "success": False,
+            "action": action,
+            "provider": client.provider_name,
+            "target": target or "",
+            "data": {},
+            "error": f"{action} is not supported by provider {client.provider_name}. "
+                     f"Use provider={recommend_provider_for(action)} for this workflow.",
+            "audited": False,
+        }
+    return None

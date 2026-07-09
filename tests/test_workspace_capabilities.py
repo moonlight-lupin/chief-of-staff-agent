@@ -17,7 +17,8 @@ class TestCapabilities:
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("google_api")
         assert caps["gmail.search"] is True
-        assert caps["gmail.draft"] is True
+        assert caps["gmail.draft"] is False       # google_api.py has no draft subcommand
+        assert caps["gmail.send"] is True          # supported but destructive
         assert caps["calendar.create"] is True
         assert caps["drive.upload"] is True
 
