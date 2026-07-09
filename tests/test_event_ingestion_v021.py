@@ -57,7 +57,7 @@ class TestIdempotency:
         event = ingest_event(config, "gmail", "msg001", "email_received",
                              {"from": "client@x.com", "subject": "NDA"})
         assert event is not None
-        assert event["state"] == "received"
+        assert event["state"] == "classified"
         assert event["source"] == "gmail"
         assert event["source_id"] == "msg001"
 
@@ -183,9 +183,9 @@ class TestEventLifecycle:
         e1 = ingest_event(config, "gmail", "m1", "email_received", {})
         e2 = ingest_event(config, "gmail", "m2", "email_received", {})
         mark_processed(config, e1["id"], processed_by="MH")
-        received = list_events(config, state="received")
+        classified = list_events(config, state="classified")
         processed = list_events(config, state="processed")
-        assert len(received) == 1  # only e2
+        assert len(classified) == 1  # only e2
         assert len(processed) == 1  # only e1
 
     def test_mark_processed_stores_metadata(self, temp_project):
@@ -234,7 +234,7 @@ class TestEventLifecycle:
         summary = get_event_summary(config)
         assert summary["total"] == 2
         assert summary["by_state"]["processed"] == 1
-        assert summary["by_state"]["received"] == 1
+        assert summary["by_state"]["classified"] == 1
         assert summary["pending_count"] == 1
 
     def test_cleanup_old_events(self, temp_project):

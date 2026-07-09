@@ -187,10 +187,10 @@ def ingest_event(
         "event_type": event_type,
         "payload": payload,
         "summary": summary or f"{event_type} from {source}",
-        "state": "received",
+        "state": "classified",  # classification happens at ingestion
         "classification": classification,
         "received_at": _now(),
-        "classified_at": _now(),  # classification happens at ingestion
+        "classified_at": _now(),
         "surfaced_at": None,
         "processed_at": None,
         "processed_by": None,

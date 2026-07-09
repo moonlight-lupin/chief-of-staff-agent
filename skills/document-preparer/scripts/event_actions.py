@@ -50,7 +50,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             print("No events" + (f" with state={args.state}" if args.state else ""))
         else:
             for e in events:
-                icon = {"received": "📨", "classified": "🏷️", "surfaced": "👀",
+                icon = {"received": "📨", "classified": "📨", "surfaced": "👀",
                         "processed": "✅"}.get(e["state"], "?")
                 cat = e.get("classification", {}).get("label", "?")
                 print(f"{icon} {e['id']}  {e['source']}:{e['source_id']}  [{e['state']}]")
