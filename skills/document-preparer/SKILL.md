@@ -2,7 +2,7 @@
 name: document-preparer
 description: Generate DOCX documents from tokenized templates and reverse-engineer reusable templates for the Chief of Staff document workflow.
 version: 0.1.0
-author: Chief of Staff Project
+author: moonlight-lupin
 license: MIT
 metadata:
   hermes:

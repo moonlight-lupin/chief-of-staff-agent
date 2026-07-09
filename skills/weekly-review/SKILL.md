@@ -2,7 +2,7 @@
 name: weekly-review
 description: "Use when producing the Chief-of-Staff Friday weekly review across deadlines, pipeline, bookkeeping, tasks, calendar, wiki, Drive filing, and self-sign activity."
 version: 0.1.0
-author: "Chief of Staff Project"
+author: "moonlight-lupin"
 license: MIT
 metadata:
   hermes:

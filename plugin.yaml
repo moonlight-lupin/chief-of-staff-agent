@@ -1,6 +1,6 @@
 name: chief-of-staff
 version: 0.1.4
-author: Chief of Staff Project
+author: moonlight-lupin
 license: MIT
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, and backups."
 requires_skills: [google-workspace]

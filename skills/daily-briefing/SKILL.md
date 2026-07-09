@@ -2,7 +2,7 @@
 name: daily-briefing
 description: "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, deadlines, pipeline, to-dos, and bookkeeping sources."
 version: 0.1.0
-author: "Chief of Staff Project"
+author: "moonlight-lupin"
 license: MIT
 metadata:
   hermes:

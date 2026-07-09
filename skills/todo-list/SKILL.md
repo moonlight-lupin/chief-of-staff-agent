@@ -2,7 +2,7 @@
 name: todo-list
 description: "Use when managing internal Chief-of-Staff tasks in todos.yaml: add, list, update, complete, defer, cancel, and surface open or overdue action items for briefings and reviews."
 version: 0.1.0
-author: Chief of Staff Project
+author: moonlight-lupin
 license: MIT
 metadata:
   hermes:

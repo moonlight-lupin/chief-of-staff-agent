@@ -2,7 +2,7 @@
 name: meeting-prep
 description: "Use when preparing a concise pre-meeting intelligence brief from calendar event metadata, recent Gmail threads, wiki notes, pipeline status, invoices, to-dos, and entity research."
 version: 0.1.0
-author: "Chief of Staff Project"
+author: "moonlight-lupin"
 license: MIT
 metadata:
   hermes:
