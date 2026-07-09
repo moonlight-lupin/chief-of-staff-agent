@@ -337,6 +337,19 @@ class GoogleWorkspaceClient(WorkspaceClient):
                             target=event_id, data={"output": out.strip(), "reversible": True},
                             audited=True).to_dict()
 
+    def gmail_list_labels(self) -> list[dict[str, Any]]:
+        """List all Gmail labels. Read-only — no mutation."""
+        cmd = self._build_cmd("gmail", "labels")
+        rc, out, err = self._run(cmd, timeout=30)
+        if rc != 0:
+            warnings.warn(f"gmail_list_labels failed: {err.strip() or out.strip()}")
+            return []
+        try:
+            labels = json.loads(out) if out else []
+        except json.JSONDecodeError:
+            return []
+        return labels if isinstance(labels, list) else []
+
     def gmail_unarchive(self, message_id: str) -> dict[str, Any]:
         """Restore an archived Gmail message (add INBOX label back)."""
         from workspace_audit import audit_workspace_action

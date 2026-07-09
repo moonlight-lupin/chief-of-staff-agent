@@ -84,6 +84,10 @@ class WorkspaceClient(abc.ABC):
         """Cancel a calendar event (set status to cancelled). Reversible via update."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support calendar_cancel")
 
+    def gmail_list_labels(self) -> list[dict[str, Any]]:
+        """List all Gmail labels. Read-only — no mutation."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_list_labels")
+
     @abc.abstractmethod
     def health_check(self) -> bool:
         """Return True if the provider is healthy and authenticated."""

@@ -15,6 +15,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "gmail.send": True,         # supported but destructive / guardrailed
         "gmail.archive": True,      # via gmail modify --remove-labels INBOX
         "gmail.trash": True,        # via gmail modify --add-labels TRASH
+        "gmail.labels.list": True,  # via gmail labels (read-only)
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
@@ -30,6 +31,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "gmail.send": False,
         "gmail.archive": False,     # not exposed via Composio MCP
         "gmail.trash": False,       # not exposed via Composio MCP
+        "gmail.labels.list": False, # not exposed via Composio MCP
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
@@ -45,6 +47,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "gmail.send": False,
         "gmail.archive": False,
         "gmail.trash": False,
+        "gmail.labels.list": False,
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
