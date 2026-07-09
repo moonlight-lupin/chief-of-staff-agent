@@ -1,0 +1,101 @@
+# Chief of Staff — Google Drive filing map
+# Copy to shared/config/drive-map.yaml and customize. Rules are evaluated from
+# top to bottom. The first matching rule wins unless a skill explicitly asks for
+# alternatives.
+
+root_structure:
+  - "00_Inbox"
+  - "01_Secretarial/Constitution"
+  - "01_Secretarial/Annual_Returns"
+  - "01_Secretarial/Resolutions"
+  - "01_Secretarial/Registers"
+  - "02_Clients/{client}/NDA"
+  - "02_Clients/{client}/Proposals"
+  - "02_Clients/{client}/Contracts_SOW"
+  - "02_Clients/{client}/Invoices"
+  - "02_Clients/{client}/Deliverables"
+  - "02_Clients/{client}/Correspondence"
+  - "03_Vendors/{vendor}/Contracts"
+  - "03_Vendors/{vendor}/Invoices"
+  - "03_Vendors/{vendor}/Correspondence"
+  - "04_Finance/Invoices_Sent"
+  - "04_Finance/Invoices_Received"
+  - "04_Finance/Bank_Statements"
+  - "04_Finance/Receipts"
+  - "04_Finance/Tax"
+  - "05_Templates/NDA"
+  - "05_Templates/Proposals"
+  - "05_Templates/Contracts_SOW"
+  - "05_Templates/Invoices"
+  - "05_Templates/TandCs"
+  - "06_HR/Employment_Contracts"
+  - "06_HR/Policies"
+  - "07_Research/Market_Research"
+  - "07_Research/Entity_Dossiers"
+  - "07_Research/Competitive_Intel"
+  - "08_Travel/{trip}"
+  - "09_Backups"
+  - "10_Knowledge_Base/Entities"
+  - "10_Knowledge_Base/Concepts"
+  - "10_Knowledge_Base/Comparisons"
+
+filing_rules:
+  - id: client-nda
+    pattern: ["NDA", "non-disclosure", "confidentiality agreement"]
+    target: "02_Clients/{client}/NDA/"
+    fallback: "05_Templates/NDA/"
+    tags: [legal, client]
+
+  - id: client-proposal
+    pattern: ["proposal", "quote", "quotation", "commercial offer"]
+    target: "02_Clients/{client}/Proposals/"
+    fallback: "00_Inbox/"
+    tags: [sales, client]
+
+  - id: client-contract
+    pattern: ["SOW", "statement of work", "service agreement", "master services", "contract"]
+    target: "02_Clients/{client}/Contracts_SOW/"
+    fallback: "00_Inbox/"
+    tags: [legal, client]
+
+  - id: client-invoice-sent
+    pattern: ["invoice", "tax invoice"]
+    direction: sent
+    target: "04_Finance/Invoices_Sent/"
+    secondary_target: "02_Clients/{client}/Invoices/"
+    tags: [finance, accounts-receivable]
+
+  - id: vendor-invoice-received
+    pattern: ["invoice", "bill", "statement", "receipt"]
+    direction: received
+    target: "04_Finance/Invoices_Received/"
+    secondary_target: "03_Vendors/{vendor}/Invoices/"
+    tags: [finance, accounts-payable]
+
+  - id: secretarial
+    pattern: ["ACRA", "Companies Registry", "Companies House", "constitution", "resolution", "annual return", "register of controllers", "RORC"]
+    target: "01_Secretarial/"
+    tags: [secretarial, compliance]
+
+  - id: tax
+    pattern: ["IRAS", "IRD", "IRS", "HMRC", "tax return", "GST", "VAT", "corporation tax", "Form C-S", "CT600"]
+    target: "04_Finance/Tax/"
+    tags: [tax, compliance]
+
+  - id: research
+    pattern: ["research", "dossier", "background check", "market map", "competitive intelligence"]
+    target: "07_Research/"
+    tags: [research]
+
+  - id: travel
+    pattern: ["itinerary", "flight", "boarding pass", "hotel", "travel", "booking confirmation"]
+    target: "08_Travel/{trip}/"
+    fallback: "08_Travel/"
+    tags: [travel]
+
+  - id: knowledge-base-export
+    pattern: ["wiki export", "knowledge base", "OKF", "entity page", "concept page"]
+    target: "10_Knowledge_Base/"
+    tags: [knowledge]
+
+default: "00_Inbox/"

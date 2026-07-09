@@ -1,0 +1,50 @@
+jurisdiction: HK
+name: Hong Kong
+currency: HKD
+last_reviewed: 2026-07-09
+notes: >-
+  Core compliance calendar for a Hong Kong private company limited by shares.
+  Tax return dates can vary by issue date and extension arrangements; use custom
+  deadlines in company.yaml for actual notices received from IRD.
+statutory:
+  - id: hk-nar1
+    name: Annual Return (Form NAR1)
+    frequency: yearly
+    trigger: within 42 days of incorporation anniversary
+    authority: Companies Registry
+    penalty: Substantially higher registration fees after the 42-day period; possible prosecution and fines for persistent default.
+    notes: >-
+      Applies to private companies. File annually with the Companies Registry
+      even when there are no changes to company particulars.
+
+  - id: hk-profits-tax-return
+    name: Profits Tax Return
+    frequency: yearly
+    trigger: issued by IRD in April, due 1 month later (or 6.5 months with auditor / block extension)
+    authority: Inland Revenue Department (IRD)
+    penalty: Estimated assessments, penalties, prosecution, and additional tax may apply for late or incorrect filing.
+    notes: >-
+      The exact due date is notice-specific. Treat 1 May as a default alert and
+      replace with the actual IRD notice date once received.
+
+  - id: hk-employers-return
+    name: Employer's Return (BIR56A and IR56B)
+    frequency: yearly
+    trigger: by May 1 each year
+    authority: Inland Revenue Department (IRD)
+    penalty: Fines and possible prosecution for late/non-filing or incorrect returns.
+    conditional: Required when the company employs staff or receives an employer's return notice.
+    notes: >-
+      Typically issued on the first working day of April and due within one
+      month. Nil returns may still need submission when a notice is issued.
+
+  - id: hk-agm
+    name: Annual General Meeting (AGM)
+    frequency: yearly
+    trigger: within 9 months of FY end (or dispense under Companies Ordinance s596)
+    authority: Companies Ordinance
+    penalty: Company and responsible persons may be liable to fines for failure to hold required meetings.
+    notes: >-
+      Written resolution or unanimous member agreement may dispense with AGM
+      requirements for private companies. Track the default deadline unless the
+      company has formally dispensed with AGMs.

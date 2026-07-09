@@ -1,0 +1,21 @@
+templates:
+  - name: "NDA Mutual"
+    file: "shared/templates/NDA_mutual.docx"
+    tokens: [client_name, client_address, date, jurisdiction]
+    category: legal
+    last_used: null
+  - name: "Service Agreement SOW"
+    file: "shared/templates/SOW_standard.docx"
+    tokens: [client_name, scope, amount, currency, duration, start_date]
+    category: engagement
+    last_used: null
+  - name: "Invoice"
+    file: "shared/templates/Invoice_template.docx"
+    tokens: [invoice_number, client_name, amount, currency, issue_date, due_date]
+    category: finance
+    last_used: null
+  - name: "Terms and Conditions"
+    file: "shared/templates/TandCs_standard.docx"
+    tokens: [client_name, effective_date, jurisdiction]
+    category: legal
+    last_used: null

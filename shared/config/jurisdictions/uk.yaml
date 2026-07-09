@@ -1,0 +1,41 @@
+jurisdiction: UK
+name: United Kingdom
+currency: GBP
+last_reviewed: 2026-07-09
+notes: >-
+  Core UK private limited company filings. These reminders assume Companies
+  House / HMRC obligations for a normal active company. Add VAT, PAYE, and sector
+  filings as custom deadlines when applicable.
+statutory:
+  - id: uk-confirmation-statement
+    name: Confirmation Statement (CS01)
+    frequency: yearly
+    trigger: within 14 days of incorporation anniversary
+    authority: Companies House
+    penalty: Failure to file can lead to prosecution, fines, and company strike-off.
+    notes: >-
+      Due at least once every 12 months after the review period. The review date
+      is usually the incorporation anniversary or the date of the previous
+      confirmation statement.
+
+  - id: uk-corporation-tax-return
+    name: Corporation Tax Return (CT600)
+    frequency: yearly
+    trigger: within 12 months of accounting period end
+    authority: HMRC
+    penalty: Automatic late-filing penalties and interest; tax-geared penalties can apply for prolonged delay.
+    notes: >-
+      Corporation tax payment is generally due earlier than the CT600 filing
+      deadline (commonly 9 months and 1 day after period end for small
+      companies). Add a custom payment deadline if finance tracking requires it.
+
+  - id: uk-annual-accounts
+    name: Annual Accounts
+    frequency: yearly
+    trigger: within 9 months of accounting period end (file with Companies House)
+    authority: Companies House
+    penalty: Automatic late filing penalties, escalating with delay; possible strike-off for persistent default.
+    notes: >-
+      First accounts can have a different deadline depending on incorporation
+      date and accounting reference date. Override with actual Companies House
+      due date during onboarding for a newly incorporated company.

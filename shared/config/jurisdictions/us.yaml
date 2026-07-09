@@ -1,0 +1,42 @@
+jurisdiction: US
+name: United States
+currency: USD
+last_reviewed: 2026-07-09
+notes: >-
+  US compliance varies heavily by entity type, tax classification, and state.
+  This pack covers common federal and state-level reminders. Add state-specific
+  franchise tax and local filings as custom deadlines in company.yaml.
+statutory:
+  - id: us-federal-income-tax-1120
+    name: Federal Income Tax Return (Form 1120 / 1120-S / 1065)
+    frequency: yearly
+    trigger: "by April 15 (or next business day)"
+    authority: Internal Revenue Service (IRS)
+    penalty: "Late filing and late payment penalties plus interest; S-Corp/partnership penalties can accrue per shareholder/partner per month."
+    notes: >-
+      C-Corporations generally file Form 1120, S-Corporations Form 1120-S, and
+      partnerships/multi-member LLCs Form 1065. Fiscal-year entities and some
+      entity types have different due dates; override when applicable.
+
+  - id: us-annual-report
+    name: Annual Report / Franchise Tax Report (state-level)
+    frequency: yearly
+    trigger: "varies by state (DE: March 1, CA: last day of anniversary month)"
+    authority: Secretary of State / state filing office
+    penalty: "Late fees, loss of good standing, administrative dissolution, and franchise tax penalties may apply."
+    notes: >-
+      The default calculator handles Delaware March 1 and California anniversary
+      month. Other states should be captured as custom deadlines with the exact
+      state rule and filing portal.
+
+  - id: us-estimated-tax-payments
+    name: Estimated Tax Payments (quarterly)
+    frequency: quarterly
+    trigger: "April 15, June 15, Sept 15, Jan 15"
+    authority: Internal Revenue Service (IRS)
+    penalty: "Underpayment penalties and interest may apply."
+    notes: >-
+      Represents the recurring federal estimated tax cycle. The date utility
+      returns the next upcoming payment date from this list and rolls forward
+      for weekends/federal holidays. Entity owners may also have individual
+      estimated tax obligations; track those separately if required.

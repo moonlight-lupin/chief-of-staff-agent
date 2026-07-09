@@ -1,0 +1,75 @@
+jurisdiction: SG
+name: Singapore
+currency: SGD
+last_reviewed: 2026-07-09
+notes: >-
+  Core private-company compliance calendar for Singapore. Deadlines are
+  computed from company.incorporation_date and company.financial_year_end unless
+  a requirement is explicitly event-driven or conditional.
+statutory:
+  - id: sg-annual-return
+    name: Annual Return filing
+    frequency: yearly
+    trigger: "within 7 months of FY end"
+    authority: ACRA
+    penalty: "Late lodgement fees and enforcement action; directors may be fined up to SGD 5,000 for Companies Act breaches."
+    notes: >-
+      Filed via BizFile+. Solvent exempt private companies and private dormant
+      relevant companies may have simplified filing obligations, but the annual
+      return due date still needs monitoring.
+
+  - id: sg-agm
+    name: Annual General Meeting (AGM)
+    frequency: yearly
+    trigger: "within 6 months of FY end (first AGM: within 18 months of incorporation)"
+    authority: Companies Act / ACRA
+    penalty: "Late holding or failure to hold AGM can lead to composition sums, summons, and fines for the company and officers."
+    notes: >-
+      Private companies may dispense with AGMs if all members agree and
+      financial statements are sent to members within the statutory period.
+      Public companies generally have a different five-month timeline.
+
+  - id: sg-eci
+    name: Estimated Chargeable Income (ECI)
+    frequency: yearly
+    trigger: "within 3 months of FY end"
+    authority: IRAS
+    penalty: "IRAS may issue a Notice of Assessment based on its estimate; late/non-filing can attract penalties."
+    conditional: "Required unless the company qualifies for an ECI filing waiver."
+    notes: >-
+      Common waiver conditions include annual revenue not exceeding SGD 5 million
+      for the financial year and estimated chargeable income being nil. Confirm
+      current IRAS thresholds during onboarding.
+
+  - id: sg-form-cs
+    name: Form C-S / Form C Income Tax Return
+    frequency: yearly
+    trigger: "by 30 Nov each year"
+    authority: IRAS
+    penalty: "Late filing penalties, estimated assessments, summons, and enforcement action may apply."
+    notes: >-
+      File Form C-S, Form C-S (Lite), or Form C depending on eligibility. The
+      due date is generally 30 November for e-filing for Year of Assessment.
+
+  - id: sg-rorc
+    name: Register of Registrable Controllers (RORC) update
+    frequency: on_change
+    trigger: "within 14 days of register change"
+    authority: ACRA
+    penalty: "Failure to maintain or update RORC can lead to fines for the company and officers."
+    notes: >-
+      Maintain non-public register of registrable controllers and lodge RORC
+      information with ACRA unless exempt. Event-driven; requires the change
+      date to compute an actual deadline.
+
+  - id: sg-gst-return
+    name: GST return (F5/F8)
+    frequency: quarterly
+    trigger: "within 30 days of quarter end"
+    authority: IRAS
+    penalty: "Late filing/payment penalties and enforcement action may apply."
+    conditional: "GST-registered businesses only."
+    notes: >-
+      File through myTax Portal for each prescribed accounting period. Businesses
+      on monthly or non-standard GST periods should override this in
+      company.yaml custom deadlines.

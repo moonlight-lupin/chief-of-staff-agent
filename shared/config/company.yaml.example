@@ -1,0 +1,156 @@
+# Chief of Staff — Company Configuration
+# Copy this file to shared/config/company.yaml and edit for the company using
+# the plugin. Data files referenced by the skills live under paths.project_root.
+
+company:
+  # Legal trading or registered company name used in documents and reports.
+  name: "Acme Advisory Pte Ltd"
+  # Supported jurisdiction packs: SG, HK, US, UK.
+  jurisdiction: SG
+  # Incorporation/formation date in ISO format. Used for anniversary deadlines.
+  incorporation_date: "2024-01-15"
+  # Financial year end as "DD Mon" or full ISO date. Used for annual statutory deadlines.
+  financial_year_end: "31 Dec"
+  # Primary reporting currency for pipeline, invoices, expenses, and P&L.
+  currency: SGD
+  # Used to seed wiki taxonomy, template suggestions, and role-based signing hints.
+  business_type: "professional_services"
+  # Optional identifiers included in generated documents where relevant.
+  registration_number: "202400001A"
+  tax_registration_number: "M90000001A"
+  address: "1 Raffles Place, #20-01, Singapore 048616"
+  phone: "+65 6123 4567"
+  website: "https://www.acme-advisory.example"
+
+user:
+  # Primary operator/founder who receives briefings and signs documents.
+  name: "Alicia Tan"
+  role: "Managing Director"
+  email: "alicia@acme-advisory.example"
+  phone: "+65 9123 4567"
+
+# Google Workspace integration is handled by the external google-workspace skill.
+google:
+  # Service account JSON with domain-wide delegation, if used.
+  service_account_path: "~/.hermes/secrets/acme-google-service-account.json"
+  # Workspace domain and delegated user for Gmail/Calendar/Drive actions.
+  domain: "acme-advisory.example"
+  delegate_email: "alicia@acme-advisory.example"
+  # Root Drive folder ID for the numbered folder structure.
+  drive_root_folder_id: "1A2B3C4D5E6F_example_root_id"
+
+paths:
+  # Project root stores YAML data files: pipeline.yaml, todos.yaml, invoices.yaml, expenses.yaml.
+  project_root: "~/.hermes/projects/acme-advisory/"
+  # Wiki path for the Note Taker / second-brain skill.
+  wiki_path: "~/.hermes/projects/acme-advisory/wiki/"
+  # Local template directory bundled with the plugin or customized per customer.
+  templates: "~/.hermes/plugins/chief-of-staff/shared/templates/"
+  # Optional downloads/staging directory for Drive Filer and document workflows.
+  staging: "~/.hermes/projects/acme-advisory/staging/"
+
+# Delivery preferences for scheduled agent outputs.
+delivery:
+  channel: telegram            # telegram | whatsapp | email | slack | cli
+  home_chat_id: "123456789"    # platform-specific; omit if using CLI only
+  briefing_time: "20:00"       # 24-hour local time
+  weekly_review_day: friday
+  weekly_review_time: "17:00"
+  timezone: "Asia/Singapore"
+  use_client_codes: false      # set true if messages may be seen by others
+
+# CRM pipeline stages used by Pipeline Manager. Keep names stable once data exists.
+sales_stages:
+  - Lead
+  - Qualified
+  - Proposal Sent
+  - NDA Signed
+  - Contract Sent
+  - Contract Signed
+  - Invoiced
+  - Paid
+  - Lost
+# Deals with no activity in their current stage for this many days are stale.
+stale_threshold_days: 14
+
+# Deadline Tracker reads statutory deadlines from jurisdictions/{jurisdiction}.yaml
+# and merges these custom business-specific dates.
+deadlines:
+  custom:
+    - name: "Professional indemnity insurance renewal"
+      due: "2026-09-30"
+      authority: "Internal"
+      notes: "Renew before the existing policy lapses."
+      owner: "Alicia Tan"
+    - name: "Major client framework review"
+      due: "2026-11-15"
+      authority: "Commercial"
+      notes: "Review pricing and deliverables before renewal discussion."
+      owner: "Alicia Tan"
+
+calendar:
+  # Minutes before meetings for auto-generated prep prompts.
+  reminder_minutes: 15
+  # If true, Calendar Manager asks Meeting Prep to generate briefs automatically.
+  auto_prep_brief: true
+  # Working days/hours used for scheduling suggestions.
+  working_days: [monday, tuesday, wednesday, thursday, friday]
+  working_hours:
+    start: "09:00"
+    end: "18:00"
+
+self_sign:
+  # Signature assets are copied here during onboarding. Keep paths relative to plugin root or absolute.
+  signature_image: "shared/assets/signature.png"
+  initials_image: "shared/assets/initials.png"
+  company_stamp: "shared/assets/stamp.png"
+  auto_date: true
+  output_format: pdf
+  party_aliases:
+    - "Service Provider"
+    - "Consultant"
+    - "Contractor"
+    - "The Company"
+  detection_patterns:
+    signature:
+      - "Signature:"
+      - "Signed by:"
+      - "Authorised Signatory:"
+      - "For and on behalf of"
+      - "______________"
+    date:
+      - "Date:"
+      - "Date Signed:"
+    party:
+      - "The Client"
+      - "The Service Provider"
+      - "Party A"
+      - "Party B"
+
+bookkeeper:
+  # Report defaults. Actual records live in paths.project_root/invoices.yaml and expenses.yaml.
+  revenue_recognition: cash     # cash = paid invoices only for P&L
+  default_payment_terms_days: 14
+  expense_categories:
+    - software
+    - rent
+    - utilities
+    - travel
+    - meals
+    - professional
+    - equipment
+    - tax
+    - other
+
+backup:
+  enabled: true
+  schedule: "0 3 * * 0"        # Sunday 03:00 local time
+  retention_weekly: 4
+  retention_monthly: 12
+  drive_folder: "09_Backups/"
+  exclude:
+    - ".env"
+    - "auth.json"
+    - "state.db"
+    - "sessions/"
+    - "logs/"
