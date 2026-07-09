@@ -181,8 +181,14 @@ def _check_google_auth(fix: bool, data: dict[str, Any] | None, config_path: Path
     api = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser() / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py"
     if not api.exists():
         return CheckResult("google_auth", "warn", "skipped: google_api.py not found")
+    account = google.get("service_account_path", "")
+    is_service_account = bool(account and Path(str(account)).expanduser().exists())
+    cmd = [sys.executable, str(api)]
+    if is_service_account:
+        cmd += ["--account", "phronesis", "--as", google.get("delegate_email", "")]
+    cmd += ["calendar", "list"]
     try:
-        proc = subprocess.run([sys.executable, str(api), "calendar", "list"], capture_output=True, text=True, timeout=20, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
     except Exception as exc:
         return CheckResult("google_auth", "warn", f"calendar auth test skipped/failed: {exc}")
     return CheckResult("google_auth", "pass" if proc.returncode == 0 else "warn", "calendar list succeeded" if proc.returncode == 0 else (proc.stderr or proc.stdout)[-300:])
@@ -244,8 +250,8 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     if not esign or str(esign.get("provider", "")).lower() != "docuseal":
         return CheckResult("docuseal", "warn", "skipped: e-sign not configured for DocuSeal")
     url = str(esign.get("url") or "").rstrip("/")
-    if not url or not os.getenv("DOCUSEAL_API_KEY"):
-        return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY")
+    if not url or not (os.getenv("DOCUSEAL_API_KEY") or os.getenv("DOCUSEAL_MCP_TOKEN")):
+        return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:  # nosec - configured URL health check
             ok = resp.status < 500
