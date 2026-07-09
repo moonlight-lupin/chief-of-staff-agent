@@ -141,10 +141,11 @@ class TestPendingActionsStorage:
         assert approve_pending_action(config, action["id"]) is None
 
     def test_mark_executed(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
+        mark_executing(config, action["id"])
         result = {"success": True, "data": {"id": "msg1"}}
         executed = mark_executed(config, action["id"], result)
         assert executed["state"] == "executed"
@@ -168,19 +169,21 @@ class TestPendingActionsStorage:
         assert preview["preview"]["body_preview"] == "Hello world"
 
     def test_cancel_executed_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed, cancel_pending_action
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed, cancel_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
+        mark_executing(config, action["id"])
         mark_executed(config, action["id"], {"success": True})
         assert cancel_pending_action(config, action["id"]) is None
 
     def test_cleanup_old_actions(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed, cancel_pending_action, cleanup_old_actions, _load
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed, cancel_pending_action, cleanup_old_actions, _load
         config, project = temp_project
         # Create and execute an old action
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
+        mark_executing(config, action["id"])
         mark_executed(config, action["id"], {"success": True})
         # Manually age the executed_at timestamp
         data = _load(config)

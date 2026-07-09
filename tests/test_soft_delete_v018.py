@@ -167,10 +167,11 @@ class TestApprovedExpiry:
     """Test that approved actions expire if not executed in time."""
 
     def test_approved_action_executable_immediately(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
+        mark_executing(config, action["id"])
         result = mark_executed(config, action["id"], {"success": True})
         assert result is not None
         assert result["state"] == "executed"
@@ -186,23 +187,26 @@ class TestApprovedExpiry:
         assert result is None  # approval lapsed
 
     def test_lapsed_approval_marks_expired(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing
         from pending_actions import get_pending_action, APPROVED_EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
         _age_approved_action(config, action["id"], APPROVED_EXPIRY_HOURS + 1)
-        mark_executed(config, action["id"], {"success": True})
+        # mark_executing checks expiry BEFORE provider call — marks expired
+        result = mark_executing(config, action["id"])
+        assert result is None
         loaded = get_pending_action(config, action["id"])
         assert loaded["state"] == "expired"
 
     def test_fresh_approval_not_expired(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
         from pending_actions import APPROVED_EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
         _age_approved_action(config, action["id"], APPROVED_EXPIRY_HOURS - 1)
+        mark_executing(config, action["id"])
         result = mark_executed(config, action["id"], {"success": True})
         assert result is not None
 

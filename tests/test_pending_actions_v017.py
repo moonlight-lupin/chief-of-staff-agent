@@ -140,10 +140,11 @@ class TestDoubleApproveDoubleExecute:
         assert second is None  # already approved
 
     def test_double_execute_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
+        mark_executing(config, action["id"])
         first = mark_executed(config, action["id"], {"success": True})
         assert first is not None
         assert first["state"] == "executed"

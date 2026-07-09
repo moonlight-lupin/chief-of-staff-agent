@@ -375,13 +375,17 @@ def cancel_pending_action(
     return action
 
 
-def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
-    """Transition an approved action to 'executed' with the result.
+def mark_executing(config: Any, action_id: str) -> dict[str, Any] | None:
+    """Pre-execution eligibility check — transition approved → executing.
 
-    Returns the updated action, or None if:
+    This MUST be called before any provider method to prevent the race where
+    a provider action succeeds but mark_executed() rejects a lapsed approval.
+
+    Returns the action dict if eligible (state='executing'), or None if:
     - not found
-    - not in 'approved' state (already executed, cancelled, expired, or not yet approved)
-    - approval has lapsed (approved too long ago without execution)
+    - not in 'approved' state
+    - approval has lapsed (marks as expired)
+    - concurrency conflict (version changed)
     """
     data = _load(config)
     expected_version = data.get("_version", 0)
@@ -389,11 +393,50 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     if not action or action["state"] != "approved":
         return None
 
-    # Check if approval has lapsed
+    # Check if approval has lapsed BEFORE any provider call
     if _is_approval_lapsed(action):
         action["state"] = "expired"
         action["expired_at"] = _now()
         _save(config, data, expected_version=expected_version)
+        try:
+            from workspace_audit import audit_workspace_action
+            audit_workspace_action(config, action["provider"], action["type"], "pending",
+                                   target=action["target"], status="expired",
+                                   extra={"action_id": action_id, "reason": "approval_lapsed"})
+        except Exception:
+            pass
+        return None
+
+    # Transition to executing
+    action["state"] = "executing"
+    action["executing_at"] = _now()
+    _save(config, data, expected_version=expected_version)
+
+    try:
+        from workspace_audit import audit_workspace_action
+        audit_workspace_action(config, action["provider"], action["type"], "pending",
+                               target=action["target"], status="executing",
+                               extra={"action_id": action_id})
+    except Exception:
+        pass
+
+    return action
+
+
+def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
+    """Transition an executing action to 'executed' with the result.
+
+    This is called AFTER the provider method completes. The action must be
+    in 'executing' state (set by mark_executing() before the provider call).
+
+    Returns the updated action, or None if:
+    - not found
+    - not in 'executing' state
+    """
+    data = _load(config)
+    expected_version = data.get("_version", 0)
+    action = data["actions"].get(action_id)
+    if not action or action["state"] != "executing":
         return None
 
     action["state"] = "executed"
@@ -411,6 +454,63 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     except Exception:
         pass
 
+    return action
+
+
+def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | None:
+    """Transition an executing action to 'failed' with an error message.
+
+    Called when the provider method raises an exception or returns failure.
+    The action transitions back to 'approved' so it can be retried.
+
+    Returns the updated action, or None if not in 'executing' state.
+    """
+    data = _load(config)
+    expected_version = data.get("_version", 0)
+    action = data["actions"].get(action_id)
+    if not action or action["state"] != "executing":
+        return None
+
+    action["state"] = "approved"  # back to approved for retry
+    action["last_error"] = error
+    action["retry_count"] = action.get("retry_count", 0) + 1
+    _save(config, data, expected_version=expected_version)
+
+    try:
+        from workspace_audit import audit_workspace_action
+        audit_workspace_action(config, action["provider"], action["type"], "pending",
+                               target=action["target"], status="failed",
+                               extra={"action_id": action_id, "error": error})
+    except Exception:
+        pass
+
+    return action
+
+
+def assert_executable(config: Any, action_id: str) -> dict[str, Any] | None:
+    """Check if an action is eligible for execution WITHOUT changing state.
+
+    Use this for pre-execution checks where you want to verify eligibility
+    but not commit to the executing transition yet.
+
+    Returns the action dict if eligible, or None if:
+    - not found
+    - not in 'approved' state
+    - approval has lapsed (marks as expired)
+    """
+    action = get_pending_action(config, action_id)
+    if not action:
+        return None
+    if action["state"] != "approved":
+        return None
+    if _is_approval_lapsed(action):
+        # Mark as expired
+        data = _load(config)
+        expected_version = data.get("_version", 0)
+        data["actions"][action_id]["state"] = "expired"
+        data["actions"][action_id]["expired_at"] = _now()
+        _save(config, data, expected_version=expected_version)
+        return None
     return action
 
 

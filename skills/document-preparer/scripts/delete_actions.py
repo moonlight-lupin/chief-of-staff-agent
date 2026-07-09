@@ -254,18 +254,29 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def cmd_execute(args: argparse.Namespace) -> int:
-    """Execute an approved soft-delete action."""
+    """Execute an approved soft-delete action.
+
+    Uses mark_executing() BEFORE the provider call to prevent the race where
+    a provider action succeeds but the approval has lapsed.
+    State machine: approved → executing → executed | failed (back to approved).
+    """
     cfg = load_config(args.config)
     if cfg is None:
         return 1
 
-    from pending_actions import get_pending_action, mark_executed
+    from pending_actions import get_pending_action, mark_executing, mark_executed, mark_failed
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
         return 1
     if action["state"] != "approved":
         print(f"Action {args.action_id} is not approved (state={action['state']}).", file=sys.stderr)
+        return 1
+
+    # Pre-execution eligibility check — prevents race with lapsed approval
+    executing = mark_executing(cfg, args.action_id)
+    if not executing:
+        print(f"Action {args.action_id} cannot be executed (approval may have lapsed).", file=sys.stderr)
         return 1
 
     action_type = action["type"]
@@ -281,18 +292,23 @@ def cmd_execute(args: argparse.Namespace) -> int:
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
 
     # Call the provider method
-    method = getattr(client, method_name, None)
-    if method is None:
-        result = {
-            "success": False,
-            "action": action_type,
-            "provider": client.provider_name,
-            "target": action["target"],
-            "error": f"Provider {client.provider_name} does not implement {method_name}",
-            "audited": False,
-        }
-    else:
-        result = method(action["target"])
+    try:
+        method = getattr(client, method_name, None)
+        if method is None:
+            result = {
+                "success": False,
+                "action": action_type,
+                "provider": client.provider_name,
+                "target": action["target"],
+                "error": f"Provider {client.provider_name} does not implement {method_name}",
+                "audited": False,
+            }
+        else:
+            result = method(action["target"])
+    except Exception as exc:
+        mark_failed(cfg, args.action_id, str(exc))
+        print(f"Execute failed: {exc}", file=sys.stderr)
+        return 1
 
     mark_executed(cfg, args.action_id, result)
     print_result(result, args.summary, f"{meta['label']}: {action['target']}")
@@ -318,6 +334,53 @@ def cmd_summary(args: argparse.Namespace) -> int:
     else:
         print_json({"total": len(actions), "by_state": counts})
     return 0
+
+
+RESTORE_ACTIONS = {
+    "gmail.archive": {"label": "Unarchive Gmail message", "method": "gmail_unarchive"},
+    "gmail.trash": {"label": "Restore trashed Gmail message", "method": "gmail_untrash"},
+    "calendar.cancel": {"label": "Restore cancelled calendar event", "method": "calendar_uncancel"},
+}
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    """Restore a previously executed soft-delete action.
+
+    Looks up the executed action, determines the original action type,
+    and calls the corresponding restore provider method.
+    Does NOT require approval queue — restore is always safe (non-destructive).
+    """
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+
+    from pending_actions import get_pending_action
+    action = get_pending_action(cfg, args.action_id)
+    if not action:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+    if action["state"] != "executed":
+        print(f"Action {args.action_id} is not executed (state={action['state']}). "
+              f"Restore only works on executed actions.", file=sys.stderr)
+        return 1
+
+    action_type = action["type"]
+    if action_type not in RESTORE_ACTIONS:
+        print(f"No restore path for action type: {action_type}", file=sys.stderr)
+        return 1
+
+    meta = RESTORE_ACTIONS[action_type]
+    client = get_client(cfg)
+
+    # Restore is safe — no approval queue needed
+    method = getattr(client, meta["method"], None)
+    if method is None:
+        print(f"Provider does not implement {meta['method']}", file=sys.stderr)
+        return 1
+
+    result = method(action["target"])
+    print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+    return 0 if result.get("success") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -357,6 +420,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     summary_cmd = sub.add_parser("summary", help="Print summary by state")
 
+    restore = sub.add_parser("restore", help="Restore a previously executed soft-delete action")
+    restore.add_argument("--action-id", required=True)
+
     return parser
 
 
@@ -378,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_execute(args)
         elif args.command == "summary":
             return cmd_summary(args)
+        elif args.command == "restore":
+            return cmd_restore(args)
         else:
             parser.error("unknown command")
             return 2

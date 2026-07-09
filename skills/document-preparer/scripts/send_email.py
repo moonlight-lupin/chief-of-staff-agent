@@ -177,15 +177,18 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 def cmd_execute(args: argparse.Namespace) -> int:
     """Execute an approved Gmail send — requires approved action ID.
 
-    The explicit approval via 'send_email.py approve --action-id <id>' IS the
-    confirmation. We set CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1 for this call
-    because the user has already consciously approved the send.
+    Uses mark_executing() BEFORE the provider call to prevent the race where
+    a provider action succeeds but the approval has lapsed. The state machine
+    is: approved → executing → executed | failed (back to approved for retry).
+
+    The explicit approval IS the confirmation. CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1
+    is set because the user has already consciously approved the send.
     """
     cfg = load_config(args.config)
     if cfg is None:
         return 1
 
-    from pending_actions import get_pending_action, mark_executed
+    from pending_actions import get_pending_action, mark_executing, mark_executed, mark_failed
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -195,6 +198,13 @@ def cmd_execute(args: argparse.Namespace) -> int:
               f"Run: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
         return 1
 
+    # Pre-execution eligibility check — prevents race with lapsed approval
+    executing = mark_executing(cfg, args.action_id)
+    if not executing:
+        print(f"Action {args.action_id} cannot be executed (approval may have lapsed). "
+              f"Re-approve with: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
+        return 1
+
     client = get_client(cfg)
     payload = action["payload"]
 
@@ -202,12 +212,17 @@ def cmd_execute(args: argparse.Namespace) -> int:
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
 
     # Execute the send
-    result = client.gmail_send(
-        to=payload["to"],
-        subject=payload["subject"],
-        body=payload["body"],
-        cc=payload.get("cc") or None,
-    )
+    try:
+        result = client.gmail_send(
+            to=payload["to"],
+            subject=payload["subject"],
+            body=payload["body"],
+            cc=payload.get("cc") or None,
+        )
+    except Exception as exc:
+        mark_failed(cfg, args.action_id, str(exc))
+        print(f"Send failed: {exc}", file=sys.stderr)
+        return 1
 
     # Mark as executed with result
     mark_executed(cfg, args.action_id, result)

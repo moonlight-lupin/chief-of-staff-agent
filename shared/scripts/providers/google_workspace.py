@@ -337,6 +337,63 @@ class GoogleWorkspaceClient(WorkspaceClient):
                             target=event_id, data={"output": out.strip(), "reversible": True},
                             audited=True).to_dict()
 
+    def gmail_unarchive(self, message_id: str) -> dict[str, Any]:
+        """Restore an archived Gmail message (add INBOX label back)."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.unarchive", message_id=message_id):
+            return ActionResult(success=False, action="gmail.unarchive", provider=self._provider_name,
+                                target=message_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", "INBOX")
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "gmail.unarchive",
+                                   "google_api.py", target=message_id, status="failed")
+            return ActionResult(success=False, action="gmail.unarchive", provider=self._provider_name,
+                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "gmail.unarchive",
+                               "google_api.py", target=message_id)
+        return ActionResult(success=True, action="gmail.unarchive", provider=self._provider_name,
+                            target=message_id, data={"output": out.strip()}, audited=True).to_dict()
+
+    def gmail_untrash(self, message_id: str) -> dict[str, Any]:
+        """Restore a trashed Gmail message (remove TRASH label)."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.untrash", message_id=message_id):
+            return ActionResult(success=False, action="gmail.untrash", provider=self._provider_name,
+                                target=message_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("gmail", "modify", message_id, "--remove-labels", "TRASH")
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "gmail.untrash",
+                                   "google_api.py", target=message_id, status="failed")
+            return ActionResult(success=False, action="gmail.untrash", provider=self._provider_name,
+                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "gmail.untrash",
+                               "google_api.py", target=message_id)
+        return ActionResult(success=True, action="gmail.untrash", provider=self._provider_name,
+                            target=message_id, data={"output": out.strip()}, audited=True).to_dict()
+
+    def calendar_uncancel(self, event_id: str) -> dict[str, Any]:
+        """Restore a cancelled calendar event (set status back to confirmed)."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("calendar.uncancel", event_id=event_id):
+            return ActionResult(success=False, action="calendar.uncancel", provider=self._provider_name,
+                                target=event_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("calendar", "update", "--event-id", event_id, "--status", "confirmed")
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "calendar.uncancel",
+                                   "google_api.py", target=event_id, status="failed")
+            return ActionResult(success=False, action="calendar.uncancel", provider=self._provider_name,
+                                target=event_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "calendar.uncancel",
+                               "google_api.py", target=event_id)
+        return ActionResult(success=True, action="calendar.uncancel", provider=self._provider_name,
+                            target=event_id, data={"output": out.strip()}, audited=True).to_dict()
+
     def health_check(self) -> bool:
         cmd = self._build_cmd("calendar", "list")
         rc, _, _ = self._run(cmd, timeout=20)
