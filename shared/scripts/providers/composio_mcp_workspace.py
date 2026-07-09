@@ -126,7 +126,11 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return self._mcp_client
 
     def _execute_composio_tool(self, tool_slug: str, input_data: dict[str, Any]) -> dict[str, Any]:
-        """Core helper: call COMPOSIO_MULTI_EXECUTE_TOOL with a tool slug."""
+        """Core helper: call COMPOSIO_MULTI_EXECUTE_TOOL with a tool slug.
+
+        Live-validated payload shape (v0.1.8):
+            {"tools": [{"tool_slug": "...", "input": {...}}]}
+        """
         mcp = self._get_mcp()
         result = mcp.call_tool(
             "COMPOSIO_MULTI_EXECUTE_TOOL",
@@ -148,6 +152,42 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             else:
                 return {"error": resp.get("error", "tool execution failed"), "successful": False}
         return result
+
+    @staticmethod
+    def _normalize_tool_result(tool_slug: str, data: dict[str, Any]) -> Any:
+        """Normalize live Composio response quirks into standard shapes.
+
+        Contains all the response-shape knowledge in one place so
+        workspace methods don't repeat extraction logic.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        if tool_slug == "GMAIL_FETCH_EMAILS":
+            messages = data.get("messages", [])
+            return messages if isinstance(messages, list) else []
+
+        if tool_slug == "GOOGLECALENDAR_FIND_EVENT":
+            event_data = data.get("event_data", {})
+            if isinstance(event_data, dict):
+                events = event_data.get("event_data", [])
+                return events if isinstance(events, list) else []
+            return []
+
+        if tool_slug == "GOOGLEDRIVE_FIND_FILE":
+            files = data.get("files", [])
+            return files if isinstance(files, list) else []
+
+        if tool_slug == "GMAIL_CREATE_EMAIL_DRAFT":
+            return data  # pass through draft metadata
+
+        if tool_slug in ("GOOGLECALENDAR_CREATE_EVENT", "GOOGLECALENDAR_UPDATE_EVENT"):
+            return data  # pass through event metadata
+
+        if tool_slug in ("GOOGLEDRIVE_UPLOAD_FILE", "GOOGLEDRIVE_DOWNLOAD_FILE"):
+            return data  # pass through file metadata
+
+        return data
 
     def _manage_connections(self, action: str, toolkit: str) -> dict[str, Any]:
         """Call COMPOSIO_MANAGE_CONNECTIONS."""
@@ -193,8 +233,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 "query": query,
                 "max_results": max_results,
             })
-            messages = data.get("messages", []) if isinstance(data, dict) else []
-            return messages if isinstance(messages, list) else []
+            return self._normalize_tool_result("GMAIL_FETCH_EMAILS", data)
         except Exception as exc:
             warnings.warn(f"Composio MCP gmail_search failed: {exc}")
             return []
@@ -224,9 +263,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 "time_max": f"{end}T23:59:59Z" if "T" not in end else end,
                 "max_results": 50,
             })
-            event_data = data.get("event_data", {}) if isinstance(data, dict) else {}
-            events = event_data.get("event_data", []) if isinstance(event_data, dict) else []
-            return events if isinstance(events, list) else []
+            return self._normalize_tool_result("GOOGLECALENDAR_FIND_EVENT", data)
         except Exception as exc:
             warnings.warn(f"Composio MCP calendar_list failed: {exc}")
             return []
@@ -275,8 +312,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 "query": query,
                 "max_results": max_results,
             })
-            files = data.get("files", []) if isinstance(data, dict) else []
-            return files if isinstance(files, list) else []
+            return self._normalize_tool_result("GOOGLEDRIVE_FIND_FILE", data)
         except Exception as exc:
             warnings.warn(f"Composio MCP drive_search failed: {exc}")
             return []

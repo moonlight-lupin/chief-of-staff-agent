@@ -352,13 +352,20 @@ def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_pat
     provider = workspace.get("provider", "google_api")
     mode = workspace.get("mode", "direct")
 
-    # Report capabilities
+    # Report capabilities — mode-aware for composio
     try:
         sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
         from workspace_capabilities import get_capabilities, unsupported_actions
-        caps = get_capabilities(provider)
+        if provider == "composio":
+            cap_provider = f"composio:{mode}"
+        else:
+            cap_provider = provider
+        caps = get_capabilities(cap_provider)
+        # Fallback to bare provider if mode-specific caps not found
+        if not caps:
+            caps = get_capabilities(provider)
         supported = [k for k, v in caps.items() if v]
-        unsupported = unsupported_actions(provider)
+        unsupported = unsupported_actions(cap_provider) or unsupported_actions(provider)
         detail = f"{provider} {mode} — supported: {', '.join(supported)}"
         if unsupported:
             detail += f"; unsupported: {', '.join(unsupported)}"

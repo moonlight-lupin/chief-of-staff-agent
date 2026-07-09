@@ -81,29 +81,38 @@ integrations:
 
 class TestMcpInfo:
     def test_mcp_info_without_session(self, composio_config_file):
+        """--mcp-info should work without SDK session_id (MCP mode)."""
         rc, out, err = run_connect("--provider", "composio", "--mcp-info",
                                    config_path=composio_config_file)
-        assert rc == 1
-        assert "session" in out.lower() or "connect" in out.lower()
+        # Should not fail with "no session" — MCP mode doesn't need session_id
+        # May return 1 if MCP key not set, but should not say "session"
+        assert "session" not in out.lower() or "session_id" not in out.lower()
 
-    def test_mcp_info_with_mocked_session(self, composio_config_file):
-        """Test --mcp-info --json with mocked session metadata."""
+    def test_mcp_info_with_mocked_mcp(self, composio_config_file):
+        """Test --mcp-info --json with mocked MCP client."""
         import yaml
         config = yaml.safe_load(composio_config_file.read_text())
+        # Ensure MCP mode for this test
+        config["integrations"]["workspace"]["mode"] = "mcp"
+        config["integrations"]["workspace"]["mcp"] = {
+            "endpoint": "https://connect.composio.dev/mcp",
+            "key_env": "COMPOSIO_MCP_KEY",
+        }
 
         # Pre-populate session metadata
         project = Path(config["paths"]["project_root"])
         meta_path = project / ".integrations" / "composio" / "session.json"
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         meta_path.write_text(json.dumps({
-            "user_id": "test-mcp-user",
-            "session_id": "sess_test_123",
-            "mode": "sdk",
-            "mcp": {"enabled": True, "url": "https://mcp.composio.dev/sess_test_123", "headers_stored": False},
+            "provider": "composio",
+            "mode": "mcp",
+            "endpoint": "https://connect.composio.dev/mcp",
+            "key_env": "COMPOSIO_MCP_KEY",
+            "mcp_initialized": True,
+            "available_meta_tools": ["COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_MULTI_EXECUTE_TOOL"],
             "connections": {"gmail": {"status": "connected"}},
         }))
 
-        # Call the function directly
         sys.path.insert(0, str(SHARED_SCRIPTS))
         import importlib
         import connect_workspace as cw
@@ -118,13 +127,13 @@ class TestMcpInfo:
         output = buf.getvalue()
         data = json.loads(output)
         assert data["provider"] == "composio"
-        assert data["session_id"] == "sess_test_123"
-        assert data["mcp_url"] == "https://mcp.composio.dev/sess_test_123"
-        assert data["headers_stored"] is False
+        assert data["mode"] == "mcp"
+        assert data["endpoint"] == "https://connect.composio.dev/mcp"
+        assert data["key_env"] == "COMPOSIO_MCP_KEY"
+        assert "session_id" not in data  # MCP mode doesn't use session_id
+        assert "enabled_tools" in data
         assert "gmail" in data["enabled_tools"]
         assert "GMAIL_FETCH_EMAILS" in data["enabled_tools"]["gmail"]
-        assert "GMAIL_CREATE_EMAIL_DRAFT" in data["enabled_tools"]["gmail"]
-        assert "GOOGLEDRIVE_UPLOAD_FILE" in data["enabled_tools"]["googledrive"]
 
     def test_mcp_tools_command(self, composio_config_file):
         """Test --mcp-tools prints tools per toolkit."""

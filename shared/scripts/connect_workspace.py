@@ -373,92 +373,139 @@ def cmd_composio_mcp_url(config: dict[str, Any]) -> int:
 
 
 def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
-    """Print Composio onboarding info."""
+    """Print Composio onboarding info — mode-aware."""
+    integrations = config.get("integrations", {})
+    workspace = integrations.get("workspace", {})
+    mode = workspace.get("mode", "mcp")
+
     print("=== Composio Provider Setup ===\n")
+    print(f"Mode: {mode}\n")
 
-    api_key = os.getenv("COMPOSIO_API_KEY")
-    if api_key:
-        print("✅ COMPOSIO_API_KEY is set")
+    if mode == "mcp":
+        mcp_cfg = workspace.get("mcp", {})
+        endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
+        key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
+
+        print(f"✅ Endpoint: {endpoint}")
+        if os.getenv(key_env):
+            print(f"✅ {key_env}: set")
+        else:
+            print(f"❌ {key_env}: NOT set")
+
+        user_id = workspace.get("user_id", "")
+        if user_id:
+            print(f"✅ user_id: {user_id}")
+        else:
+            print("⚠️  user_id not set in config")
+
+        # Show meta tools if initialized
+        if os.getenv(key_env):
+            try:
+                sys.path.insert(0, str(_SCRIPT_DIR))
+                from mcp_client import MCPClient
+                client = MCPClient(endpoint=endpoint, key_env=key_env)
+                client.initialize()
+                tools = client.list_tools()
+                tool_names = [t.get("name", "?") for t in tools]
+                print(f"✅ MCP initialized: {len(tools)} meta tools")
+                for name in tool_names:
+                    print(f"   - {name}")
+            except Exception as exc:
+                print(f"⚠️  MCP initialize failed: {exc}")
+
+        if print_steps or not os.getenv(key_env):
+            print("\nNext steps:")
+            print(f"  1. Set {key_env} in .env (from https://connect.composio.dev)")
+            print("  2. Set integrations.workspace.user_id in company.yaml")
+            print("  3. python connect_workspace.py --provider composio --connect gmail")
+            print("  4. python connect_workspace.py --provider composio --connect googlecalendar")
+            print("  5. python connect_workspace.py --provider composio --connect googledrive")
+            print("  6. python connect_workspace.py --status")
+
+        return 0 if os.getenv(key_env) else 1
+
     else:
-        print("❌ COMPOSIO_API_KEY not set")
+        # SDK mode
+        api_key = os.getenv("COMPOSIO_API_KEY")
+        if api_key:
+            print("✅ COMPOSIO_API_KEY is set")
+        else:
+            print("❌ COMPOSIO_API_KEY not set")
 
-    user_id = config.get("integrations", {}).get("workspace", {}).get("user_id", "")
-    if user_id:
-        print(f"✅ user_id: {user_id}")
-    else:
-        print("⚠️  user_id not set in config")
+        user_id = workspace.get("user_id", "")
+        if user_id:
+            print(f"✅ user_id: {user_id}")
 
-    try:
-        from composio import Composio  # noqa
-        print("✅ composio SDK installed")
-    except ImportError:
-        print("❌ composio SDK not installed — run: pip install composio-core")
-
-    if print_steps or not api_key:
-        print("\nNext steps:")
-        print("  1. pip install composio-core")
-        print("  2. Set COMPOSIO_API_KEY in .env (https://dashboard.composio.dev/settings)")
-        print("  3. Set integrations.workspace.user_id in company.yaml")
-        print("  4. python connect_workspace.py --provider composio --connect gmail")
-        print("  5. python connect_workspace.py --provider composio --connect googlecalendar")
-        print("  6. python connect_workspace.py --status")
-
-    if api_key and user_id:
         try:
-            from providers.composio_workspace import load_session_meta
-            meta = load_session_meta(config)
-            if meta:
-                print(f"\nSession: {meta.get('session_id', 'none')}")
-                for tk, info in meta.get("connections", {}).items():
-                    status = info.get("status", "unknown")
-                    icon = "✅" if status == "connected" else "⚠️"
-                    print(f"  {icon} {tk}: {status}")
-        except Exception:
-            pass
+            from composio import Composio  # noqa
+            print("✅ composio SDK installed")
+        except ImportError:
+            print("❌ composio SDK not installed — run: pip install composio-core")
 
-    return 0 if api_key else 1
+        if print_steps or not api_key:
+            print("\nNext steps:")
+            print("  1. pip install composio-core")
+            print("  2. Set COMPOSIO_API_KEY in .env")
+            print("  3. Set integrations.workspace.user_id in company.yaml")
+            print("  4. python connect_workspace.py --provider composio --connect gmail")
+
+        return 0 if api_key else 1
 
 
 def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, tools_only: bool = False) -> int:
-    """Print MCP endpoint info with enabled tools."""
+    """Print MCP endpoint info — works for MCP mode without SDK session_id."""
+    integrations = config.get("integrations", {})
+    workspace = integrations.get("workspace", {})
+    mode = workspace.get("mode", "mcp")
+    mcp_cfg = workspace.get("mcp", {})
+    endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
+    key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
+
+    # Get enabled tools from config
     try:
-        from providers.composio_workspace import ComposioWorkspaceClient, load_session_meta, get_enabled_tools
+        from providers.composio_mcp_workspace import get_enabled_tools
     except ImportError as exc:
         print(f"❌ {exc}")
         return 1
 
-    meta = load_session_meta(config)
-    if not meta or not meta.get("session_id"):
-        print("❌ No Composio session found. Run --connect gmail first.")
-        return 1
-
-    # Get enabled tools from config
     read_tools = get_enabled_tools(config, "read")
     write_tools = get_enabled_tools(config, "write_safe")
     all_tools: dict[str, list[str]] = {}
     for tk in set(list(read_tools.keys()) + list(write_tools.keys())):
         all_tools[tk] = read_tools.get(tk, []) + write_tools.get(tk, [])
 
-    mcp = meta.get("mcp", {})
-    mcp_url = mcp.get("url")
-
-    # Try to get URL from session if not stored
-    if not mcp_url:
+    # Try to get MCP meta tools and initialization status
+    mcp_initialized = False
+    available_meta_tools: list[str] = []
+    if os.getenv(key_env):
         try:
-            client = ComposioWorkspaceClient(config)
-            session = client._get_or_create_session()
-            if hasattr(session, "mcp_url"):
-                mcp_url = session.mcp_url
+            sys.path.insert(0, str(_SCRIPT_DIR))
+            from mcp_client import MCPClient
+            client = MCPClient(endpoint=endpoint, key_env=key_env)
+            client.initialize()
+            mcp_initialized = True
+            tools = client.list_tools()
+            available_meta_tools = [t.get("name", "?") for t in tools]
         except Exception:
             pass
 
+    # Load session metadata for connections
+    try:
+        from providers.composio_mcp_workspace import load_session_meta
+        meta = load_session_meta(config) or {}
+    except Exception:
+        meta = {}
+
     result = {
         "provider": "composio",
-        "mode": meta.get("mode", "sdk"),
-        "session_id": meta.get("session_id", ""),
-        "mcp_url": mcp_url,
-        "headers_stored": mcp.get("headers_stored", False),
+        "mode": mode,
+        "endpoint": endpoint,
+        "key_env": key_env,
+        "mcp_initialized": mcp_initialized,
+        "available_meta_tools": available_meta_tools,
         "enabled_tools": all_tools,
+        "headers_stored": meta.get("mcp", {}).get("headers_stored", False),
+        "connections": meta.get("connections", {}),
     }
 
     if tools_only:
@@ -468,14 +515,91 @@ def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, too
         print(json.dumps(result, indent=2))
     else:
         print(f"Provider: {result['provider']}")
-        print(f"Session:  {result['session_id']}")
-        print(f"MCP URL:  {result['mcp_url'] or '(not available)'}")
-        print(f"Headers:  {'stored' if result['headers_stored'] else 'not stored'}")
+        print(f"Mode:     {result['mode']}")
+        print(f"Endpoint: {result['endpoint']}")
+        print(f"Key env:  {result['key_env']}")
+        print(f"MCP init: {'✅' if result['mcp_initialized'] else '❌'}")
+        if available_meta_tools:
+            print(f"Meta tools: {', '.join(available_meta_tools)}")
         print(f"\nEnabled tools:")
         for tk, tools in all_tools.items():
             print(f"  {tk}: {', '.join(tools) if tools else '(none)'}")
+        connections = result.get("connections", {})
+        if connections:
+            print(f"\nConnections:")
+            for tk, info in connections.items():
+                status = info.get("status", "unknown")
+                icon = "✅" if status == "connected" else "⚠️"
+                print(f"  {icon} {tk}: {status}")
 
-    return 0 if mcp_url else 1
+    return 0 if mcp_initialized else 1
+
+
+def cmd_composio_debug_tool(config: dict[str, Any], toolkit: str) -> int:
+    """Debug: test MCP meta-tools with full raw output."""
+    print(f"=== Composio Debug: {toolkit} ===\n")
+    import json as _json
+
+    tool_map = {
+        "gmail": [("GMAIL_FETCH_EMAILS", {"max_results": 2})],
+        "googlecalendar": [("GOOGLECALENDAR_FIND_EVENT", {
+            "time_min": "2026-01-01T00:00:00Z",
+            "time_max": "2026-12-31T23:59:59Z",
+            "max_results": 2,
+        })],
+        "googledrive": [("GOOGLEDRIVE_FIND_FILE", {"query": "", "max_results": 3})],
+    }
+
+    if toolkit not in tool_map:
+        print(f"❌ Unknown toolkit: {toolkit}. Use: gmail, googlecalendar, googledrive")
+        return 1
+
+    try:
+        from workspace_client import get_workspace_client
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = get_workspace_client(config)
+        if not isinstance(client, ComposioMCPWorkspaceClient):
+            print("❌ Debug tool only works in MCP mode")
+            return 1
+
+        mcp = client._get_mcp()
+        mcp.initialize()
+        print(f"✅ MCP session: {mcp.session_id}\n")
+
+        # List meta tools
+        tools = mcp.list_tools()
+        print(f"Meta tools ({len(tools)}):")
+        for t in tools:
+            print(f"  {t.get('name', '?')}")
+        print()
+
+        # Test each tool slug
+        for tool_slug, input_data in tool_map[toolkit]:
+            print(f"--- {tool_slug} ---")
+            print(f"Payload: {_json.dumps({'tools': [{'tool_slug': tool_slug, 'input': input_data}]}, indent=2)}")
+            try:
+                result = client._execute_composio_tool(tool_slug, input_data)
+                # Show keys and summary
+                if isinstance(result, dict):
+                    print(f"Response keys: {list(result.keys())[:10]}")
+                    # Show normalized result
+                    normalized = client._normalize_tool_result(tool_slug, result)
+                    if isinstance(normalized, list):
+                        print(f"Normalized: {len(normalized)} items")
+                        if normalized:
+                            print(f"First item keys: {list(normalized[0].keys())[:8]}")
+                    else:
+                        print(f"Normalized: {type(normalized).__name__}")
+                else:
+                    print(f"Response type: {type(result)}")
+            except Exception as exc:
+                print(f"Error: {exc}")
+            print()
+
+        return 0
+    except Exception as exc:
+        print(f"❌ Debug failed: {exc}")
+        return 1
 
 
 def _main() -> int:
@@ -502,6 +626,8 @@ def _main() -> int:
                         help="List available MCP tools")
     parser.add_argument("--test", metavar="TOOLKIT",
                         help="Run a live test against a toolkit (gmail, googlecalendar, googledrive)")
+    parser.add_argument("--debug-tool", metavar="TOOLKIT",
+                        help="Debug: test all MCP meta-tools for a toolkit with full output")
     args = parser.parse_args()
 
     config = _load_config(args.config)
@@ -534,6 +660,8 @@ def _main() -> int:
             return 1
     elif args.provider == "composio" and args.test:
         return cmd_composio_test(config, args.test)
+    elif args.provider == "composio" and args.debug_tool:
+        return cmd_composio_debug_tool(config, args.debug_tool)
     elif args.provider == "composio":
         return cmd_provider_composio(config, args.print_next_steps)
     else:
