@@ -25,7 +25,17 @@ def print_json(result: Any) -> None:
 def summarize_result(result: dict[str, Any], label: str | None = None) -> str:
     """Return a human-readable summary string for an ActionResult or workflow dict."""
     lines: list[str] = []
-    success = result.get("success", False)
+    success = result.get("success")
+    # For pending actions that don't have 'success', derive from state
+    state = result.get("state", "")
+    if success is None:
+        if state in ("approved", "executed"):
+            success = True
+        elif state == "requested":
+            success = True  # prepare succeeded — action is pending, not failed
+        elif state == "cancelled":
+            success = False
+    success = bool(success) if success is not None else False
     provider = result.get("provider", "?")
     audited = "yes" if result.get("audited") else "no"
     target = result.get("target", "")

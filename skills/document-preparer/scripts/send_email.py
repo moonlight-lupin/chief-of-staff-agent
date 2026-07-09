@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Gated Gmail send — prepare, preview, approve, execute.
+
+No user-facing workflow should call gmail_send() directly.
+Everything goes through: prepare → preview → pending action → explicit confirm → send.
+
+Commands:
+    send_email.py prepare --to client@x.com --subject "NDA" --body "Please sign..."
+    send_email.py list [--state requested|approved|executed|cancelled]
+    send_email.py preview --action-id <id>
+    send_email.py approve --action-id <id>
+    send_email.py cancel --action-id <id>
+    send_email.py execute --action-id <id>
+
+Core rule: execute requires an approved action ID. No direct send.
+Provider: google_api only (Composio MCP does not support gmail.send).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
+if str(SHARED_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SHARED_SCRIPTS))
+
+from action_result_cli import print_result, print_json
+
+try:
+    from config_loader import load_config  # type: ignore
+except Exception as exc:  # pragma: no cover
+    print(f"Chief-of-Staff bootstrap incomplete: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def get_client(config: Any):
+    from workspace_client import get_workspace_client
+    return get_workspace_client(config)
+
+
+def cmd_prepare(args: argparse.Namespace) -> int:
+    """Prepare a Gmail send action — creates pending action in 'requested' state."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        print("Could not load config", file=sys.stderr)
+        return 1
+    client = get_client(cfg)
+
+    # Check capability — gmail.send is google_api only
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, "gmail.send", target=args.to)
+    if unsupported:
+        print_result(unsupported, args.summary, "Gmail send")
+        return 1
+
+    from pending_actions import create_pending_action
+    action = create_pending_action(
+        config=cfg,
+        action_type="gmail.send",
+        provider=client.provider_name,
+        target=args.to,
+        payload={
+            "to": args.to,
+            "subject": args.subject,
+            "body": args.body,
+            "cc": args.cc or "",
+        },
+        summary=f"Send email to {args.to}: {args.subject}",
+    )
+    print_result(action, args.summary, "Gmail send prepared")
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List pending actions, optionally filtered by state."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import list_pending_actions
+    actions = list_pending_actions(cfg, state=args.state)
+    if args.summary:
+        if not actions:
+            print("No pending actions" + (f" with state={args.state}" if args.state else ""))
+        else:
+            for a in actions:
+                icon = {"requested": "📨", "approved": "✅", "executed": "📤", "cancelled": "❌"}.get(a["state"], "?")
+                print(f"{icon} {a['id']}  {a['type']}  → {a['target']}  [{a['state']}]")
+                print(f"   {a.get('summary', '')}")
+    else:
+        print_json(actions)
+    return 0
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    """Preview a pending action without executing."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import preview_pending_action
+    preview = preview_pending_action(cfg, args.action_id)
+    if not preview:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+    print_json(preview)
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Approve a pending action (requested → approved)."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import approve_pending_action
+    action = approve_pending_action(cfg, args.action_id)
+    if not action:
+        print(f"Action not found or not in 'requested' state: {args.action_id}", file=sys.stderr)
+        return 1
+    print_result(action, args.summary, "Gmail send approved")
+    return 0
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    """Cancel a pending action."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import cancel_pending_action
+    action = cancel_pending_action(cfg, args.action_id)
+    if not action:
+        print(f"Action not found or already terminal: {args.action_id}", file=sys.stderr)
+        return 1
+    print_result(action, args.summary, "Gmail send cancelled")
+    return 0
+
+
+def cmd_execute(args: argparse.Namespace) -> int:
+    """Execute an approved Gmail send — requires approved action ID.
+
+    The explicit approval via 'send_email.py approve --action-id <id>' IS the
+    confirmation. We set CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1 for this call
+    because the user has already consciously approved the send.
+    """
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+
+    from pending_actions import get_pending_action, mark_executed
+    action = get_pending_action(cfg, args.action_id)
+    if not action:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+    if action["state"] != "approved":
+        print(f"Action {args.action_id} is not approved (state={action['state']}). "
+              f"Run: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
+        return 1
+
+    client = get_client(cfg)
+    payload = action["payload"]
+
+    # The approval queue IS the confirmation — set destructive flag for this call
+    os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
+
+    # Execute the send
+    result = client.gmail_send(
+        to=payload["to"],
+        subject=payload["subject"],
+        body=payload["body"],
+    )
+
+    # Mark as executed with result
+    mark_executed(cfg, args.action_id, result)
+    print_result(result, args.summary, f"Gmail sent to {payload['to']}")
+    return 0 if result.get("success") else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Gated Gmail send — prepare, preview, approve, execute")
+    parser.add_argument("--config", help="Path to company.yaml")
+    parser.add_argument("--summary", action="store_true", help="Print human-readable summary")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    prepare = sub.add_parser("prepare", help="Prepare a Gmail send (creates pending action)")
+    prepare.add_argument("--to", required=True, help="Recipient email")
+    prepare.add_argument("--subject", required=True)
+    prepare.add_argument("--body", required=True)
+    prepare.add_argument("--cc")
+
+    list_cmd = sub.add_parser("list", help="List pending actions")
+    list_cmd.add_argument("--state", choices=["requested", "approved", "executed", "cancelled"])
+
+    preview = sub.add_parser("preview", help="Preview a pending action")
+    preview.add_argument("--action-id", required=True)
+
+    approve = sub.add_parser("approve", help="Approve a pending action")
+    approve.add_argument("--action-id", required=True)
+
+    cancel = sub.add_parser("cancel", help="Cancel a pending action")
+    cancel.add_argument("--action-id", required=True)
+
+    execute = sub.add_parser("execute", help="Execute an approved Gmail send")
+    execute.add_argument("--action-id", required=True)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "prepare":
+            return cmd_prepare(args)
+        elif args.command == "list":
+            return cmd_list(args)
+        elif args.command == "preview":
+            return cmd_preview(args)
+        elif args.command == "approve":
+            return cmd_approve(args)
+        elif args.command == "cancel":
+            return cmd_cancel(args)
+        elif args.command == "execute":
+            return cmd_execute(args)
+        else:
+            parser.error("unknown command")
+            return 2
+    except Exception as exc:
+        print(f"send_email.py error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
