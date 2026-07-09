@@ -2,7 +2,7 @@
 name: pipeline-manager
 description: "Use when managing the Chief-of-Staff CRM pipeline: add deals, move stages, list/show deal details, add notes, link documents, and detect stale opportunities from project YAML storage."
 version: 0.1.0
-author: Phronesis Applied
+author: Chief of Staff Project
 license: MIT
 metadata:
   hermes:

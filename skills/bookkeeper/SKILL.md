@@ -2,7 +2,7 @@
 name: bookkeeper
 description: "Use when tracking Chief-of-Staff invoices, expenses, AR/AP, overdue bills, and monthly P&L from invoices.yaml and expenses.yaml without becoming a full accounting system."
 version: 0.1.0
-author: Phronesis Applied
+author: Chief of Staff Project
 license: MIT
 metadata:
   hermes:

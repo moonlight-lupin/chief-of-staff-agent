@@ -61,7 +61,7 @@ def register(ctx):
     """Register skills based on the active profile + 7 quality hooks.
 
     Profiles are defined in plugin.yaml → skill_profiles.
-    Set CHIEF_OF_STAFF_SKILL_PROFILE=phronesis to use the Phronesis profile
+    Set CHIEF_OF_STAFF_SKILL_PROFILE=enterprise to use the enterprise profile
     (swaps self-sign for esign-connector).
     """
     skills = _get_registered_skills()

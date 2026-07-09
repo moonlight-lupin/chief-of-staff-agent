@@ -104,16 +104,23 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
     if not isinstance(queries, list):
         raise ValueError("queries.yaml 'queries' must be a list or mapping")
     script = google_api_script()
-    delegate = str(config.get("google", {}).get("delegate_email", ""))
+    google_cfg = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
+    delegate = str(google_cfg.get("delegate_email", ""))
+    account_alias = str(google_cfg.get("account_alias", ""))
+    import re as _re
     items: list[dict[str, Any]] = []
     for query in queries:
         if not isinstance(query, dict):
             continue
         q = str(query.get("query", ""))
-        if "{client_name}" in q:
-            # Template queries require a specific client context; skip in generic daily sweep.
+        # Replace known template variables
+        q = q.replace("{delegate_email}", delegate)
+        # Skip if any unresolved template variables remain
+        if _re.search(r'\{[a-z_]+\}', q):
             continue
         cmd = [sys.executable, str(script)]
+        if account_alias:
+            cmd.extend(["--account", account_alias])
         if delegate:
             cmd.extend(["--as", delegate])
         # google_api.py search takes the Gmail query as a positional argument and emits JSON.
@@ -132,10 +139,14 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
 def collect_calendar(config: Any, project_root: Path) -> list[dict[str, Any]]:
     ensure_google_config(config)
     script = google_api_script()
-    delegate = str(config.get("google", {}).get("delegate_email", ""))
+    google_cfg = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
+    delegate = str(google_cfg.get("delegate_email", ""))
+    account_alias = str(google_cfg.get("account_alias", ""))
     start = date.today().isoformat()
     end = (date.today() + timedelta(days=2)).isoformat()
     cmd = [sys.executable, str(script)]
+    if account_alias:
+        cmd.extend(["--account", account_alias])
     if delegate:
         cmd.extend(["--as", delegate])
     # google_api.py calendar list emits JSON by default in the bundled google-workspace skill.

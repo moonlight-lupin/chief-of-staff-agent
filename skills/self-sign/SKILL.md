@@ -2,7 +2,7 @@
 name: self-sign
 description: Detect signature blocks in PDF or DOCX documents, confirm the correct party blocks with the user, and place the user's prepared signature without external e-sign services.
 version: 0.1.0
-author: Phronesis Applied
+author: Chief of Staff Project
 license: MIT
 metadata:
   hermes:
@@ -38,7 +38,7 @@ Read `self_sign` and identity fields from `company.yaml`:
 
 ```yaml
 company:
-  name: "Phronesis Applied Pte Ltd"
+  name: "Your Company Pte Ltd"
   business_type: professional_services
 
 self_sign:
@@ -106,7 +106,7 @@ The detector returns a JSON list of `SignatureLocation` objects:
   "paragraph": null,
   "coordinates": [72.0, 620.0, 260.0, 638.0],
   "matched_text": "Signature: __________________",
-  "party_context": "For and on behalf of the Service Provider: Phronesis Applied Pte Ltd",
+  "party_context": "For and on behalf of the Service Provider: Your Company Pte Ltd",
   "confidence": 0.91,
   "location_type": "signature",
   "matched_party": "self"
@@ -166,7 +166,7 @@ User confirmation prompt shape:
    Sign here? (yes/no)
 
 2. Page 4 — "For and on behalf of the Service Provider:"
-   Party context: Phronesis Applied Pte Ltd / Service Provider
+   Party context: Your Company Pte Ltd / Service Provider
    Recommendation: likely YOU.
    Sign here? (yes/no)
 

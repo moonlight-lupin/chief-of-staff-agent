@@ -223,10 +223,13 @@ def _check_google_auth(fix: bool, data: dict[str, Any] | None, config_path: Path
     if not api.exists():
         return CheckResult("google_auth", "warn", "skipped: google_api.py not found")
     account = google.get("service_account_path", "")
+    account_alias = google.get("account_alias", "")
     is_service_account = bool(account and Path(str(account)).expanduser().exists())
     cmd = [sys.executable, str(api)]
-    if is_service_account:
-        cmd += ["--account", "phronesis", "--as", google.get("delegate_email", "")]
+    if is_service_account and account_alias:
+        cmd += ["--account", account_alias, "--as", google.get("delegate_email", "")]
+    elif is_service_account:
+        cmd += ["--as", google.get("delegate_email", "")]
     cmd += ["calendar", "list"]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)

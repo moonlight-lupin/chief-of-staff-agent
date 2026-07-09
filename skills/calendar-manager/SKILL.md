@@ -2,7 +2,7 @@
 name: calendar-manager
 description: Calendar visibility and safe Google Calendar operations for the Chief of Staff plugin, including proactive pre-meeting prep reminders via one-shot Hermes cron jobs.
 version: 0.1.0
-author: Phronesis Applied
+author: Chief of Staff Project
 license: MIT
 metadata:
   hermes:

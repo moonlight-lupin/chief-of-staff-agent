@@ -154,3 +154,33 @@ backup:
     - "state.db"
     - "sessions/"
     - "logs/"
+
+integrations:
+  workspace:
+    provider: google_api        # google_api | composio
+    mode: direct                # direct | sdk | mcp
+    user_id: null
+    account_aliases:
+      gmail: null
+      googlecalendar: null
+      googledrive: null
+    toolkits:
+      - gmail
+      - googlecalendar
+      - googledrive
+    tools_allowlist:
+      gmail:
+        read:
+          - GMAIL_FETCH_EMAILS
+        write_safe:
+          - GMAIL_CREATE_EMAIL_DRAFT
+      googlecalendar:
+        read:
+          - GOOGLECALENDAR_FIND_EVENT
+        write_safe:
+          - GOOGLECALENDAR_CREATE_EVENT
+      googledrive:
+        read:
+          - GOOGLEDRIVE_FIND_FILE
+        write_safe:
+          - GOOGLEDRIVE_UPLOAD_FILE

@@ -2,7 +2,7 @@
 name: note-taker
 description: Maintain a Chief of Staff second-brain wiki for business and personal knowledge using a three-layer markdown architecture with OKF v0.1 frontmatter.
 version: 0.1.0
-author: Phronesis Applied
+author: Chief of Staff Project
 license: MIT
 metadata:
   hermes:
