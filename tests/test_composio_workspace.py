@@ -72,9 +72,9 @@ def tmp_project_dir():
 class TestComposioFactory:
     def test_factory_returns_composio_client(self, composio_config):
         from workspace_client import get_workspace_client
-        from providers.composio_workspace import ComposioWorkspaceClient
+        from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
         client = get_workspace_client(composio_config)
-        assert isinstance(client, ComposioWorkspaceClient)
+        assert isinstance(client, ComposioSDKWorkspaceClient)
 
     def test_factory_raises_for_missing_user_id(self, composio_config_no_user_id):
         from workspace_client import get_workspace_client

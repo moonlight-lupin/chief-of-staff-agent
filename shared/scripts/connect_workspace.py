@@ -148,58 +148,70 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
 
 
 def cmd_composio_connect(config: dict[str, Any], toolkit: str) -> int:
-    """Connect a Composio toolkit via Connect Link."""
+    """Connect a Composio toolkit via MCP COMPOSIO_MANAGE_CONNECTIONS."""
     print(f"=== Composio Connect: {toolkit} ===\n")
 
-    if not os.getenv("COMPOSIO_API_KEY"):
-        print("❌ COMPOSIO_API_KEY not set")
-        print("   Get one at https://dashboard.composio.dev/settings")
+    integrations = config.get("integrations", {})
+    workspace = integrations.get("workspace", {})
+    mode = workspace.get("mode", "mcp")
+
+    if mode == "mcp":
+        return _cmd_composio_connect_mcp(config, toolkit)
+    else:
+        return _cmd_composio_connect_sdk(config, toolkit)
+
+
+def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
+    """Connect via MCP COMPOSIO_MANAGE_CONNECTIONS."""
+    mcp_cfg = config.get("integrations", {}).get("workspace", {}).get("mcp", {})
+    key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
+
+    if not os.getenv(key_env):
+        print(f"❌ {key_env} not set")
+        print(f"   Get a Composio MCP key and set it in your .env file")
         return 1
 
     try:
-        from providers.composio_workspace import (
-            ComposioWorkspaceClient, save_session_meta, load_session_meta
-        )
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient, save_session_meta, load_session_meta
     except ImportError as exc:
         print(f"❌ {exc}")
         return 1
 
     try:
-        client = ComposioWorkspaceClient(config)
-        session = client._get_or_create_session()
-        print(f"✅ Session: {getattr(session, 'session_id', 'unknown')}")
+        client = ComposioMCPWorkspaceClient(config)
+        result = client._manage_connections("connect", toolkit)
 
-        # Generate Connect Link
-        alias_map = config.get("integrations", {}).get("workspace", {}).get("account_aliases", {})
-        alias = alias_map.get(toolkit) if isinstance(alias_map, Mapping) else None
-
-        print(f"\nGenerating Connect Link for {toolkit}...")
-        conn_request = session.authorize(toolkit, alias=alias)
-
-        # Extract redirect URL
-        redirect_url = getattr(conn_request, "redirect_url", None)
-        if not redirect_url and isinstance(getattr(conn_request, "data", None), dict):
-            redirect_url = conn_request.data.get("redirect_url")
-        if not redirect_url and isinstance(conn_request, dict):
-            redirect_url = conn_request.get("redirect_url")
+        # Extract redirect URL and connection info
+        results = result.get("results", {})
+        tk_info = results.get(toolkit, {})
+        redirect_url = tk_info.get("redirect_url", "")
+        accounts = tk_info.get("accounts", [])
 
         if redirect_url:
             print(f"\n👉 Connect Link:")
             print(f"   {redirect_url}")
             print(f"\nOpen this URL in your browser to connect {toolkit}.")
-            print(f"After authorizing, run --status to verify the connection.")
         else:
-            print(f"\n⚠️  Could not extract redirect URL from response.")
-            print(f"    Response: {conn_request}")
+            print(f"\n⚠️  No redirect URL returned")
+
+        if accounts:
+            print(f"\nExisting accounts:")
+            for acc in accounts:
+                status = acc.get("status", "unknown")
+                icon = "✅" if status == "active" else "⏳"
+                print(f"  {icon} {acc.get('id', '?')} — {status}")
 
         # Update session metadata
-        meta = load_session_meta(config) or {}
-        if "connections" not in meta:
-            meta["connections"] = {}
-        meta["connections"][toolkit] = {
-            "status": "pending",
-            "alias": alias,
+        meta = load_session_meta(config) or {
+            "provider": "composio",
+            "mode": "mcp",
+            "endpoint": client.endpoint,
+            "key_env": key_env,
+            "mcp_initialized": True,
+            "available_meta_tools": ["COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_MULTI_EXECUTE_TOOL"],
+            "connections": {},
         }
+        meta["connections"][toolkit] = {"status": "pending"}
         save_session_meta(config, meta)
 
         return 0
@@ -209,6 +221,103 @@ def cmd_composio_connect(config: dict[str, Any], toolkit: str) -> int:
         return 1
     except Exception as exc:
         print(f"❌ Connection failed: {exc}")
+        return 1
+
+
+def _cmd_composio_connect_sdk(config: dict[str, Any], toolkit: str) -> int:
+    """Connect via SDK session.authorize (legacy)."""
+    if not os.getenv("COMPOSIO_API_KEY"):
+        print("❌ COMPOSIO_API_KEY not set")
+        return 1
+
+    try:
+        from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
+        from providers.composio_mcp_workspace import save_session_meta, load_session_meta
+    except ImportError as exc:
+        print(f"❌ {exc}")
+        return 1
+
+    try:
+        client = ComposioSDKWorkspaceClient(config)
+        session = client._get_or_create_session()
+        print(f"✅ Session: {getattr(session, 'session_id', 'unknown')}")
+        conn_request = session.authorize(toolkit)
+        redirect_url = getattr(conn_request, "redirect_url", None)
+        if not redirect_url and isinstance(getattr(conn_request, "data", None), dict):
+            redirect_url = conn_request.data.get("redirect_url")
+        if not redirect_url and isinstance(conn_request, dict):
+            redirect_url = conn_request.get("redirect_url")
+        if redirect_url:
+            print(f"\n👉 Connect Link:\n   {redirect_url}")
+        meta = load_session_meta(config) or {}
+        if "connections" not in meta:
+            meta["connections"] = {}
+        meta["connections"][toolkit] = {"status": "pending"}
+        save_session_meta(config, meta)
+        return 0
+    except Exception as exc:
+        print(f"❌ {exc}")
+        return 1
+
+
+def cmd_composio_connections(config: dict[str, Any]) -> int:
+    """Show connection status for all toolkits."""
+    mode = config.get("integrations", {}).get("workspace", {}).get("mode", "mcp")
+    print("=== Composio Connections ===\n")
+
+    try:
+        if mode == "mcp":
+            from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+            client = ComposioMCPWorkspaceClient(config)
+            statuses = client.refresh_connection_statuses()
+        else:
+            from providers.composio_sdk_workspace import ComposioSDKWorkspaceClient
+            client = ComposioSDKWorkspaceClient(config)
+            statuses = client.refresh_connection_statuses()
+
+        for tk, status in statuses.items():
+            icon = "✅" if status == "connected" else "⚠️"
+            print(f"  {icon} {tk}: {status}")
+        return 0
+    except Exception as exc:
+        print(f"❌ {exc}")
+        return 1
+
+
+def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
+    """Run a live test against a toolkit."""
+    print(f"=== Composio Test: {toolkit} ===\n")
+    mode = config.get("integrations", {}).get("workspace", {}).get("mode", "mcp")
+
+    try:
+        from workspace_client import get_workspace_client
+        client = get_workspace_client(config)
+
+        if toolkit == "gmail":
+            results = client.gmail_search("is:unread", max_results=3)
+            print(f"✅ Gmail: got {len(results)} unread emails")
+            for e in results[:3]:
+                subject = e.get("subject", e.get("Subject", "?"))[:60]
+                print(f"   {subject}")
+        elif toolkit in ("googlecalendar", "calendar"):
+            from datetime import date, timedelta
+            start = date.today().isoformat()
+            end = (date.today() + timedelta(days=7)).isoformat()
+            results = client.calendar_list(start, end)
+            print(f"✅ Calendar: got {len(results)} events in next 7 days")
+        elif toolkit in ("googledrive", "drive"):
+            results = client.drive_search("", max_results=5)
+            print(f"✅ Drive: got {len(results)} files")
+            for f in results[:5]:
+                name = f.get("name", "?")[:60]
+                print(f"   {name}")
+        else:
+            print(f"❌ Unknown toolkit: {toolkit}")
+            return 1
+
+        return 0
+    except Exception as exc:
+        print(f"❌ Test failed: {exc}")
         return 1
 
 
@@ -387,6 +496,12 @@ def _main() -> int:
                         help="Print detailed MCP endpoint info (URL, tools, status)")
     parser.add_argument("--mcp-tools", action="store_true",
                         help="Print enabled tools for MCP session")
+    parser.add_argument("--connections", action="store_true",
+                        help="Show Composio connection status for all toolkits")
+    parser.add_argument("--tools", action="store_true",
+                        help="List available MCP tools")
+    parser.add_argument("--test", metavar="TOOLKIT",
+                        help="Run a live test against a toolkit (gmail, googlecalendar, googledrive)")
     args = parser.parse_args()
 
     config = _load_config(args.config)
@@ -401,6 +516,24 @@ def _main() -> int:
         return cmd_composio_mcp_url(config)
     elif args.provider == "composio" and (args.mcp_info or args.mcp_tools):
         return cmd_composio_mcp_info(config, json_output=bool(args.mcp_info), tools_only=bool(args.mcp_tools))
+    elif args.provider == "composio" and args.connections:
+        return cmd_composio_connections(config)
+    elif args.provider == "composio" and args.tools:
+        # List MCP meta tools
+        try:
+            from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+            client = ComposioMCPWorkspaceClient(config)
+            mcp = client._get_mcp()
+            tools = mcp.list_tools()
+            print(f"MCP tools ({len(tools)}):")
+            for t in tools:
+                print(f"  {t.get('name', '?')}: {t.get('description', '')[:60]}")
+            return 0
+        except Exception as exc:
+            print(f"❌ {exc}")
+            return 1
+    elif args.provider == "composio" and args.test:
+        return cmd_composio_test(config, args.test)
     elif args.provider == "composio":
         return cmd_provider_composio(config, args.print_next_steps)
     else:

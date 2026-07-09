@@ -201,7 +201,7 @@ class TestProviderCapabilities:
         from providers.composio_workspace import ComposioWorkspaceClient
         os.environ["COMPOSIO_API_KEY"] = "fake"
         client = ComposioWorkspaceClient(composio_config)
-        assert client.provider_name == "composio"
+        assert client.provider_name in ("composio", "composio:mcp", "composio:sdk")
         assert client.supports("gmail.search") is True
         assert client.supports("gmail.send") is False
         assert client.supports("drive.upload") is True

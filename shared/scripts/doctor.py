@@ -368,7 +368,7 @@ def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_pat
 
 
 def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    """Check Composio configuration if provider is composio."""
+    """Check Composio configuration — mode-aware (mcp vs sdk)."""
     integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
     workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
     provider = workspace.get("provider", "google_api")
@@ -376,52 +376,93 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     if provider != "composio":
         return CheckResult("composio", "pass", "skipped: provider is not composio")
 
-    details: list[str] = []
+    mode = workspace.get("mode", "mcp")
+    details: list[str] = [f"mode: {mode}"]
     all_pass = True
 
-    # Check API key
-    if os.getenv("COMPOSIO_API_KEY"):
-        details.append("API key set")
-    else:
-        details.append("API key NOT set — get one at https://dashboard.composio.dev/settings")
-        all_pass = False
-
-    # Check user_id
-    user_id = workspace.get("user_id")
-    if user_id:
-        details.append(f"user_id: {user_id}")
-    else:
-        details.append("user_id NOT set in config")
-        all_pass = False
-
-    # Check session metadata and refresh connection statuses
-    try:
-        sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
-        from providers.composio_workspace import load_session_meta, ComposioWorkspaceClient
-        meta = load_session_meta(data or {})
-        if not meta or not meta.get("session_id"):
-            details.append("no session — run: connect_workspace.py --provider composio --connect gmail")
-            all_pass = False
+    if mode == "mcp":
+        # MCP mode: check COMPOSIO_MCP_KEY
+        mcp_cfg = workspace.get("mcp", {})
+        key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
+        if os.getenv(key_env):
+            details.append(f"{key_env}: set")
         else:
-            details.append(f"session: {meta['session_id']}")
-            # Refresh actual connection state from Composio
-            try:
-                client = ComposioWorkspaceClient(data or {})
-                refreshed = client.refresh_connection_statuses()
-                connections = refreshed
-            except Exception:
-                connections = {tk: meta.get("connections", {}).get(tk, {}).get("status", "unknown") for tk in ("gmail", "googlecalendar")}
+            details.append(f"{key_env}: NOT set")
+            all_pass = False
 
-            for tk in ("gmail", "googlecalendar", "googledrive"):
-                status = connections.get(tk, "unknown")
-                if status == "connected":
-                    details.append(f"{tk}: connected")
-                else:
-                    details.append(f"{tk}: not connected — run: connect_workspace.py --provider composio --connect {tk}")
-                    all_pass = False
-    except Exception as exc:
-        details.append(f"session check failed: {exc}")
-        all_pass = False
+        endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
+        details.append(f"endpoint: {endpoint}")
+
+        # Check MCP initialize
+        try:
+            sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+            from mcp_client import MCPClient
+            client = MCPClient(endpoint=endpoint, key_env=key_env)
+            client.initialize()
+            details.append("mcp_initialize: pass")
+            meta_tools = [t.get("name", "?") for t in client.list_tools()]
+            details.append(f"meta_tools: {', '.join(meta_tools)}")
+        except Exception as exc:
+            details.append(f"mcp_initialize: failed — {exc}")
+            all_pass = False
+
+        # Check connections via metadata
+        try:
+            from providers.composio_mcp_workspace import load_session_meta, ComposioMCPWorkspaceClient
+            meta = load_session_meta(data or {})
+            if meta and meta.get("connections"):
+                for tk in ("gmail", "googlecalendar", "googledrive"):
+                    status = meta.get("connections", {}).get(tk, {}).get("status", "unknown")
+                    if status == "connected":
+                        details.append(f"{tk}: connected")
+                    else:
+                        details.append(f"{tk}: {status}")
+            else:
+                details.append("no session metadata — run: connect_workspace.py --provider composio --connect gmail")
+        except Exception as exc:
+            details.append(f"connection check failed: {exc}")
+
+    else:
+        # SDK mode: check COMPOSIO_API_KEY
+        if os.getenv("COMPOSIO_API_KEY"):
+            details.append("COMPOSIO_API_KEY: set")
+        else:
+            details.append("COMPOSIO_API_KEY: NOT set")
+            all_pass = False
+
+        user_id = workspace.get("user_id")
+        if user_id:
+            details.append(f"user_id: {user_id}")
+        else:
+            details.append("user_id: NOT set")
+            all_pass = False
+
+        try:
+            sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+            from providers.composio_mcp_workspace import load_session_meta, ComposioMCPWorkspaceClient
+            meta = load_session_meta(data or {})
+            if not meta or not meta.get("session_id"):
+                details.append("no session — run: connect_workspace.py --provider composio --connect gmail")
+                all_pass = False
+            else:
+                details.append(f"session: {meta['session_id']}")
+                try:
+                    client = ComposioMCPWorkspaceClient(data or {})
+                    refreshed = client.refresh_connection_statuses()
+                    connections = refreshed
+                except Exception:
+                    connections = {tk: meta.get("connections", {}).get(tk, {}).get("status", "unknown") for tk in ("gmail", "googlecalendar", "googledrive")}
+
+                for tk in ("gmail", "googlecalendar", "googledrive"):
+                    status = connections.get(tk, "unknown")
+                    if status == "connected":
+                        details.append(f"{tk}: connected")
+                    else:
+                        details.append(f"{tk}: not connected — run: connect_workspace.py --provider composio --connect {tk}")
+                        all_pass = False
+        except Exception as exc:
+            details.append(f"session check failed: {exc}")
+            all_pass = False
 
     return CheckResult("composio", "pass" if all_pass else "warn", "; ".join(details))
 

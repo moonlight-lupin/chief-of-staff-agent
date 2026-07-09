@@ -92,7 +92,7 @@ class TestConnectWorkspaceComposio:
         assert "COMPOSIO" in out or "composio" in out.lower()
 
     def test_composio_connect_gmail_without_api_key(self, composio_config_file):
-        os.environ.pop("COMPOSIO_API_KEY", None)
+        os.environ.pop("COMPOSIO_MCP_KEY", None)
         rc, out, err = run_connect("--provider", "composio", "--connect", "gmail",
                                    config_path=composio_config_file)
         assert rc == 1
@@ -100,7 +100,7 @@ class TestConnectWorkspaceComposio:
 
     def test_composio_connect_gmail_with_mock(self, composio_config_file):
         """Test --connect gmail with mocked Composio SDK."""
-        os.environ["COMPOSIO_API_KEY"] = "fake-key"
+        os.environ["COMPOSIO_MCP_KEY"] = "fake-key"
 
         # We can't easily mock through subprocess, so test via direct import
         sys.path.insert(0, str(SHARED_SCRIPTS))
@@ -110,23 +110,23 @@ class TestConnectWorkspaceComposio:
 
         import yaml
         config = yaml.safe_load(composio_config_file.read_text())
+        config.setdefault("integrations", {}).setdefault("workspace", {}).setdefault("mcp", {})
+        config["integrations"]["workspace"]["mode"] = "mcp"
 
-        # Mock ComposioWorkspaceClient
+        # Mock ComposioMCPWorkspaceClient
         mock_client = MagicMock()
-        mock_session = MagicMock()
-        mock_session.session_id = "sess_mock_123"
-        mock_conn_request = MagicMock()
-        mock_conn_request.redirect_url = "https://composio.dev/connect/abc123"
-        mock_session.authorize.return_value = mock_conn_request
-        mock_client._get_or_create_session.return_value = mock_session
+        mock_client.endpoint = "https://connect.composio.dev/mcp"
+        mock_client._manage_connections.return_value = {
+            "results": {"gmail": {"redirect_url": "https://composio.dev/connect/abc123", "accounts": []}}
+        }
 
-        with patch("providers.composio_workspace.ComposioWorkspaceClient", return_value=mock_client):
+        with patch("providers.composio_mcp_workspace.ComposioMCPWorkspaceClient", return_value=mock_client):
             rc = cw.cmd_composio_connect(config, "gmail")
 
         assert rc == 0
-        mock_session.authorize.assert_called_once()
+        mock_client._manage_connections.assert_called_once()
 
-        os.environ.pop("COMPOSIO_API_KEY", None)
+        os.environ.pop("COMPOSIO_MCP_KEY", None)
 
     def test_mcp_url_without_session(self, composio_config_file):
         rc, out, err = run_connect("--provider", "composio", "--mcp-url",
