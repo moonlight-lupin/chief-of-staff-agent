@@ -6,3 +6,9 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+
+# Live config — contains real emails, Drive IDs, company details
+shared/config/company.yaml
+shared/config/drive-map.yaml
+shared/config/queries.yaml
+shared/templates/index.yaml

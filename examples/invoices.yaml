@@ -1,0 +1,61 @@
+invoices:
+  - id: INV-001
+    direction: sent
+    counterparty: Acme Corp
+    deal_id: deal-001
+    amount: 4500
+    currency: SGD
+    issue_date: "2026-06-25"
+    due_date: "2026-07-05"
+    status: sent
+    paid_date: null
+    document_path: 04_Finance/Invoices_Sent/INV-001.pdf
+    notes: "Proposal milestone invoice"
+  - id: INV-002
+    direction: sent
+    counterparty: Gamma Inc
+    deal_id: deal-003
+    amount: 9000
+    currency: SGD
+    issue_date: "2026-07-01"
+    due_date: "2026-07-15"
+    status: paid
+    paid_date: "2026-07-08"
+    document_path: 04_Finance/Invoices_Sent/INV-002.pdf
+    notes: "Paid by bank transfer"
+  - id: INV-003
+    direction: sent
+    counterparty: Beta Ltd
+    deal_id: deal-002
+    amount: 2000
+    currency: SGD
+    issue_date: "2026-07-08"
+    due_date: "2026-07-25"
+    status: sent
+    paid_date: null
+    document_path: 04_Finance/Invoices_Sent/INV-003.pdf
+    notes: "Discovery call package"
+  - id: BILL-001
+    direction: received
+    counterparty: Delta Hosting
+    deal_id: null
+    amount: 120
+    currency: SGD
+    issue_date: "2026-06-20"
+    due_date: "2026-07-03"
+    status: approved
+    paid_date: null
+    document_path: 04_Finance/Invoices_Received/BILL-001.pdf
+    notes: "Cloud hosting"
+  - id: BILL-002
+    direction: received
+    counterparty: Echo Software
+    deal_id: null
+    amount: 75
+    currency: USD
+    issue_date: "2026-07-05"
+    due_date: "2026-07-20"
+    status: received
+    paid_date: null
+    document_path: 04_Finance/Invoices_Received/BILL-002.pdf
+    notes: "Design tool subscription"

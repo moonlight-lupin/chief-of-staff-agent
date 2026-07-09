@@ -1,0 +1,60 @@
+deals:
+  - id: deal-001
+    client_name: Acme Corp
+    contact_name: John Tan
+    contact_email: john@acme.example
+    stage: Proposal Sent
+    status: active
+    value: 4500
+    currency: SGD
+    created: "2026-06-10"
+    last_activity: "2026-06-20"
+    stage_history:
+      - stage: Lead
+        at: "2026-06-10"
+      - stage: Proposal Sent
+        at: "2026-06-18"
+    documents:
+      - type: NDA
+        path: 02_Clients/Acme Corp/NDA/NDA_signed.pdf
+        status: signed
+    notes:
+      - at: "2026-06-20T09:00:00+00:00"
+        note: "Waiting for procurement response."
+  - id: deal-002
+    client_name: Beta Ltd
+    contact_name: Jane Lee
+    contact_email: jane@beta.example
+    stage: Lead
+    status: active
+    value: 2000
+    currency: SGD
+    created: "2026-07-06"
+    last_activity: "2026-07-08"
+    stage_history:
+      - stage: Lead
+        at: "2026-07-06"
+    documents: []
+    notes: []
+  - id: deal-003
+    client_name: Gamma Inc
+    contact_name: Alex Wong
+    contact_email: alex@gamma.example
+    stage: Contract Signed
+    status: won
+    value: 9000
+    currency: SGD
+    created: "2026-06-01"
+    last_activity: "2026-07-02"
+    stage_history:
+      - stage: Lead
+        at: "2026-06-01"
+      - stage: Proposal Sent
+        at: "2026-06-05"
+      - stage: Contract Signed
+        at: "2026-07-02"
+    documents:
+      - type: SOW
+        path: 02_Clients/Gamma Inc/Contracts_SOW/SOW_signed.pdf
+        status: signed
+    notes: []

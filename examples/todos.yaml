@@ -1,0 +1,51 @@
+todos:
+  - id: todo-001
+    title: Follow up with Acme Corp on proposal
+    priority: high
+    due: "2026-07-07"
+    status: open
+    tags: [sales, acme]
+    created: "2026-07-01"
+    completed: null
+    source_skill: pipeline-manager
+    source_ref: deal-001
+  - id: todo-002
+    title: Review Beta Ltd discovery notes
+    priority: medium
+    due: "2026-07-12"
+    status: open
+    tags: [sales, beta]
+    created: "2026-07-08"
+    completed: null
+    source_skill: meeting-prep
+    source_ref: beta-discovery
+  - id: todo-003
+    title: File paid Gamma Inc invoice
+    priority: low
+    due: "2026-07-10"
+    status: done
+    tags: [finance, gamma]
+    created: "2026-07-08"
+    completed: "2026-07-08"
+    source_skill: bookkeeper
+    source_ref: INV-002
+  - id: todo-004
+    title: Approve Delta Hosting bill
+    priority: high
+    due: "2026-07-09"
+    status: open
+    tags: [finance, vendor]
+    created: "2026-07-06"
+    completed: null
+    source_skill: bookkeeper
+    source_ref: BILL-001
+  - id: todo-005
+    title: Draft Gamma Inc onboarding checklist
+    priority: medium
+    due: "2026-07-18"
+    status: cancelled
+    tags: [operations, gamma]
+    created: "2026-07-03"
+    completed: null
+    source_skill: note-taker
+    source_ref: gamma-onboarding

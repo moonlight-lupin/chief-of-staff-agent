@@ -1,0 +1,46 @@
+company:
+  name: "Example Consulting Pte Ltd"
+  jurisdiction: SG
+  incorporation_date: "2025-01-15"
+  financial_year_end: "31 Dec"
+  currency: SGD
+  business_type: professional_services
+
+google:
+  service_account_path: "~/.hermes/example_service_account.json"
+  domain: "example.test"
+  delegate_email: "founder@example.test"
+
+paths:
+  project_root: "."
+  wiki_path: "./wiki"
+  templates: "./templates"
+
+delivery:
+  channel: telegram
+  briefing_time: "09:00"
+  weekly_review_day: friday
+  weekly_review_time: "16:00"
+  timezone: "Asia/Singapore"
+
+sales_stages: [Lead, Proposal Sent, NDA Signed, Contract Signed, Invoiced, Paid]
+stale_threshold_days: 14
+
+calendar:
+  reminder_minutes: 15
+  auto_prep_brief: true
+
+self_sign:
+  signature_image: "signature.png"
+  auto_date: true
+  output_format: pdf
+  party_aliases:
+    - "Service Provider"
+    - "Consultant"
+
+backup:
+  enabled: true
+  schedule: "0 3 * * 0"
+  retention_weekly: 4
+  retention_monthly: 12
+  drive_folder: "09_Backups/"

@@ -1,0 +1,40 @@
+drive_root_id: "example-root-folder-id"
+
+folders:
+  inbox: "example-inbox-folder-id"
+  clients: "example-clients-folder-id"
+  finance: "example-finance-folder-id"
+  secretarial: "example-secretarial-folder-id"
+  templates: "example-templates-folder-id"
+
+filing_rules:
+  - name: nda
+    pattern: ["NDA", "non-disclosure", "confidentiality"]
+    target: "02_Clients/{client}/NDA/"
+    fallback: "05_Templates/NDA/"
+  - name: proposal
+    pattern: ["proposal", "quote", "quotation"]
+    target: "02_Clients/{client}/Proposals/"
+  - name: sow
+    pattern: ["SOW", "statement of work", "service agreement", "contract"]
+    target: "02_Clients/{client}/Contracts_SOW/"
+  - name: invoice_sent
+    pattern: ["invoice"]
+    direction: sent
+    target: "04_Finance/Invoices_Sent/"
+  - name: invoice_received
+    pattern: ["invoice", "bill", "receipt"]
+    direction: received
+    target: "04_Finance/Invoices_Received/"
+  - name: secretarial
+    pattern: ["ACRA", "constitution", "resolution", "register", "secretarial"]
+    target: "01_Secretarial/"
+  - name: research
+    pattern: ["research", "dossier", "background check"]
+    target: "07_Research/"
+  - name: travel
+    pattern: ["itinerary", "travel", "flight", "hotel"]
+    target: "08_Travel/"
+  - name: default
+    pattern: ["default"]
+    target: "00_Inbox/"

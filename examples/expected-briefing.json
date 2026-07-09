@@ -1,0 +1,202 @@
+{
+  "date": "2026-07-09",
+  "sources": {
+    "gmail": {
+      "status": "failed",
+      "hash": "bf4fe3c996c9",
+      "items": [],
+      "error": "Google credentials not configured: /root/.hermes/example_service_account.json",
+      "no_material_change": false
+    },
+    "calendar": {
+      "status": "failed",
+      "hash": "bf4fe3c996c9",
+      "items": [],
+      "error": "Google credentials not configured: /root/.hermes/example_service_account.json",
+      "no_material_change": false
+    },
+    "deadlines": {
+      "status": "failed",
+      "hash": "d5efbc0212d5",
+      "items": [],
+      "error": "deadlines.py not found: /root/.hermes/plugins/chief-of-staff/skills/deadline-tracker/scripts/deadlines.py",
+      "no_material_change": false
+    },
+    "pipeline": {
+      "status": "ok",
+      "hash": "9baae0496e1a",
+      "items": [
+        {
+          "id": "deal-001",
+          "client_name": "Acme Corp",
+          "contact_name": "John Tan",
+          "contact_email": "john@acme.example",
+          "stage": "Proposal Sent",
+          "status": "active",
+          "value": 4500,
+          "currency": "SGD",
+          "created": "2026-06-10",
+          "last_activity": "2026-06-20",
+          "stage_history": [
+            {
+              "stage": "Lead",
+              "at": "2026-06-10"
+            },
+            {
+              "stage": "Proposal Sent",
+              "at": "2026-06-18"
+            }
+          ],
+          "documents": [
+            {
+              "type": "NDA",
+              "path": "02_Clients/Acme Corp/NDA/NDA_signed.pdf",
+              "status": "signed"
+            }
+          ],
+          "notes": [
+            {
+              "at": "2026-06-20T09:00:00+00:00",
+              "note": "Waiting for procurement response."
+            }
+          ],
+          "stale_days": 19
+        }
+      ],
+      "no_material_change": false
+    },
+    "todos": {
+      "status": "ok",
+      "hash": "277cac270bc8",
+      "items": [
+        {
+          "id": "todo-001",
+          "title": "Follow up with Acme Corp on proposal",
+          "priority": "high",
+          "due": "2026-07-07",
+          "status": "open",
+          "tags": [
+            "sales",
+            "acme"
+          ],
+          "created": "2026-07-01",
+          "completed": null,
+          "source_skill": "pipeline-manager",
+          "source_ref": "deal-001",
+          "overdue": true,
+          "days_until_due": -2
+        },
+        {
+          "id": "todo-004",
+          "title": "Approve Delta Hosting bill",
+          "priority": "high",
+          "due": "2026-07-09",
+          "status": "open",
+          "tags": [
+            "finance",
+            "vendor"
+          ],
+          "created": "2026-07-06",
+          "completed": null,
+          "source_skill": "bookkeeper",
+          "source_ref": "BILL-001",
+          "overdue": false,
+          "days_until_due": 0
+        },
+        {
+          "id": "todo-002",
+          "title": "Review Beta Ltd discovery notes",
+          "priority": "medium",
+          "due": "2026-07-12",
+          "status": "open",
+          "tags": [
+            "sales",
+            "beta"
+          ],
+          "created": "2026-07-08",
+          "completed": null,
+          "source_skill": "meeting-prep",
+          "source_ref": "beta-discovery",
+          "overdue": false,
+          "days_until_due": 3
+        }
+      ],
+      "no_material_change": false
+    },
+    "invoices": {
+      "status": "ok",
+      "hash": "188fc78a9079",
+      "items": [
+        {
+          "kind": "ar_total",
+          "currency": "SGD",
+          "amount": "6500.00"
+        },
+        {
+          "kind": "overdue",
+          "id": "BILL-001",
+          "direction": "received",
+          "counterparty": "Delta Hosting",
+          "deal_id": null,
+          "amount": 120,
+          "currency": "SGD",
+          "issue_date": "2026-06-20",
+          "due_date": "2026-07-03",
+          "status": "approved",
+          "paid_date": null,
+          "document_path": "04_Finance/Invoices_Received/BILL-001.pdf",
+          "notes": "Cloud hosting"
+        },
+        {
+          "kind": "overdue",
+          "id": "INV-001",
+          "direction": "sent",
+          "counterparty": "Acme Corp",
+          "deal_id": "deal-001",
+          "amount": 4500,
+          "currency": "SGD",
+          "issue_date": "2026-06-25",
+          "due_date": "2026-07-05",
+          "status": "sent",
+          "paid_date": null,
+          "document_path": "04_Finance/Invoices_Sent/INV-001.pdf",
+          "notes": "Proposal milestone invoice"
+        }
+      ],
+      "no_material_change": false
+    }
+  },
+  "urgent": [
+    {
+      "source": "pipeline",
+      "severity": "medium",
+      "message": "Stale deal: Acme Corp (19 days idle)",
+      "ref": "deal-001"
+    },
+    {
+      "source": "todos",
+      "severity": "high",
+      "message": "Todo: Follow up with Acme Corp on proposal",
+      "ref": "todo-001"
+    },
+    {
+      "source": "todos",
+      "severity": "medium",
+      "message": "Todo: Approve Delta Hosting bill",
+      "ref": "todo-004"
+    },
+    {
+      "source": "invoices",
+      "severity": "high",
+      "message": "Overdue invoice: BILL-001 Delta Hosting",
+      "ref": "BILL-001"
+    },
+    {
+      "source": "invoices",
+      "severity": "high",
+      "message": "Overdue invoice: INV-001 Acme Corp",
+      "ref": "INV-001"
+    }
+  ],
+  "no_change": false
+}

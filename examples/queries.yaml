@@ -1,0 +1,25 @@
+queries:
+  - name: unread_business
+    query: 'to:founder@example.test is:unread'
+    max: 15
+    purpose: "Emails to business address not yet read"
+  - name: recent_unread
+    query: 'is:unread newer_than:3d label:INBOX'
+    max: 20
+    purpose: "Catch-all for recent unread"
+  - name: engagement_threads
+    query: 'subject:(proposal OR NDA OR SOW OR invoice OR contract OR engagement OR "statement of work") newer_than:14d'
+    max: 15
+    purpose: "Track ongoing engagement threads"
+  - name: proposal_followup
+    query: '{client_name} newer_than:14d'
+    max: 5
+    purpose: "Template query for client-specific follow-up"
+
+triage_rules:
+  - signal: "From client + unread + > 2 days old"
+    action: "Flag as needs response"
+    icon: "🔴"
+  - signal: "Subject contains proposal/NDA/SOW/contract"
+    action: "Track in pipeline section"
+    icon: "📊"

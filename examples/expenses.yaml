@@ -1,0 +1,51 @@
+expenses:
+  - id: EXP-001
+    category: software
+    vendor: Echo Software
+    amount: 75
+    currency: USD
+    date: "2026-07-05"
+    status: paid
+    document_path: 04_Finance/Receipts/EXP-001.pdf
+    recurring: monthly
+    notes: "Design tool subscription"
+  - id: EXP-002
+    category: hosting
+    vendor: Delta Hosting
+    amount: 120
+    currency: SGD
+    date: "2026-07-03"
+    status: approved
+    document_path: 04_Finance/Receipts/EXP-002.pdf
+    recurring: monthly
+    notes: "Cloud hosting"
+  - id: EXP-003
+    category: meals
+    vendor: Sample Cafe
+    amount: 38
+    currency: SGD
+    date: "2026-07-07"
+    status: paid
+    document_path: 04_Finance/Receipts/EXP-003.pdf
+    recurring: null
+    notes: "Client meeting refreshments"
+  - id: EXP-004
+    category: travel
+    vendor: Example Rail
+    amount: 64
+    currency: SGD
+    date: "2026-07-08"
+    status: paid
+    document_path: 04_Finance/Receipts/EXP-004.pdf
+    recurring: null
+    notes: "Local travel"
+  - id: EXP-005
+    category: training
+    vendor: Gamma Academy
+    amount: 300
+    currency: SGD
+    date: "2026-07-12"
+    status: scheduled
+    document_path: 04_Finance/Receipts/EXP-005.pdf
+    recurring: null
+    notes: "Upcoming workshop"
