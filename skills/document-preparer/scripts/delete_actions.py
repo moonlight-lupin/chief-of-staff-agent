@@ -383,6 +383,20 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return 0 if result.get("success") else 1
 
 
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    """Clean up old executed/cancelled/expired actions."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import cleanup_old_actions
+    removed = cleanup_old_actions(cfg, days=args.days)
+    if args.summary:
+        print(f"Cleaned up {removed} old action(s) older than {args.days} days")
+    else:
+        print_json({"removed": removed, "days": args.days})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Gated soft-delete and archive actions — prepare, preview, approve, execute"
@@ -423,6 +437,9 @@ def build_parser() -> argparse.ArgumentParser:
     restore = sub.add_parser("restore", help="Restore a previously executed soft-delete action")
     restore.add_argument("--action-id", required=True)
 
+    cleanup = sub.add_parser("cleanup", help="Remove old executed/cancelled/expired actions")
+    cleanup.add_argument("--days", type=int, default=30, help="Remove actions older than N days")
+
     return parser
 
 
@@ -446,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_summary(args)
         elif args.command == "restore":
             return cmd_restore(args)
+        elif args.command == "cleanup":
+            return cmd_cleanup(args)
         else:
             parser.error("unknown command")
             return 2
