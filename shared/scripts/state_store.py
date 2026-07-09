@@ -183,7 +183,18 @@ def save_store_atomic(
         raise StateStoreError(f"Failed to save {store_name} store at {path}: {exc}") from exc
 
     if action:
-        append_audit(store_name, action=action, before=dict(before or {}), after=dict(after or plain_data), actor=actor, config=config)
+        try:
+            append_audit(store_name, action=action, before=dict(before or {}), after=dict(after or plain_data), actor=actor, config=config)
+        except Exception as audit_exc:
+            # Best-effort audit: mutation already succeeded on disk.
+            # Log warning to stderr but don't fail the operation.
+            # Strict mode can be enabled per-store via CHIEF_OF_STAFF_AUDIT_STRICT env var.
+            strict_stores = os.getenv("CHIEF_OF_STAFF_AUDIT_STRICT", "").split(",")
+            if store_name in strict_stores:
+                raise StateStoreError(
+                    f"Mutation succeeded but audit log failed (strict mode for {store_name}): {audit_exc}"
+                ) from audit_exc
+            print(f"Warning: audit log write failed for {store_name} (mutation succeeded): {audit_exc}", file=sys.stderr)
     return path
 
 

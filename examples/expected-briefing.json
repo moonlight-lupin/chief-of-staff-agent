@@ -16,10 +16,47 @@
       "no_material_change": false
     },
     "deadlines": {
-      "status": "failed",
-      "hash": "d5efbc0212d5",
-      "items": [],
-      "error": "deadlines.py not found: /root/.hermes/plugins/chief-of-staff/skills/deadline-tracker/scripts/deadlines.py",
+      "status": "ok",
+      "hash": "98ef458d6076",
+      "items": [
+        {
+          "name": "Annual General Meeting (AGM)",
+          "due_date": "2026-07-15",
+          "days_until": 6,
+          "category": "within_7",
+          "source": "statutory",
+          "id": "sg-agm",
+          "authority": "Companies Act / ACRA",
+          "frequency": "yearly",
+          "notes": "Private companies may dispense with AGMs if all members agree and financial statements are sent to members within the statutory period. Public companies generally have a different five-month timeline.",
+          "penalty": "Late holding or failure to hold AGM can lead to composition sums, summons, and fines for the company and officers."
+        },
+        {
+          "name": "GST return (F5/F8)",
+          "due_date": "2026-07-30",
+          "days_until": 21,
+          "category": "within_30",
+          "source": "statutory",
+          "id": "sg-gst-return",
+          "authority": "IRAS",
+          "frequency": "quarterly",
+          "notes": "File through myTax Portal for each prescribed accounting period. Businesses on monthly or non-standard GST periods should override this in company.yaml custom deadlines.",
+          "penalty": "Late filing/payment penalties and enforcement action may apply.",
+          "conditional": "GST-registered businesses only."
+        },
+        {
+          "name": "Annual Return filing",
+          "due_date": "2026-07-31",
+          "days_until": 22,
+          "category": "within_30",
+          "source": "statutory",
+          "id": "sg-annual-return",
+          "authority": "ACRA",
+          "frequency": "yearly",
+          "notes": "Filed via BizFile+. Solvent exempt private companies and private dormant relevant companies may have simplified filing obligations, but the annual return due date still needs monitoring.",
+          "penalty": "Late lodgement fees and enforcement action; directors may be fined up to SGD 5,000 for Companies Act breaches."
+        }
+      ],
       "no_material_change": false
     },
     "pipeline": {
@@ -196,6 +233,24 @@
       "severity": "high",
       "message": "Overdue invoice: INV-001 Acme Corp",
       "ref": "INV-001"
+    },
+    {
+      "source": "deadlines",
+      "severity": "high",
+      "message": "Annual General Meeting (AGM)",
+      "ref": "sg-agm"
+    },
+    {
+      "source": "deadlines",
+      "severity": "high",
+      "message": "GST return (F5/F8)",
+      "ref": "sg-gst-return"
+    },
+    {
+      "source": "deadlines",
+      "severity": "high",
+      "message": "Annual Return filing",
+      "ref": "sg-annual-return"
     }
   ],
   "no_change": false

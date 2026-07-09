@@ -93,8 +93,16 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
     queries_file = sibling_or_shared(config, "queries.yaml")
     queries_data = load_yaml(queries_file)
     queries = queries_data.get("queries", []) or []
+    # Accept both list format and mapping format for backward compatibility
+    if isinstance(queries, dict):
+        # Mapping format: {name: {query: ..., max_results: ..., ...}}
+        queries = [
+            {"name": k, "query": v.get("query", ""), "max": v.get("max_results", v.get("max", 10)),
+             "description": v.get("description", ""), "template": v.get("template", False)}
+            for k, v in queries.items()
+        ]
     if not isinstance(queries, list):
-        raise ValueError("queries.yaml queries must be a list")
+        raise ValueError("queries.yaml 'queries' must be a list or mapping")
     script = google_api_script()
     delegate = str(config.get("google", {}).get("delegate_email", ""))
     items: list[dict[str, Any]] = []

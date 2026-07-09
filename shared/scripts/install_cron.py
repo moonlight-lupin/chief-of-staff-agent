@@ -69,8 +69,9 @@ def build_jobs(config_path: str) -> list[dict[str, Any]]:
     delivery = cfg.get("delivery", {}) if isinstance(cfg.get("delivery"), Mapping) else {}
     backup = cfg.get("backup", {}) if isinstance(cfg.get("backup"), Mapping) else {}
     channel = str(delivery.get("channel") or "origin")
-    if channel == "telegram" and delivery.get("chat_id"):
-        deliver = f"telegram:{delivery['chat_id']}"
+    chat_id = delivery.get("chat_id") or delivery.get("home_chat_id")
+    if channel == "telegram" and chat_id:
+        deliver = f"telegram:{chat_id}"
     else:
         deliver = channel
     weekly_day = DAYS.get(str(delivery.get("weekly_review_day") or "friday").lower(), 5)

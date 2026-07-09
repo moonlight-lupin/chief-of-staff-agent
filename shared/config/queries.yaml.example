@@ -1,54 +1,69 @@
-# Chief of Staff — Gmail query templates
-# Copy to shared/config/queries.yaml and customize. Templates can use fields such
-# as {client_name}, {contact_email}, {domain}, {invoice_id}, and {days}.
+# Chief of Staff — Gmail Query Templates
+# Copy to shared/config/queries.yaml and customize.
+# Fields with {client_name}, {contact_email}, etc. are template variables
+# replaced at query time by the Daily Briefing skill.
 
 queries:
-  briefing_unread_priority:
-    description: Unread messages likely to need same-day attention.
+  - name: "unread_priority"
+    description: "Unread messages likely to need same-day attention"
     query: 'in:inbox is:unread newer_than:14d ("urgent" OR "approval" OR "please review" OR "action required" OR "deadline")'
-    max_results: 25
+    max: 25
 
-  briefing_unread_clients:
-    description: Recent unread client or prospect mail.
-    query: 'in:inbox is:unread newer_than:30d ({client_name} OR from:{contact_email})'
-    max_results: 20
+  - name: "unread_business"
+    description: "Unread emails to business address"
+    query: 'to:{delegate_email} is:unread'
+    max: 15
 
-  client_recent_threads:
-    description: Recent client context for Meeting Prep and Pipeline Manager.
-    query: 'newer_than:90d ({client_name} OR from:{contact_email} OR to:{contact_email})'
-    max_results: 50
+  - name: "recent_unread"
+    description: "Catch-all for recent unread, triage by sender"
+    query: 'is:unread newer_than:3d label:INBOX'
+    max: 20
 
-  client_attachments:
-    description: Client mail with attachments for Drive Filer suggestions.
-    query: 'newer_than:180d has:attachment ({client_name} OR from:{contact_email} OR to:{contact_email})'
-    max_results: 50
+  - name: "engagement_threads"
+    description: "Track ongoing engagement threads"
+    query: 'subject:(proposal OR NDA OR SOW OR invoice OR contract OR engagement OR "statement of work") newer_than:14d'
+    max: 15
 
-  documents_for_signature:
-    description: Documents that may need self-signing.
-    query: 'newer_than:60d has:attachment ("please sign" OR "for signature" OR "signature required" OR "sign and return")'
-    max_results: 25
+  - name: "client_documents"
+    description: "Documents from clients with attachments"
+    query: 'has:attachment newer_than:7d'
+    max: 10
 
-  invoices_received:
-    description: Supplier invoices and bills for Bookkeeper AP intake.
-    query: 'newer_than:90d has:attachment (invoice OR bill OR receipt OR statement) -from:me'
-    max_results: 50
+  - name: "sent_followup"
+    description: "Emails sent that may not have received a reply"
+    query: 'from:{delegate_email} newer_than:7d'
+    max: 10
 
-  invoices_sent_followup:
-    description: Sent invoices that may need AR follow-up.
-    query: 'in:sent newer_than:180d ({client_name} OR to:{contact_email}) (invoice OR "payment due" OR "tax invoice")'
-    max_results: 50
+  - name: "acra_iras"
+    description: "Government/regulatory correspondence"
+    query: 'from:(@acra.gov.sg OR @iras.gov.sg OR @bizfile.gov.sg) newer_than:30d'
+    max: 10
 
-  meeting_action_items:
-    description: Action items from recent meeting follow-ups.
-    query: 'newer_than:60d ({client_name} OR from:{contact_email} OR to:{contact_email}) ("action item" OR "next steps" OR "follow up" OR "to do")'
-    max_results: 30
+  - name: "proposal_followup"
+    description: "Check if client has responded to proposal (template query)"
+    query: '{client_name} newer_than:14d'
+    max: 5
+    template: true
 
-  compliance_notices:
-    description: Statutory notices from filing authorities.
-    query: 'newer_than:365d (from:acra.gov.sg OR from:iras.gov.sg OR from:ird.gov.hk OR from:companieshouse.gov.uk OR from:hmrc.gov.uk OR from:irs.gov)'
-    max_results: 50
+  - name: "invoice_payment"
+    description: "Track payment status (template query)"
+    query: 'subject:invoice {client_name} newer_than:30d'
+    max: 5
+    template: true
 
-  travel_confirmations:
-    description: Travel confirmations for itinerary building and expense capture.
-    query: 'newer_than:365d has:attachment (flight OR hotel OR itinerary OR booking OR "boarding pass" OR "e-ticket")'
-    max_results: 50
+triage_rules:
+  - signal: "From client + unread + > 2 days old"
+    action: "Flag as needs response"
+    icon: "red"
+  - signal: "Subject contains proposal/NDA/SOW/contract"
+    action: "Track in pipeline section"
+    icon: "chart"
+  - signal: "From government domain"
+    action: "Include in deadline section"
+    icon: "clock"
+  - signal: "Has attachment from client"
+    action: "Note in briefing, suggest filing"
+    icon: "paperclip"
+  - signal: "Sent email + no reply in 7 days"
+    action: "Flag as follow up needed"
+    icon: "repeat"

@@ -32,12 +32,52 @@ from state_store import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PLUGIN_ROOT / "shared" / "config"
-ALL_SKILLS = [
-    "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
-    "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
-    "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-    "entity-research", "travel-itinerary", "backup", "self-sign",
-]
+
+
+def _get_registered_skills() -> list[str]:
+    """Read registered skills from plugin.yaml based on active profile."""
+    import os as _os
+    plugin_yaml = PLUGIN_ROOT / "plugin.yaml"
+    if not plugin_yaml.exists():
+        return [
+            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
+            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
+            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
+            "entity-research", "travel-itinerary", "backup", "self-sign",
+        ]
+    try:
+        data = _load_yaml(plugin_yaml) or {}
+        # Determine profile: env var > plugin.yaml key > "default"
+        profile = _os.getenv("CHIEF_OF_STAFF_SKILL_PROFILE") or data.get("skill_profile") or "default"
+        profiles = data.get("skill_profiles", {})
+        profile_data = profiles.get(profile, {})
+        skills = profile_data.get("registered", [])
+        if skills:
+            return skills
+        # Fallback to default profile
+        default_data = profiles.get("default", {})
+        return default_data.get("registered", [
+            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
+            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
+            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
+            "entity-research", "travel-itinerary", "backup", "self-sign",
+        ])
+    except Exception:
+        return [
+            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
+            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
+            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
+            "entity-research", "travel-itinerary", "backup", "self-sign",
+        ]
+
+
+def get_all_skills():
+    """Get the list of skills to check (evaluated at call time, not import time)."""
+    return _get_registered_skills()
+
+
+# ALL_SKILLS is evaluated lazily — call get_all_skills() in the check function
+ALL_SKILLS = None  # Will be set on first check call
 REQUIRED_CONFIG_SECTIONS = ["company", "google", "paths", "delivery"]
 
 
@@ -108,8 +148,9 @@ def _check_plugin_root(fix: bool, data: dict[str, Any] | None, config_path: Path
 
 
 def _check_skills(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    missing = [s for s in ALL_SKILLS if not (PLUGIN_ROOT / "skills" / s / "SKILL.md").exists()]
-    return CheckResult("skills", "fail" if missing else "pass", f"missing: {missing}" if missing else "all 16 skills present")
+    skills = get_all_skills()
+    missing = [s for s in skills if not (PLUGIN_ROOT / "skills" / s / "SKILL.md").exists()]
+    return CheckResult("skills", "fail" if missing else "pass", f"missing: {missing}" if missing else f"all {len(skills)} skills present")
 
 
 def _check_company_yaml(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
