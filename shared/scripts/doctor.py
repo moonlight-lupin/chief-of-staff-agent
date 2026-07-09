@@ -345,12 +345,74 @@ def _check_audit_runs(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("audit_runs_dirs", "pass" if not missing else "warn", "present" if not missing else f"missing: {missing}", applied)
 
 
+def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check which workspace provider is configured."""
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = workspace.get("provider", "google_api")
+    mode = workspace.get("mode", "direct")
+    return CheckResult("workspace_provider", "pass", f"{provider} {mode}")
+
+
+def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check Composio configuration if provider is composio."""
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = workspace.get("provider", "google_api")
+
+    if provider != "composio":
+        return CheckResult("composio", "pass", "skipped: provider is not composio")
+
+    details: list[str] = []
+    all_pass = True
+
+    # Check API key
+    if os.getenv("COMPOSIO_API_KEY"):
+        details.append("API key set")
+    else:
+        details.append("API key NOT set — get one at https://dashboard.composio.dev/settings")
+        all_pass = False
+
+    # Check user_id
+    user_id = workspace.get("user_id")
+    if user_id:
+        details.append(f"user_id: {user_id}")
+    else:
+        details.append("user_id NOT set in config")
+        all_pass = False
+
+    # Check session metadata
+    try:
+        sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        from providers.composio_workspace import load_session_meta
+        meta = load_session_meta(data or {})
+        if meta and meta.get("session_id"):
+            details.append(f"session: {meta['session_id']}")
+            connections = meta.get("connections", {})
+            for tk in ("gmail", "googlecalendar"):
+                status = connections.get(tk, {}).get("status", "unknown")
+                if status == "connected":
+                    details.append(f"{tk}: connected")
+                else:
+                    details.append(f"{tk}: not connected — run: connect_workspace.py --provider composio --connect {tk}")
+                    all_pass = False
+        else:
+            details.append("no session — run: connect_workspace.py --provider composio --connect gmail")
+            all_pass = False
+    except Exception as exc:
+        details.append(f"session check failed: {exc}")
+        all_pass = False
+
+    return CheckResult("composio", "pass" if all_pass else "warn", "; ".join(details))
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,
     _check_jurisdiction_pack, _check_config_file("drive-map.yaml"), _check_config_file("queries.yaml"),
     _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_compile,
     _check_packages, _check_audit_runs,
+    _check_workspace_provider, _check_composio,
 ]
 
 

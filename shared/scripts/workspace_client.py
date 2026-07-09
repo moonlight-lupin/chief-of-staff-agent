@@ -68,10 +68,8 @@ def get_workspace_client(config: Any) -> WorkspaceClient:
         from providers.google_workspace import GoogleWorkspaceClient
         return GoogleWorkspaceClient(config)
     elif provider == "composio":
-        raise NotImplementedError(
-            "Composio backend not yet implemented. Use google_api for now. "
-            "Set integrations.workspace.provider: google_api in company.yaml."
-        )
+        from providers.composio_workspace import ComposioWorkspaceClient
+        return ComposioWorkspaceClient(config)
     else:
         raise ValueError(f"Unknown workspace provider: {provider}. Use 'google_api' or 'composio'.")
 

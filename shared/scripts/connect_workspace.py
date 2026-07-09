@@ -5,6 +5,9 @@ Usage:
     python connect_workspace.py --status
     python connect_workspace.py --provider google_api
     python connect_workspace.py --provider composio --print-next-steps
+    python connect_workspace.py --provider composio --connect gmail
+    python connect_workspace.py --provider composio --connect googlecalendar
+    python connect_workspace.py --provider composio --mcp-url
 """
 from __future__ import annotations
 
@@ -29,7 +32,6 @@ def _load_config(config_path: str | None) -> dict[str, Any]:
         except Exception as exc:
             print(f"Error loading config: {exc}", file=sys.stderr)
             return {}
-    # Try CHIEF_OF_STAFF_CONFIG env var
     env_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
     if env_path and Path(env_path).exists():
         try:
@@ -64,9 +66,28 @@ def cmd_status(config: dict[str, Any]) -> int:
             result["healthy"] = False
             result["error"] = str(exc)
     elif provider == "composio":
-        result["healthy"] = False
-        result["note"] = "Composio backend not yet implemented"
         result["api_key_set"] = bool(os.getenv("COMPOSIO_API_KEY"))
+        result["user_id"] = workspace.get("user_id", "")
+        # Check connections
+        try:
+            from providers.composio_workspace import load_session_meta, ComposioWorkspaceClient
+            meta = load_session_meta(config)
+            if meta:
+                result["session_id"] = meta.get("session_id", "")
+                result["connections"] = meta.get("connections", {})
+            else:
+                result["session_id"] = None
+                result["connections"] = {}
+            # Try health check
+            try:
+                client = ComposioWorkspaceClient(config)
+                result["healthy"] = client.health_check()
+            except Exception as exc:
+                result["healthy"] = False
+                result["error"] = str(exc)
+        except ImportError:
+            result["healthy"] = False
+            result["error"] = "composio package not installed"
     else:
         result["healthy"] = False
         result["error"] = f"Unknown provider: {provider}"
@@ -82,7 +103,6 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
 
     print("=== Google API Provider Setup ===\n")
 
-    # Check google_api.py
     try:
         from providers.google_workspace import _find_google_api_script
         script = _find_google_api_script()
@@ -93,29 +113,20 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
         print("  1. Install the google-workspace skill for Hermes")
         return 1
 
-    # Check service account
     if sa_path:
         sa = Path(str(sa_path)).expanduser()
         if sa.exists():
             print(f"✅ Service account found: {sa}")
         else:
             print(f"❌ Service account not found at: {sa}")
-            print("\nNext steps:")
-            print("  1. Create a service account in Google Cloud Console")
-            print("  2. Download the JSON key file")
-            print(f"  3. Place it at: {sa}")
             return 1
     else:
         print("⚠️  No service_account_path in config — using OAuth mode")
 
-    # Check delegate email
     delegate = google.get("delegate_email", "")
     if delegate:
         print(f"✅ Delegate email: {delegate}")
-    else:
-        print("⚠️  No delegate_email in config")
 
-    # Test auth
     try:
         from workspace_client import get_workspace_client
         client = get_workspace_client(config)
@@ -124,42 +135,174 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
             print("\n✅ Auth test passed — calendar list succeeded")
             return 0
         else:
-            print("\n❌ Auth test failed — calendar list returned error")
-            print("\nNext steps:")
-            print("  1. Verify service account has domain-wide delegation enabled")
-            print("  2. Verify scopes are authorized in Google Workspace Admin Console")
+            print("\n❌ Auth test failed")
             return 1
     except Exception as exc:
         print(f"\n❌ Auth test error: {exc}")
         return 1
 
 
+def cmd_composio_connect(config: dict[str, Any], toolkit: str) -> int:
+    """Connect a Composio toolkit via Connect Link."""
+    print(f"=== Composio Connect: {toolkit} ===\n")
+
+    if not os.getenv("COMPOSIO_API_KEY"):
+        print("❌ COMPOSIO_API_KEY not set")
+        print("   Get one at https://dashboard.composio.dev/settings")
+        return 1
+
+    try:
+        from providers.composio_workspace import (
+            ComposioWorkspaceClient, save_session_meta, load_session_meta
+        )
+    except ImportError as exc:
+        print(f"❌ {exc}")
+        return 1
+
+    try:
+        client = ComposioWorkspaceClient(config)
+        session = client._get_or_create_session()
+        print(f"✅ Session: {getattr(session, 'session_id', 'unknown')}")
+
+        # Generate Connect Link
+        alias_map = config.get("integrations", {}).get("workspace", {}).get("account_aliases", {})
+        alias = alias_map.get(toolkit) if isinstance(alias_map, Mapping) else None
+
+        print(f"\nGenerating Connect Link for {toolkit}...")
+        conn_request = session.authorize(toolkit, alias=alias)
+
+        # Extract redirect URL
+        redirect_url = getattr(conn_request, "redirect_url", None)
+        if not redirect_url and isinstance(getattr(conn_request, "data", None), dict):
+            redirect_url = conn_request.data.get("redirect_url")
+        if not redirect_url and isinstance(conn_request, dict):
+            redirect_url = conn_request.get("redirect_url")
+
+        if redirect_url:
+            print(f"\n👉 Connect Link:")
+            print(f"   {redirect_url}")
+            print(f"\nOpen this URL in your browser to connect {toolkit}.")
+            print(f"After authorizing, run --status to verify the connection.")
+        else:
+            print(f"\n⚠️  Could not extract redirect URL from response.")
+            print(f"    Response: {conn_request}")
+
+        # Update session metadata
+        meta = load_session_meta(config) or {}
+        if "connections" not in meta:
+            meta["connections"] = {}
+        meta["connections"][toolkit] = {
+            "status": "pending",
+            "alias": alias,
+        }
+        save_session_meta(config, meta)
+
+        return 0
+
+    except ValueError as exc:
+        print(f"❌ Config error: {exc}")
+        return 1
+    except Exception as exc:
+        print(f"❌ Connection failed: {exc}")
+        return 1
+
+
+def cmd_composio_mcp_url(config: dict[str, Any]) -> int:
+    """Print MCP endpoint URL for the current Composio session."""
+    print("=== Composio MCP Endpoint ===\n")
+
+    try:
+        from providers.composio_workspace import ComposioWorkspaceClient, load_session_meta
+    except ImportError as exc:
+        print(f"❌ {exc}")
+        return 1
+
+    meta = load_session_meta(config)
+    if not meta or not meta.get("session_id"):
+        print("❌ No Composio session found. Run --connect gmail first.")
+        return 1
+
+    # Check if MCP is configured in metadata
+    mcp = meta.get("mcp", {})
+    if mcp.get("url"):
+        print(f"MCP URL: {mcp['url']}")
+        return 0
+
+    # Try to get MCP URL from session
+    try:
+        client = ComposioWorkspaceClient(config)
+        session = client._get_or_create_session()
+
+        # Composio sessions may expose MCP endpoint info
+        mcp_url = None
+        if hasattr(session, "mcp_url"):
+            mcp_url = session.mcp_url
+        elif hasattr(session, "experimental"):
+            exp = session.experimental
+            if hasattr(exp, "mcp_url"):
+                mcp_url = exp.mcp_url
+
+        if mcp_url:
+            print(f"MCP URL: {mcp_url}")
+            # Save to metadata
+            meta["mcp"] = {"enabled": True, "url": mcp_url, "headers_stored": False}
+            from providers.composio_workspace import save_session_meta
+            save_session_meta(config, meta)
+            return 0
+        else:
+            print("⚠️  MCP endpoint not available for this session.")
+            print("    MCP mode will be fully supported in v0.1.6.")
+            return 1
+    except Exception as exc:
+        print(f"❌ Failed to get MCP URL: {exc}")
+        return 1
+
+
 def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
-    """Print Composio onboarding steps (stub)."""
+    """Print Composio onboarding info."""
     print("=== Composio Provider Setup ===\n")
-    print("⚠️  Composio backend coming in v0.1.5\n")
 
     api_key = os.getenv("COMPOSIO_API_KEY")
     if api_key:
-        print(f"✅ COMPOSIO_API_KEY is set")
+        print("✅ COMPOSIO_API_KEY is set")
     else:
         print("❌ COMPOSIO_API_KEY not set")
 
-    if print_steps or True:
-        print("\nNext steps to enable Composio:")
-        print("  1. Install Composio SDK: pip install composio-core")
-        print("  2. Set COMPOSIO_API_KEY in .env (get one at https://composio.dev)")
-        print("  3. Update company.yaml:")
-        print("     integrations:")
-        print("       workspace:")
-        print("         provider: composio")
-        print("         mode: sdk")
-        print("         user_id: \"your-user-id\"")
-        print("  4. Run: python connect_workspace.py --provider composio --connect")
-        print("  5. Authenticate Google account via Composio")
-        print("\nNote: The --connect flag will be implemented in v0.1.5")
+    user_id = config.get("integrations", {}).get("workspace", {}).get("user_id", "")
+    if user_id:
+        print(f"✅ user_id: {user_id}")
+    else:
+        print("⚠️  user_id not set in config")
 
-    return 0
+    try:
+        from composio import Composio  # noqa
+        print("✅ composio SDK installed")
+    except ImportError:
+        print("❌ composio SDK not installed — run: pip install composio-core")
+
+    if print_steps or not api_key:
+        print("\nNext steps:")
+        print("  1. pip install composio-core")
+        print("  2. Set COMPOSIO_API_KEY in .env (https://dashboard.composio.dev/settings)")
+        print("  3. Set integrations.workspace.user_id in company.yaml")
+        print("  4. python connect_workspace.py --provider composio --connect gmail")
+        print("  5. python connect_workspace.py --provider composio --connect googlecalendar")
+        print("  6. python connect_workspace.py --status")
+
+    if api_key and user_id:
+        try:
+            from providers.composio_workspace import load_session_meta
+            meta = load_session_meta(config)
+            if meta:
+                print(f"\nSession: {meta.get('session_id', 'none')}")
+                for tk, info in meta.get("connections", {}).items():
+                    status = info.get("status", "unknown")
+                    icon = "✅" if status == "connected" else "⚠️"
+                    print(f"  {icon} {tk}: {status}")
+        except Exception:
+            pass
+
+    return 0 if api_key else 1
 
 
 def _main() -> int:
@@ -172,6 +315,10 @@ def _main() -> int:
                         help="Verify or set up a specific provider")
     parser.add_argument("--print-next-steps", action="store_true",
                         help="Print next steps for the selected provider")
+    parser.add_argument("--connect", metavar="TOOLKIT",
+                        help="Connect a Composio toolkit (e.g. gmail, googlecalendar)")
+    parser.add_argument("--mcp-url", action="store_true",
+                        help="Print MCP endpoint URL for Composio session")
     args = parser.parse_args()
 
     config = _load_config(args.config)
@@ -180,6 +327,10 @@ def _main() -> int:
         return cmd_status(config)
     elif args.provider == "google_api":
         return cmd_provider_google_api(config)
+    elif args.provider == "composio" and args.connect:
+        return cmd_composio_connect(config, args.connect)
+    elif args.provider == "composio" and args.mcp_url:
+        return cmd_composio_mcp_url(config)
     elif args.provider == "composio":
         return cmd_provider_composio(config, args.print_next_steps)
     else:

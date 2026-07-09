@@ -71,10 +71,28 @@ class TestWorkspaceClientFactory:
         assert isinstance(client, GoogleWorkspaceClient)
         assert isinstance(client, WorkspaceClient)
 
-    def test_raises_for_composio(self, composio_config):
+    @pytest.fixture
+    def composio_config(self):
+        """Config with composio provider and user_id."""
+        return {
+            "integrations": {
+                "workspace": {
+                    "provider": "composio",
+                    "mode": "sdk",
+                    "user_id": "test-user-123",
+                    "toolkits": ["gmail", "googlecalendar", "googledrive"],
+                }
+            },
+            "paths": {
+                "project_root": "/tmp/test-composio",
+            },
+        }
+
+    def test_returns_composio_client(self, composio_config):
         from workspace_client import get_workspace_client
-        with pytest.raises(NotImplementedError, match="Composio"):
-            get_workspace_client(composio_config)
+        from providers.composio_workspace import ComposioWorkspaceClient
+        client = get_workspace_client(composio_config)
+        assert isinstance(client, ComposioWorkspaceClient)
 
     def test_defaults_to_google_when_no_integrations(self, no_integrations_config):
         from workspace_client import get_workspace_client
