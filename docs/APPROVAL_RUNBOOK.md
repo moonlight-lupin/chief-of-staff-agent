@@ -143,8 +143,17 @@ retry and mark the action as expired.
 ### Pending Action Maintenance
 
 Old executed/cancelled/expired actions accumulate in `.pending_actions.json`.
-To clean up:
 
+**CLI (recommended):**
+```bash
+# Remove actions older than 30 days
+python skills/document-preparer/scripts/delete_actions.py cleanup --days 30
+
+# Summary mode
+python skills/document-preparer/scripts/delete_actions.py --summary cleanup --days 30
+```
+
+**Python API (advanced):**
 ```python
 from pending_actions import cleanup_old_actions
 cleanup_old_actions(config, days=30)  # removes actions > 30 days old
