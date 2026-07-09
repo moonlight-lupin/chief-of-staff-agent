@@ -29,10 +29,29 @@ class WorkspaceClient(abc.ABC):
         """Search Gmail messages. Returns list of message dicts."""
         ...
 
+    def gmail_create_draft(self, to: str, subject: str, body: str,
+                           cc: str | None = None) -> dict[str, Any]:
+        """Create a Gmail draft. Returns draft metadata."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_create_draft")
+
+    def gmail_send(self, to: str, subject: str, body: str) -> dict[str, Any]:
+        """Send an email. Providers may raise NotImplementedError."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_send")
+
     @abc.abstractmethod
     def calendar_list(self, start: str, end: str) -> list[dict[str, Any]]:
         """List calendar events between start and end dates (ISO format)."""
         ...
+
+    def calendar_create(self, title: str, start: str, end: str,
+                        attendees: list[str] | None = None,
+                        description: str | None = None) -> dict[str, Any]:
+        """Create a calendar event. Returns event metadata."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support calendar_create")
+
+    def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
+        """Update a calendar event. Returns updated event metadata."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support calendar_update")
 
     @abc.abstractmethod
     def drive_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
@@ -44,14 +63,30 @@ class WorkspaceClient(abc.ABC):
         """Upload a file to Drive. Returns uploaded file metadata."""
         ...
 
-    def gmail_send(self, to: str, subject: str, body: str) -> dict[str, Any]:
-        """Send an email. Providers may raise NotImplementedError."""
-        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_send")
+    def drive_download(self, file_id: str, output_path: str) -> dict[str, Any]:
+        """Download a file from Drive. Returns download metadata."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support drive_download")
 
     @abc.abstractmethod
     def health_check(self) -> bool:
         """Return True if the provider is healthy and authenticated."""
         ...
+
+    # --- Capability reporting ---
+
+    @property
+    def provider_name(self) -> str:
+        """Return the provider identifier (e.g. 'google_api', 'composio')."""
+        return getattr(self, "_provider_name", "unknown")
+
+    def capabilities(self) -> dict[str, bool]:
+        """Return capability dict for this provider."""
+        from workspace_capabilities import get_capabilities
+        return get_capabilities(self.provider_name)
+
+    def supports(self, action: str) -> bool:
+        """Check if this provider supports a specific action."""
+        return self.capabilities().get(action, False)
 
 
 def get_workspace_client(config: Any) -> WorkspaceClient:

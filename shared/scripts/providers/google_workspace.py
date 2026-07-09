@@ -41,6 +41,7 @@ class GoogleWorkspaceClient(WorkspaceClient):
 
     def __init__(self, config: Any) -> None:
         self.config = config
+        self._provider_name = "google_api"
         google_cfg = config.get("google", {}) if isinstance(config, Mapping) else {}
         self.delegate_email = str(google_cfg.get("delegate_email", ""))
         self.account_alias = str(google_cfg.get("account_alias", ""))
@@ -119,6 +120,55 @@ class GoogleWorkspaceClient(WorkspaceClient):
         if rc != 0:
             return {"error": err.strip() or out.strip(), "success": False}
         return {"success": True, "output": out.strip()}
+
+    def gmail_create_draft(self, to: str, subject: str, body: str,
+                           cc: str | None = None) -> dict[str, Any]:
+        cmd = self._build_cmd("gmail", "draft", "--to", to, "--subject", subject, "--body", body)
+        if cc:
+            cmd.extend(["--cc", cc])
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            return {"error": err.strip() or out.strip(), "success": False}
+        try:
+            return json.loads(out) if out else {"success": True}
+        except json.JSONDecodeError:
+            return {"success": True, "raw": out.strip()}
+
+    def calendar_create(self, title: str, start: str, end: str,
+                        attendees: list[str] | None = None,
+                        description: str | None = None) -> dict[str, Any]:
+        cmd = self._build_cmd("calendar", "create", "--title", title,
+                              "--start", start, "--end", end)
+        if attendees:
+            cmd.extend(["--attendees", ",".join(attendees)])
+        if description:
+            cmd.extend(["--description", description])
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            return {"error": err.strip() or out.strip(), "success": False}
+        try:
+            return json.loads(out) if out else {"success": True}
+        except json.JSONDecodeError:
+            return {"success": True, "raw": out.strip()}
+
+    def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
+        cmd = self._build_cmd("calendar", "update", "--event-id", event_id)
+        for key, value in fields.items():
+            cmd.extend([f"--{key.replace('_', '-')}", str(value)])
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            return {"error": err.strip() or out.strip(), "success": False}
+        try:
+            return json.loads(out) if out else {"success": True}
+        except json.JSONDecodeError:
+            return {"success": True, "raw": out.strip()}
+
+    def drive_download(self, file_id: str, output_path: str) -> dict[str, Any]:
+        cmd = self._build_cmd("drive", "download", "--file-id", file_id, "--output", output_path)
+        rc, out, err = self._run(cmd, timeout=120)
+        if rc != 0:
+            return {"error": err.strip() or out.strip(), "success": False}
+        return {"success": True, "path": output_path}
 
     def health_check(self) -> bool:
         cmd = self._build_cmd("calendar", "list")

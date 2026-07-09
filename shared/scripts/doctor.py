@@ -346,12 +346,25 @@ def _check_audit_runs(fix: bool, data: dict[str, Any] | None, config_path: Path)
 
 
 def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    """Check which workspace provider is configured."""
+    """Check which workspace provider is configured and report capabilities."""
     integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
     workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
     provider = workspace.get("provider", "google_api")
     mode = workspace.get("mode", "direct")
-    return CheckResult("workspace_provider", "pass", f"{provider} {mode}")
+
+    # Report capabilities
+    try:
+        sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        from workspace_capabilities import get_capabilities, unsupported_actions
+        caps = get_capabilities(provider)
+        supported = [k for k, v in caps.items() if v]
+        unsupported = unsupported_actions(provider)
+        detail = f"{provider} {mode} — supported: {', '.join(supported)}"
+        if unsupported:
+            detail += f"; unsupported: {', '.join(unsupported)}"
+    except Exception:
+        detail = f"{provider} {mode}"
+    return CheckResult("workspace_provider", "pass", detail)
 
 
 def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
@@ -399,7 +412,7 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
             except Exception:
                 connections = {tk: meta.get("connections", {}).get(tk, {}).get("status", "unknown") for tk in ("gmail", "googlecalendar")}
 
-            for tk in ("gmail", "googlecalendar"):
+            for tk in ("gmail", "googlecalendar", "googledrive"):
                 status = connections.get(tk, "unknown")
                 if status == "connected":
                     details.append(f"{tk}: connected")

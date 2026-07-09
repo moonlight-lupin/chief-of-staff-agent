@@ -114,6 +114,7 @@ class ComposioWorkspaceClient(WorkspaceClient):
 
     def __init__(self, config: Any) -> None:
         self.config = config
+        self._provider_name = "composio"
         self._validate_config()
 
         integrations = config.get("integrations", {}) if isinstance(config, Mapping) else {}
@@ -260,14 +261,122 @@ class ComposioWorkspaceClient(WorkspaceClient):
             warnings.warn(f"Composio calendar_list failed: {exc}")
             return []
 
+    def gmail_create_draft(self, to: str, subject: str, body: str,
+                           cc: str | None = None) -> dict[str, Any]:
+        """Create a Gmail draft via GMAIL_CREATE_EMAIL_DRAFT."""
+        from workspace_audit import audit_workspace_action
+        try:
+            session = self._get_or_create_session()
+            args: dict[str, Any] = {"to": to, "subject": subject, "body": body}
+            if cc:
+                args["cc"] = cc
+            result = session.execute("GMAIL_CREATE_EMAIL_DRAFT", arguments=args)
+            data = self._extract_result(result)
+            audit_workspace_action(self.config, "composio", "gmail.create_draft",
+                                   "GMAIL_CREATE_EMAIL_DRAFT", target=to)
+            return {"success": True, "data": data} if not isinstance(data, dict) else data
+        except Exception as exc:
+            audit_workspace_action(self.config, "composio", "gmail.create_draft",
+                                   "GMAIL_CREATE_EMAIL_DRAFT", target=to, status="failed")
+            return {"error": str(exc), "success": False}
+
+    def calendar_create(self, title: str, start: str, end: str,
+                        attendees: list[str] | None = None,
+                        description: str | None = None) -> dict[str, Any]:
+        """Create a calendar event via GOOGLECALENDAR_CREATE_EVENT."""
+        from workspace_audit import audit_workspace_action
+        try:
+            session = self._get_or_create_session()
+            args: dict[str, Any] = {
+                "title": title,
+                "start_time": f"{start}T00:00:00Z" if "T" not in start else start,
+                "end_time": f"{end}T23:59:59Z" if "T" not in end else end,
+            }
+            if attendees:
+                args["attendees"] = attendees
+            if description:
+                args["description"] = description
+            result = session.execute("GOOGLECALENDAR_CREATE_EVENT", arguments=args)
+            data = self._extract_result(result)
+            audit_workspace_action(self.config, "composio", "calendar.create",
+                                   "GOOGLECALENDAR_CREATE_EVENT", target=title)
+            return {"success": True, "data": data} if not isinstance(data, dict) else data
+        except Exception as exc:
+            audit_workspace_action(self.config, "composio", "calendar.create",
+                                   "GOOGLECALENDAR_CREATE_EVENT", target=title, status="failed")
+            return {"error": str(exc), "success": False}
+
+    def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
+        """Update a calendar event via GOOGLECALENDAR_UPDATE_EVENT (if available)."""
+        from workspace_audit import audit_workspace_action
+        try:
+            session = self._get_or_create_session()
+            args = {"event_id": event_id, **fields}
+            result = session.execute("GOOGLECALENDAR_UPDATE_EVENT", arguments=args)
+            data = self._extract_result(result)
+            audit_workspace_action(self.config, "composio", "calendar.update",
+                                   "GOOGLECALENDAR_UPDATE_EVENT", target=event_id)
+            return {"success": True, "data": data} if not isinstance(data, dict) else data
+        except Exception as exc:
+            audit_workspace_action(self.config, "composio", "calendar.update",
+                                   "GOOGLECALENDAR_UPDATE_EVENT", target=event_id, status="failed")
+            return {"error": str(exc), "success": False}
+
     def drive_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
-        """Search Drive — stubbed for v0.1.5."""
-        warnings.warn("Composio drive_search not implemented in v0.1.5 — use google_api provider")
-        return []
+        """Search Drive via GOOGLEDRIVE_FIND_FILE."""
+        try:
+            session = self._get_or_create_session()
+            result = session.execute(
+                "GOOGLEDRIVE_FIND_FILE",
+                arguments={"query": query, "max_results": max_results},
+            )
+            data = self._extract_result(result)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "files" in data:
+                return data["files"]
+            if isinstance(data, dict):
+                return [data]
+            return []
+        except Exception as exc:
+            warnings.warn(f"Composio drive_search failed: {exc}")
+            return []
 
     def drive_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
-        """Upload to Drive — stubbed for v0.1.5."""
-        return {"error": "Composio drive_upload not implemented in v0.1.5", "success": False}
+        """Upload a file to Drive via GOOGLEDRIVE_UPLOAD_FILE."""
+        from workspace_audit import audit_workspace_action
+        try:
+            session = self._get_or_create_session()
+            args: dict[str, Any] = {"file_path": file_path}
+            if parent_id:
+                args["parent_id"] = parent_id
+            result = session.execute("GOOGLEDRIVE_UPLOAD_FILE", arguments=args)
+            data = self._extract_result(result)
+            audit_workspace_action(self.config, "composio", "drive.upload",
+                                   "GOOGLEDRIVE_UPLOAD_FILE", target=file_path)
+            return {"success": True, "data": data} if not isinstance(data, dict) else data
+        except Exception as exc:
+            audit_workspace_action(self.config, "composio", "drive.upload",
+                                   "GOOGLEDRIVE_UPLOAD_FILE", target=file_path, status="failed")
+            return {"error": str(exc), "success": False}
+
+    def drive_download(self, file_id: str, output_path: str) -> dict[str, Any]:
+        """Download a file from Drive via GOOGLEDRIVE_DOWNLOAD_FILE."""
+        from workspace_audit import audit_workspace_action
+        try:
+            session = self._get_or_create_session()
+            result = session.execute(
+                "GOOGLEDRIVE_DOWNLOAD_FILE",
+                arguments={"file_id": file_id, "output_path": output_path},
+            )
+            data = self._extract_result(result)
+            audit_workspace_action(self.config, "composio", "drive.download",
+                                   "GOOGLEDRIVE_DOWNLOAD_FILE", target=file_id)
+            return {"success": True, "path": output_path, "data": data}
+        except Exception as exc:
+            audit_workspace_action(self.config, "composio", "drive.download",
+                                   "GOOGLEDRIVE_DOWNLOAD_FILE", target=file_id, status="failed")
+            return {"error": str(exc), "success": False}
 
     def health_check(self) -> bool:
         """Check if Composio is reachable and at least one toolkit is connected."""

@@ -72,5 +72,6 @@ integrations:
       googledrive:
         read:
           - GOOGLEDRIVE_FIND_FILE
+          - GOOGLEDRIVE_DOWNLOAD_FILE
         write_safe:
           - GOOGLEDRIVE_UPLOAD_FILE

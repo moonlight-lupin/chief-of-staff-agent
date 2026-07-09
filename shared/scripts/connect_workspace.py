@@ -310,6 +310,65 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
     return 0 if api_key else 1
 
 
+def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, tools_only: bool = False) -> int:
+    """Print MCP endpoint info with enabled tools."""
+    try:
+        from providers.composio_workspace import ComposioWorkspaceClient, load_session_meta, get_enabled_tools
+    except ImportError as exc:
+        print(f"❌ {exc}")
+        return 1
+
+    meta = load_session_meta(config)
+    if not meta or not meta.get("session_id"):
+        print("❌ No Composio session found. Run --connect gmail first.")
+        return 1
+
+    # Get enabled tools from config
+    read_tools = get_enabled_tools(config, "read")
+    write_tools = get_enabled_tools(config, "write_safe")
+    all_tools: dict[str, list[str]] = {}
+    for tk in set(list(read_tools.keys()) + list(write_tools.keys())):
+        all_tools[tk] = read_tools.get(tk, []) + write_tools.get(tk, [])
+
+    mcp = meta.get("mcp", {})
+    mcp_url = mcp.get("url")
+
+    # Try to get URL from session if not stored
+    if not mcp_url:
+        try:
+            client = ComposioWorkspaceClient(config)
+            session = client._get_or_create_session()
+            if hasattr(session, "mcp_url"):
+                mcp_url = session.mcp_url
+        except Exception:
+            pass
+
+    result = {
+        "provider": "composio",
+        "mode": meta.get("mode", "sdk"),
+        "session_id": meta.get("session_id", ""),
+        "mcp_url": mcp_url,
+        "headers_stored": mcp.get("headers_stored", False),
+        "enabled_tools": all_tools,
+    }
+
+    if tools_only:
+        for tk, tools in all_tools.items():
+            print(f"{tk}: {', '.join(tools) if tools else '(none)'}")
+    elif json_output:
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"Provider: {result['provider']}")
+        print(f"Session:  {result['session_id']}")
+        print(f"MCP URL:  {result['mcp_url'] or '(not available)'}")
+        print(f"Headers:  {'stored' if result['headers_stored'] else 'not stored'}")
+        print(f"\nEnabled tools:")
+        for tk, tools in all_tools.items():
+            print(f"  {tk}: {', '.join(tools) if tools else '(none)'}")
+
+    return 0 if mcp_url else 1
+
+
 def _main() -> int:
     parser = argparse.ArgumentParser(
         description="Workspace provider onboarding and status"
@@ -324,6 +383,10 @@ def _main() -> int:
                         help="Connect a Composio toolkit (e.g. gmail, googlecalendar)")
     parser.add_argument("--mcp-url", action="store_true",
                         help="Print MCP endpoint URL for Composio session")
+    parser.add_argument("--mcp-info", action="store_true",
+                        help="Print detailed MCP endpoint info (URL, tools, status)")
+    parser.add_argument("--mcp-tools", action="store_true",
+                        help="Print enabled tools for MCP session")
     args = parser.parse_args()
 
     config = _load_config(args.config)
@@ -336,6 +399,8 @@ def _main() -> int:
         return cmd_composio_connect(config, args.connect)
     elif args.provider == "composio" and args.mcp_url:
         return cmd_composio_mcp_url(config)
+    elif args.provider == "composio" and (args.mcp_info or args.mcp_tools):
+        return cmd_composio_mcp_info(config, json_output=bool(args.mcp_info), tools_only=bool(args.mcp_tools))
     elif args.provider == "composio":
         return cmd_provider_composio(config, args.print_next_steps)
     else:
