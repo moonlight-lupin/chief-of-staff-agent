@@ -206,6 +206,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         to=payload["to"],
         subject=payload["subject"],
         body=payload["body"],
+        cc=payload.get("cc") or None,
     )
 
     # Mark as executed with result

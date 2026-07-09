@@ -325,7 +325,7 @@ class TestSendEmailCLI:
                 rc = send_email.main(["execute", "--action-id", action["id"]])
         assert rc == 0
         google_mock.gmail_send.assert_called_once_with(
-            to="client@test.com", subject="NDA", body="Sign this.",
+            to="client@test.com", subject="NDA", body="Sign this.", cc=None,
         )
 
     def test_execute_marks_action_executed(self, temp_project, google_mock, auto_approve):

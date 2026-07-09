@@ -13,34 +13,46 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "gmail.search": True,
         "gmail.draft": False,       # google_api.py has no draft subcommand
         "gmail.send": True,         # supported but destructive / guardrailed
+        "gmail.archive": True,      # via gmail modify --remove-labels INBOX
+        "gmail.trash": True,        # via gmail modify --add-labels TRASH
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
+        "calendar.cancel": True,    # via calendar update --status cancelled
         "drive.search": True,
         "drive.upload": True,
         "drive.download": True,
+        "drive.trash": True,        # via drive delete (default is trash, reversible)
     },
     "composio": {
         "gmail.search": True,
         "gmail.draft": True,
         "gmail.send": False,
+        "gmail.archive": False,     # not exposed via Composio MCP
+        "gmail.trash": False,       # not exposed via Composio MCP
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
+        "calendar.cancel": False,   # not exposed via Composio MCP
         "drive.search": True,
         "drive.upload": True,
         "drive.download": True,
+        "drive.trash": False,       # not exposed via Composio MCP
     },
     "composio:mcp": {
         "gmail.search": True,
         "gmail.draft": True,
         "gmail.send": False,
+        "gmail.archive": False,
+        "gmail.trash": False,
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
+        "calendar.cancel": False,
         "drive.search": True,
         "drive.upload": True,
         "drive.download": True,
+        "drive.trash": False,
     },
 }
 

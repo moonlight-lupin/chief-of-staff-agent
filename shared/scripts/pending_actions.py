@@ -32,6 +32,10 @@ if str(_SCRIPT_DIR) not in sys.path:
 # Approval expiry: requested actions older than this are stale.
 EXPIRY_HOURS = 72
 
+# Approved actions must be executed within APPROVED_EXPIRY_HOURS,
+# otherwise the approval lapses and the action must be re-approved.
+APPROVED_EXPIRY_HOURS = 24
+
 # Risk classification for email recipients.
 # Internal = same domain as the company. External = different domain.
 # High-risk = never-seen external domains (future: maintain a known-contacts list).
@@ -120,6 +124,22 @@ def _is_expired(action: dict[str, Any], expiry_hours: int = EXPIRY_HOURS) -> boo
         return False
     try:
         dt = datetime.fromisoformat(created)
+        age = datetime.now(timezone.utc) - dt
+        return age > timedelta(hours=expiry_hours)
+    except (ValueError, TypeError):
+        return False
+
+
+def _is_approval_lapsed(action: dict[str, Any],
+                        expiry_hours: int = APPROVED_EXPIRY_HOURS) -> bool:
+    """Check if an approved action's approval has lapsed (not executed in time)."""
+    if action.get("state") != "approved":
+        return False
+    approved_at = action.get("approved_at", "")
+    if not approved_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(approved_at)
         age = datetime.now(timezone.utc) - dt
         return age > timedelta(hours=expiry_hours)
     except (ValueError, TypeError):
@@ -361,11 +381,19 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     Returns the updated action, or None if:
     - not found
     - not in 'approved' state (already executed, cancelled, expired, or not yet approved)
+    - approval has lapsed (approved too long ago without execution)
     """
     data = _load(config)
     expected_version = data.get("_version", 0)
     action = data["actions"].get(action_id)
     if not action or action["state"] != "approved":
+        return None
+
+    # Check if approval has lapsed
+    if _is_approval_lapsed(action):
+        action["state"] = "expired"
+        action["expired_at"] = _now()
+        _save(config, data, expected_version=expected_version)
         return None
 
     action["state"] = "executed"

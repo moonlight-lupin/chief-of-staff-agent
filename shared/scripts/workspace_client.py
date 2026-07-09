@@ -34,7 +34,8 @@ class WorkspaceClient(abc.ABC):
         """Create a Gmail draft. Returns draft metadata."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_create_draft")
 
-    def gmail_send(self, to: str, subject: str, body: str) -> dict[str, Any]:
+    def gmail_send(self, to: str, subject: str, body: str,
+                    cc: str | None = None) -> dict[str, Any]:
         """Send an email. Providers may raise NotImplementedError."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_send")
 
@@ -66,6 +67,22 @@ class WorkspaceClient(abc.ABC):
     def drive_download(self, file_id: str, output_path: str) -> dict[str, Any]:
         """Download a file from Drive. Returns download metadata."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support drive_download")
+
+    def gmail_archive(self, message_id: str) -> dict[str, Any]:
+        """Archive a Gmail message (remove from INBOX). Reversible."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_archive")
+
+    def gmail_trash(self, message_id: str) -> dict[str, Any]:
+        """Move a Gmail message to trash. Reversible."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_trash")
+
+    def drive_trash(self, file_id: str) -> dict[str, Any]:
+        """Move a Drive file to trash. Reversible."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support drive_trash")
+
+    def calendar_cancel(self, event_id: str) -> dict[str, Any]:
+        """Cancel a calendar event (set status to cancelled). Reversible via update."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support calendar_cancel")
 
     @abc.abstractmethod
     def health_check(self) -> bool:

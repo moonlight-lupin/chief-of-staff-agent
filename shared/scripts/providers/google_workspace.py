@@ -142,7 +142,8 @@ class GoogleWorkspaceClient(WorkspaceClient):
         return ActionResult(success=True, action="drive.upload", provider=self._provider_name,
                             target=file_path, data=data, audited=True).to_dict()
 
-    def gmail_send(self, to: str, subject: str, body: str) -> dict[str, Any]:
+    def gmail_send(self, to: str, subject: str, body: str,
+                    cc: str | None = None) -> dict[str, Any]:
         from workspace_audit import audit_workspace_action
         from workspace_guardrails import confirm_action, ActionResult
         # gmail.send is destructive — requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1
@@ -150,6 +151,8 @@ class GoogleWorkspaceClient(WorkspaceClient):
             return ActionResult(success=False, action="gmail.send", provider=self._provider_name,
                                 target=to, error="cancelled by guardrail (requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)").to_dict()
         cmd = self._build_cmd("gmail", "send", "--to", to, "--subject", subject, "--body", body)
+        if cc:
+            cmd.extend(["--cc", cc])
         rc, out, err = self._run(cmd)
         if rc != 0:
             audit_workspace_action(self.config, "google_api", "gmail.send",
@@ -252,6 +255,87 @@ class GoogleWorkspaceClient(WorkspaceClient):
                                "google_api.py", target=file_id)
         return ActionResult(success=True, action="drive.download", provider=self._provider_name,
                             target=file_id, data={"path": output_path}, audited=True).to_dict()
+
+    def gmail_archive(self, message_id: str) -> dict[str, Any]:
+        """Archive a Gmail message (remove from INBOX). Reversible."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.archive", message_id=message_id):
+            return ActionResult(success=False, action="gmail.archive", provider=self._provider_name,
+                                target=message_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("gmail", "modify", message_id, "--remove-labels", "INBOX")
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "gmail.archive",
+                                   "google_api.py", target=message_id, status="failed")
+            return ActionResult(success=False, action="gmail.archive", provider=self._provider_name,
+                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "gmail.archive",
+                               "google_api.py", target=message_id)
+        return ActionResult(success=True, action="gmail.archive", provider=self._provider_name,
+                            target=message_id, data={"output": out.strip()},
+                            audited=True).to_dict()
+
+    def gmail_trash(self, message_id: str) -> dict[str, Any]:
+        """Move a Gmail message to trash. Reversible (30-day auto-delete by Google)."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.trash", message_id=message_id):
+            return ActionResult(success=False, action="gmail.trash", provider=self._provider_name,
+                                target=message_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", "TRASH", "--remove-labels", "INBOX")
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "gmail.trash",
+                                   "google_api.py", target=message_id, status="failed")
+            return ActionResult(success=False, action="gmail.trash", provider=self._provider_name,
+                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "gmail.trash",
+                               "google_api.py", target=message_id)
+        return ActionResult(success=True, action="gmail.trash", provider=self._provider_name,
+                            target=message_id, data={"output": out.strip(), "reversible": True},
+                            audited=True).to_dict()
+
+    def drive_trash(self, file_id: str) -> dict[str, Any]:
+        """Move a Drive file to trash. Reversible (30-day auto-delete by Google)."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("drive.trash", file_id=file_id):
+            return ActionResult(success=False, action="drive.trash", provider=self._provider_name,
+                                target=file_id, error="cancelled by guardrail").to_dict()
+        # drive delete defaults to trash (not --permanent)
+        cmd = self._build_cmd("drive", "delete", file_id)
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "drive.trash",
+                                   "google_api.py", target=file_id, status="failed")
+            return ActionResult(success=False, action="drive.trash", provider=self._provider_name,
+                                target=file_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "drive.trash",
+                               "google_api.py", target=file_id)
+        return ActionResult(success=True, action="drive.trash", provider=self._provider_name,
+                            target=file_id, data={"output": out.strip(), "reversible": True},
+                            audited=True).to_dict()
+
+    def calendar_cancel(self, event_id: str) -> dict[str, Any]:
+        """Cancel a calendar event (set status to cancelled). Reversible via update."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("calendar.cancel", event_id=event_id):
+            return ActionResult(success=False, action="calendar.cancel", provider=self._provider_name,
+                                target=event_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("calendar", "update", "--event-id", event_id, "--status", "cancelled")
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "calendar.cancel",
+                                   "google_api.py", target=event_id, status="failed")
+            return ActionResult(success=False, action="calendar.cancel", provider=self._provider_name,
+                                target=event_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "calendar.cancel",
+                               "google_api.py", target=event_id)
+        return ActionResult(success=True, action="calendar.cancel", provider=self._provider_name,
+                            target=event_id, data={"output": out.strip(), "reversible": True},
+                            audited=True).to_dict()
 
     def health_check(self) -> bool:
         cmd = self._build_cmd("calendar", "list")
