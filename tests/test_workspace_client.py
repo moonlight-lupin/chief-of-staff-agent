@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Tests for workspace_client abstraction and Google provider."""
+"""Tests for workspace_client abstraction and Google provider.
+
+Tests monkeypatch the google_api.py lookup and subprocess calls so they
+work in any environment — no Google skill installation required.
+"""
 
 import sys
 import os
 import tempfile
 import json
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -61,7 +66,8 @@ class TestWorkspaceClientFactory:
     def test_returns_google_client_for_google_api(self, google_config):
         from workspace_client import get_workspace_client, WorkspaceClient
         from providers.google_workspace import GoogleWorkspaceClient
-        client = get_workspace_client(google_config)
+        with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake/google_api.py")):
+            client = get_workspace_client(google_config)
         assert isinstance(client, GoogleWorkspaceClient)
         assert isinstance(client, WorkspaceClient)
 
@@ -73,7 +79,8 @@ class TestWorkspaceClientFactory:
     def test_defaults_to_google_when_no_integrations(self, no_integrations_config):
         from workspace_client import get_workspace_client
         from providers.google_workspace import GoogleWorkspaceClient
-        client = get_workspace_client(no_integrations_config)
+        with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake/google_api.py")):
+            client = get_workspace_client(no_integrations_config)
         assert isinstance(client, GoogleWorkspaceClient)
 
     def test_unknown_provider_raises(self):
@@ -90,41 +97,69 @@ class TestWorkspaceClientABC:
 
 
 class TestGoogleWorkspaceClient:
-    def test_gmail_search_returns_list(self, google_config):
+    @pytest.fixture
+    def client(self, google_config):
+        """GoogleWorkspaceClient with google_api.py path monkeypatched."""
         from providers.google_workspace import GoogleWorkspaceClient
-        client = GoogleWorkspaceClient(google_config)
-        # Will likely return empty list if no auth, but should not crash
-        result = client.gmail_search("is:unread", max_results=1)
+        with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake/google_api.py")):
+            return GoogleWorkspaceClient(google_config)
+
+    def test_gmail_search_returns_list(self, client):
+        with patch.object(client, "_run", return_value=(0, "[]", "")):
+            result = client.gmail_search("is:unread", max_results=1)
         assert isinstance(result, list)
 
-    def test_calendar_list_returns_list(self, google_config):
-        from providers.google_workspace import GoogleWorkspaceClient
-        client = GoogleWorkspaceClient(google_config)
-        result = client.calendar_list("2026-01-01", "2026-01-02")
+    def test_gmail_search_parses_json(self, client):
+        mock_response = json.dumps([{"id": "msg1", "subject": "Test"}])
+        with patch.object(client, "_run", return_value=(0, mock_response, "")):
+            result = client.gmail_search("is:unread", max_results=5)
+        assert len(result) == 1
+        assert result[0]["id"] == "msg1"
+
+    def test_gmail_search_returns_empty_on_error(self, client):
+        with patch.object(client, "_run", return_value=(1, "", "auth failed")):
+            result = client.gmail_search("is:unread")
+        assert result == []
+
+    def test_calendar_list_returns_list(self, client):
+        with patch.object(client, "_run", return_value=(0, "[]", "")):
+            result = client.calendar_list("2026-01-01", "2026-01-02")
         assert isinstance(result, list)
 
-    def test_drive_search_returns_list(self, google_config):
-        from providers.google_workspace import GoogleWorkspaceClient
-        client = GoogleWorkspaceClient(google_config)
-        result = client.drive_search("test", max_results=1)
+    def test_calendar_list_parses_json(self, client):
+        mock_response = json.dumps([{"id": "evt1", "title": "Meeting"}])
+        with patch.object(client, "_run", return_value=(0, mock_response, "")):
+            result = client.calendar_list("2026-01-01", "2026-01-02")
+        assert len(result) == 1
+        assert result[0]["title"] == "Meeting"
+
+    def test_drive_search_returns_list(self, client):
+        with patch.object(client, "_run", return_value=(0, "[]", "")):
+            result = client.drive_search("test", max_results=1)
         assert isinstance(result, list)
 
-    def test_health_check_returns_bool(self, google_config):
-        from providers.google_workspace import GoogleWorkspaceClient
-        client = GoogleWorkspaceClient(google_config)
-        result = client.health_check()
-        assert isinstance(result, bool)
+    def test_health_check_returns_true_on_success(self, client):
+        with patch.object(client, "_run", return_value=(0, "[]", "")):
+            assert client.health_check() is True
+
+    def test_health_check_returns_false_on_failure(self, client):
+        with patch.object(client, "_run", return_value=(1, "", "error")):
+            assert client.health_check() is False
 
     def test_account_alias_passed_to_cmd(self, google_config):
         google_config["google"]["account_alias"] = "mycompany"
         from providers.google_workspace import GoogleWorkspaceClient
-        client = GoogleWorkspaceClient(google_config)
+        with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake/google_api.py")):
+            client = GoogleWorkspaceClient(google_config)
         cmd = client._build_cmd("calendar", "list")
         assert "--account" in cmd
         assert "mycompany" in cmd
 
-    def test_no_account_alias_omits_flag(self, google_config):
-        from providers.google_workspace import GoogleWorkspaceClient
-        client = GoogleWorkspaceClient(google_config)
+    def test_no_account_alias_omits_flag(self, client):
         cmd = client._build_cmd("calendar", "list")
         assert "--account" not in cmd
+
+    def test_delegate_email_passed_to_cmd(self, client):
+        cmd = client._build_cmd("calendar", "list")
+        assert "--as" in cmd
+        assert "founder@test.com" in cmd

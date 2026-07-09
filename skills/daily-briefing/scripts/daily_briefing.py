@@ -88,6 +88,16 @@ def ensure_google_config(config: Any) -> None:
             raise FileNotFoundError(f"Google credentials not configured: {path}")
 
 
+def _get_workspace_client(config: Any):
+    """Get a WorkspaceClient from config. Falls back to google_api if no integrations section."""
+    import os as _os
+    _script_dir = PLUGIN_ROOT / "shared" / "scripts"
+    if str(_script_dir) not in sys.path:
+        sys.path.insert(0, str(_script_dir))
+    from workspace_client import get_workspace_client
+    return get_workspace_client(config)
+
+
 def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
     ensure_google_config(config)
     queries_file = sibling_or_shared(config, "queries.yaml")
@@ -103,11 +113,10 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
         ]
     if not isinstance(queries, list):
         raise ValueError("queries.yaml 'queries' must be a list or mapping")
-    script = google_api_script()
     google_cfg = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
     delegate = str(google_cfg.get("delegate_email", ""))
-    account_alias = str(google_cfg.get("account_alias", ""))
     import re as _re
+    client = _get_workspace_client(config)
     items: list[dict[str, Any]] = []
     for query in queries:
         if not isinstance(query, dict):
@@ -118,43 +127,17 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
         # Skip if any unresolved template variables remain
         if _re.search(r'\{[a-z_]+\}', q):
             continue
-        cmd = [sys.executable, str(script)]
-        if account_alias:
-            cmd.extend(["--account", account_alias])
-        if delegate:
-            cmd.extend(["--as", delegate])
-        # google_api.py search takes the Gmail query as a positional argument and emits JSON.
-        cmd.extend(["gmail", "search", q, "--max", str(query.get("max", 10))])
-        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=45)
-        if proc.returncode != 0:
-            raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"google_api.py exited {proc.returncode}")
-        try:
-            result = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            result = proc.stdout.strip()
+        result = client.gmail_search(q, max_results=int(query.get("max", 10)))
         items.append({"name": query.get("name"), "query": q, "result": result})
     return items
 
 
 def collect_calendar(config: Any, project_root: Path) -> list[dict[str, Any]]:
     ensure_google_config(config)
-    script = google_api_script()
-    google_cfg = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
-    delegate = str(google_cfg.get("delegate_email", ""))
-    account_alias = str(google_cfg.get("account_alias", ""))
+    client = _get_workspace_client(config)
     start = date.today().isoformat()
     end = (date.today() + timedelta(days=2)).isoformat()
-    cmd = [sys.executable, str(script)]
-    if account_alias:
-        cmd.extend(["--account", account_alias])
-    if delegate:
-        cmd.extend(["--as", delegate])
-    # google_api.py calendar list emits JSON by default in the bundled google-workspace skill.
-    cmd.extend(["calendar", "list", "--start", start, "--end", end])
-    proc = subprocess.run(cmd, text=True, capture_output=True, timeout=45)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"google_api.py exited {proc.returncode}")
-    loaded = json.loads(proc.stdout or "[]")
+    loaded = client.calendar_list(start, end)
     return loaded if isinstance(loaded, list) else [loaded]
 
 

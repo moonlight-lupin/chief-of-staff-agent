@@ -219,23 +219,22 @@ def _check_google_auth(fix: bool, data: dict[str, Any] | None, config_path: Path
     google = (data or {}).get("google") if isinstance((data or {}).get("google"), dict) else {}
     if not google or not google.get("delegate_email"):
         return CheckResult("google_auth", "warn", "skipped: google config incomplete")
-    api = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser() / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py"
-    if not api.exists():
-        return CheckResult("google_auth", "warn", "skipped: google_api.py not found")
-    account = google.get("service_account_path", "")
-    account_alias = google.get("account_alias", "")
-    is_service_account = bool(account and Path(str(account)).expanduser().exists())
-    cmd = [sys.executable, str(api)]
-    if is_service_account and account_alias:
-        cmd += ["--account", account_alias, "--as", google.get("delegate_email", "")]
-    elif is_service_account:
-        cmd += ["--as", google.get("delegate_email", "")]
-    cmd += ["calendar", "list"]
+    # Use WorkspaceClient for provider-neutral auth check
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+        sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        from workspace_client import get_workspace_client
+        client = get_workspace_client(data or {})
+        healthy = client.health_check()
+        if healthy:
+            return CheckResult("google_auth", "pass", "workspace provider health check succeeded")
+        else:
+            return CheckResult("google_auth", "warn", "workspace provider health check returned False")
+    except FileNotFoundError as exc:
+        return CheckResult("google_auth", "warn", f"skipped: {exc}")
+    except NotImplementedError as exc:
+        return CheckResult("google_auth", "warn", f"skipped: {exc}")
     except Exception as exc:
-        return CheckResult("google_auth", "warn", f"calendar auth test skipped/failed: {exc}")
-    return CheckResult("google_auth", "pass" if proc.returncode == 0 else "warn", "calendar list succeeded" if proc.returncode == 0 else (proc.stderr or proc.stdout)[-300:])
+        return CheckResult("google_auth", "warn", f"workspace provider check failed: {exc}")
 
 
 def _check_jurisdiction_pack(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
