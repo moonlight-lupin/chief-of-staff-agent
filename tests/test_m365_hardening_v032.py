@@ -133,14 +133,122 @@ class TestThrottleBackoff:
         assert len(send.calls) == 2
         assert client._slept == [1.0]        # 2**0, no Retry-After header
 
-    def test_retry_after_capped_at_30s(self, client):
+    def test_retry_after_over_budget_defers_no_retry(self, client):
+        # REWORKED (was test_retry_after_capped_at_30s, which asserted the old
+        # wrong behaviour of sleeping a SHORTENED 30s and retrying). Policy now:
+        # a Retry-After that exceeds the 30s budget is DEFERRED — no sleep, no
+        # retry, raise naming the server-requested wait.
         send = scripted_send([
             FakeResp(429, headers={"Retry-After": "600"}),
+            FakeResp(200, json_body={"ok": 1}),  # must never be reached
+        ])
+        client._send = send
+        with pytest.raises(RuntimeError) as exc:
+            client._request("GET", "/x")
+        assert "600" in str(exc.value)
+        assert "defer" in str(exc.value).lower()
+        assert len(send.calls) == 1          # attempted exactly once
+        assert client._slept == []           # never slept a shortened wait
+
+    def test_retry_after_exactly_at_budget_is_slept_full(self, client):
+        # Boundary: wait == RETRY_MAX_WAIT_S (30) is within budget -> full sleep.
+        send = scripted_send([
+            FakeResp(429, headers={"Retry-After": "30"}),
             FakeResp(200, json_body={"ok": 1}),
         ])
         client._send = send
-        client._request("GET", "/x")
-        assert client._slept == [30.0]       # capped, not 600
+        out = client._request("GET", "/x")
+        assert out == {"ok": 1}
+        assert client._slept == [30.0]
+        assert len(send.calls) == 2
+
+    def test_post_429_sleeps_full_retry_after_and_retries(self, client):
+        # 429 retries ALL methods (Graph docs: throttled request NOT processed).
+        # The small Retry-After is honoured in FULL, then the POST is retried.
+        send = scripted_send([
+            FakeResp(429, headers={"Retry-After": "5"}),
+            FakeResp(200, json_body={"ok": 1}),
+        ])
+        client._send = send
+        out = client._request("POST", "/users/cos@acme.com/sendMail",
+                              json_body={"message": {}})
+        assert out == {"ok": 1}
+        assert client._slept == [5.0]        # full header value, not shortened
+        assert len(send.calls) == 2
+
+    @pytest.mark.parametrize("bad", ["-5", "NaN", "inf", "not-a-number"])
+    def test_invalid_retry_after_falls_back_to_exponential(self, client, bad):
+        # Negative / NaN / infinite / garbage Retry-After -> treat as absent and
+        # fall back to finite exponential backoff. Never a NaN/negative sleep.
+        send = scripted_send([
+            FakeResp(503, headers={"Retry-After": bad}),
+            FakeResp(200, json_body={"ok": 1}),
+        ])
+        client._send = send
+        out = client._request("GET", "/x")   # GET is idempotent -> 503 retries
+        assert out == {"ok": 1}
+        assert client._slept == [1.0]         # 2**0 fallback, finite & positive
+        assert all(s >= 0.0 and s == s and s != float("inf") for s in client._slept)
+        assert len(send.calls) == 2
+
+    # ── Method-aware 503/504 (non-idempotent writes must NOT auto-retry) ────
+
+    def test_post_sendmail_504_not_retried_raises_verify_first(self, client):
+        # 504 on a POST is ambiguous — sendMail may have gone out. No retry;
+        # raise with verify-first guidance. Attempted exactly once.
+        send = scripted_send([
+            FakeResp(504),
+            FakeResp(200, json_body={"ok": 1}),  # must never be reached
+        ])
+        client._send = send
+        with pytest.raises(RuntimeError) as exc:
+            client._request("POST", "/users/cos@acme.com/sendMail",
+                           json_body={"message": {}})
+        assert "may have completed" in str(exc.value)
+        assert "504" in str(exc.value)
+        assert len(send.calls) == 1           # attempted exactly once
+        assert client._slept == []            # no backoff sleep
+
+    def test_patch_503_not_retried_raises_verify_first(self, client):
+        # PATCH is non-idempotent for this policy (categories/event updates).
+        send = scripted_send([FakeResp(503), FakeResp(200, json_body={"ok": 1})])
+        client._send = send
+        with pytest.raises(RuntimeError) as exc:
+            client._request("PATCH", "/users/cos@acme.com/messages/x",
+                           json_body={"categories": []})
+        assert "may have completed" in str(exc.value)
+        assert len(send.calls) == 1
+
+    def test_put_503_is_retried_idempotent(self, client):
+        # PUT (upload) is idempotent by HTTP semantics -> 503 auto-retries.
+        send = scripted_send([FakeResp(503), FakeResp(200, json_body={"ok": 1})])
+        client._send = send
+        out = client._request("PUT", "/users/cos@acme.com/drive/root:/f:/content",
+                             content=b"x")
+        assert out == {"ok": 1}
+        assert client._slept == [1.0]
+        assert len(send.calls) == 2
+
+    def test_delete_504_is_retried_idempotent(self, client):
+        # DELETE is idempotent -> 504 auto-retries.
+        send = scripted_send([FakeResp(504), FakeResp(200, json_body={"ok": 1})])
+        client._send = send
+        out = client._request("DELETE", "/users/cos@acme.com/drive/items/x")
+        assert out == {"ok": 1}
+        assert client._slept == [1.0]
+        assert len(send.calls) == 2
+
+    def test_post_504_guarded_write_is_ambiguous_audited_failure(self, client, approve_env):
+        # POST calendar_create + 503 via the guarded path: attempted exactly
+        # once, audited-failure ActionResult carrying the ambiguous message.
+        send = scripted_send([FakeResp(503)])
+        client._send = send
+        result = client.calendar_create("Sync", "2026-07-10", "2026-07-10")
+        assert result["success"] is False
+        assert result["audited"] is True
+        assert "may have completed" in result["error"]
+        assert "503" in result["error"]
+        assert len(send.calls) == 1           # NOT retried
 
     def test_429_exhausted_read_returns_empty(self, client):
         # Four 429s: initial + 3 retries, then behaves like any non-2xx.
@@ -225,6 +333,32 @@ class TestPagination:
         out = client.mail_search("is:unread", max_results=10)
         assert [m["id"] for m in out] == ["m1"]
         assert len(recwarn) == 0
+
+    # ── nextLink origin check (never send the bearer token off-host) ────────
+
+    @pytest.mark.parametrize("bad_link", [
+        "http://graph.microsoft.com/v1.0/users/cos@acme.com/messages?$skiptoken=X",
+        "https://evil.example/v1.0/users/cos@acme.com/messages?$skiptoken=X",
+    ])
+    def test_offhost_or_insecure_nextlink_stops_with_warning(self, client, bad_link):
+        # page1 offers a nextLink that is either http:// or on a foreign host;
+        # pagination must STOP after page1, warn, and never follow the link.
+        page1 = {"value": [{"id": "m1"}, {"id": "m2"}], "@odata.nextLink": bad_link}
+        page2 = {"value": [{"id": "m3"}]}  # must never be requested
+        calls = _patch_request_sequence(client, [page1, page2])
+        with pytest.warns(UserWarning, match="refusing to follow"):
+            out = client.mail_search("is:unread", max_results=10)
+        assert [m["id"] for m in out] == ["m1", "m2"]   # page-1 items only
+        assert len(calls) == 1                          # page2 never fetched
+
+    def test_valid_graph_nextlink_is_followed(self, client):
+        # A well-formed https graph.microsoft.com nextLink IS followed.
+        page1 = {"value": [{"id": "m1"}], "@odata.nextLink": ABS_NEXT}
+        page2 = {"value": [{"id": "m2"}]}
+        calls = _patch_request_sequence(client, [page1, page2])
+        out = client.mail_search("is:unread", max_results=10)
+        assert [m["id"] for m in out] == ["m1", "m2"]
+        assert calls[1][1] == ABS_NEXT
 
 
 # ── (3) 401 token-refresh retry ────────────────────────────────────────
