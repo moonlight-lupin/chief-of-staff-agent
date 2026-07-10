@@ -260,6 +260,29 @@ def _stringify(value: object, limit: int = 6000) -> str:
     return text[:limit]
 
 
+def _preferred_text(value: object, limit: int = 4000) -> str:
+    """Extract human-facing text fields before falling back to raw JSON."""
+    wanted = {"summary", "subject", "title", "reason", "snippet", "body", "text", "notes", "description"}
+    parts: list[str] = []
+
+    def walk(obj: object) -> None:
+        if len(" ".join(parts)) >= limit:
+            return
+        if isinstance(obj, dict):
+            for key, item in obj.items():
+                if str(key).lower() in wanted and isinstance(item, (str, int, float)):
+                    parts.append(str(item))
+                elif isinstance(item, (dict, list)):
+                    walk(item)
+        elif isinstance(obj, list):
+            for item in obj[:20]:
+                walk(item)
+
+    walk(value)
+    text = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    return text[:limit]
+
+
 def _clean_name(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip(" \t\r\n<>.,;:()[]{}'\"")
     return value[:120]
@@ -401,6 +424,7 @@ def _candidate(
 
 def _extract_email_candidates(item: dict[str, object], source_label: str) -> list[dict[str, object]]:
     text = _stringify(item)
+    summary_text = _preferred_text(item) or text
     sid = _source_id(source_label, item)
     candidates: list[dict[str, object]] = []
     seen_emails: set[str] = set()
@@ -414,11 +438,12 @@ def _extract_email_candidates(item: dict[str, object], source_label: str) -> lis
         aliases = [email]
         if sender_match:
             display_name = _clean_name(sender_match.group(1))
+            display_name = _clean_name(re.sub(r"(?i)^.*\b(?:from|to|cc|by)\s+", "", display_name))
             aliases.append(_title_from_email(email))
         candidates.append(_candidate(
             "person",
             display_name,
-            _record_summary("person", display_name, source_label, text),
+            _record_summary("person", display_name, source_label, summary_text),
             [sid, email],
             0.65,
             aliases=aliases,
@@ -439,7 +464,7 @@ def _extract_email_candidates(item: dict[str, object], source_label: str) -> lis
 
 
 def _extract_project_candidates(item: dict[str, object], source_label: str) -> list[dict[str, object]]:
-    text = _stringify(item)
+    text = _preferred_text(item) or _stringify(item)
     sid = _source_id(source_label, item)
     candidates: list[dict[str, object]] = []
     patterns = [
@@ -466,7 +491,7 @@ def _extract_project_candidates(item: dict[str, object], source_label: str) -> l
 
 
 def _extract_decision_question_candidates(item: dict[str, object], source_label: str) -> list[dict[str, object]]:
-    text = _stringify(item, limit=3000)
+    text = _preferred_text(item) or _stringify(item, limit=3000)
     sid = _source_id(source_label, item)
     candidates: list[dict[str, object]] = []
     sentences = re.split(r"(?<=[.!?])\s+|\\n+", text)

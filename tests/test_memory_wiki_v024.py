@@ -93,7 +93,7 @@ class TestMemorySystem:
         from event_store import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
-                      payload={"from": "jane@abc-legal.com", "subject": "UK PBSA project update"})
+                      payload={"from": "contact@example.com", "subject": "Project alpha update"})
         ingest_event(config, source="gmail", source_id="msg-002",
                       event_type="email_received",
                       payload={"from": "vendor@stripe.com", "subject": "Invoice for project"})
@@ -122,7 +122,7 @@ class TestMemorySystem:
         from event_store import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
-                      payload={"from": "jane@abc-legal.com", "subject": "Test"})
+                      payload={"from": "contact@example.com", "subject": "Test"})
 
         import memory
         buf = io.StringIO()
@@ -279,7 +279,7 @@ class TestWikiCurator:
         from event_store import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
-                      payload={"from": "jane@abc-legal.com", "subject": "UK PBSA update"})
+                      payload={"from": "contact@example.com", "subject": "Project alpha update"})
 
         import wiki_curator
         buf = io.StringIO()
@@ -340,7 +340,7 @@ class TestWikiCurator:
         from event_store import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
-                      payload={"from": "jane@abc-legal.com", "subject": "Test"})
+                      payload={"from": "contact@example.com", "subject": "Test"})
 
         import wiki_curator
         buf = io.StringIO()

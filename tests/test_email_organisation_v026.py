@@ -63,7 +63,7 @@ SAMPLE_LABELS = [
     {"id": "Label_6", "name": "Admin/Travel", "type": "user", "messageCount": 5},
     {"id": "Label_7", "name": "Misc/Old", "type": "user", "messageCount": 2},
     {"id": "Label_8", "name": "Newsletter", "type": "user", "messageCount": 30},
-    {"id": "Label_9", "name": "Projects/UK PBSA", "type": "user", "messageCount": 7},
+    {"id": "Label_9", "name": "Projects/Zephyr", "type": "user", "messageCount": 7},
 ]
 
 
@@ -214,8 +214,8 @@ class TestPolicyProposal:
         parsed = parse_labels(SAMPLE_LABELS)
         policy = generate_policy(parsed, provider="google_api")
         unmapped_names = [u["name"] for u in policy["unmapped_labels"]]
-        # Projects/UK PBSA has no keyword match
-        assert "Projects/UK PBSA" in unmapped_names
+        # Projects/Zephyr has no keyword match
+        assert "Projects/Zephyr" in unmapped_names
 
 
 # ─── Policy Save/Show ─────────────────────────────────────────
