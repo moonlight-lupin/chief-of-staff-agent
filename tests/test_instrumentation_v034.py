@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
@@ -371,6 +372,55 @@ class TestSecretLeak:
         assert "supersecret-token-XYZ" not in raw
         assert "topsecret-payload-ABC" not in raw
         assert "fake-token" not in raw  # the acquired bearer never logged either
+
+
+# ── (l) transport exceptions & error_class outage mapping ───────────────
+
+class TestTransportFailures:
+    def test_readtimeout_emits_network_failure_and_reraises(self, run):
+        """A transport exception is captured as provider_request_failed
+        (error_class=network + exception_type) on disk, then re-raised."""
+        client = make_client(run.config, [])
+        client._send = MagicMock(side_effect=requests.ReadTimeout("read timed out"))
+        with pytest.raises(requests.ReadTimeout):
+            client._request("GET", "/users/cos@acme.com/messages", operation="mail_read")
+
+        failed = events_named(run.run_dir, "provider_request_failed")
+        assert len(failed) == 1
+        f = failed[0]
+        assert f["error_class"] == "network"
+        assert f["exception_type"] == "ReadTimeout"
+        assert isinstance(f["duration_ms"], int)
+        assert f["attempt"] == 1
+        assert f.get("message")  # str(exc)[:200]
+
+    def test_503_read_maps_to_provider_unavailable(self, run):
+        """A 503 outage on a read maps to error_class provider_unavailable
+        (NOT throttled — that would misdiagnose an outage as rate-limiting)."""
+        from providers.m365_graph import MAX_RETRIES
+        client = make_client(run.config, [FakeResp(503) for _ in range(MAX_RETRIES + 1)])
+        out = client.mail_search("is:unread")  # idempotent GET: retries then warn+[]
+        assert out == []
+        failed = events_named(run.run_dir, "provider_request_failed")
+        assert failed
+        assert failed[-1]["status_code"] == 503
+        assert failed[-1]["error_class"] == "provider_unavailable"
+
+    def test_network_timeout_rule_fires_on_real_emitted_event(self, run):
+        """Drive the provider so a REAL provider_request_failed lands, then let
+        the analyser diagnose the run dir — no hand-built synthetic event."""
+        import log_analyser as la
+        client = make_client(run.config, [])
+        client._send = MagicMock(side_effect=requests.ConnectTimeout("connect timed out"))
+        out = client.mail_search("is:unread")  # swallows exc, but emits the event
+        assert out == []
+
+        failed = events_named(run.run_dir, "provider_request_failed")
+        assert failed and failed[0]["error_class"] == "network"
+
+        result = la.analyse_run(run.run_dir)
+        ids = [f["id"] for f in result["findings"]]
+        assert "network_timeout" in ids
 
 
 # ── (k) no active run: every instrumented path is a safe no-op ──────────

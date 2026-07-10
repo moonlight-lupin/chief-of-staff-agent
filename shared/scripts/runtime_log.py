@@ -44,6 +44,44 @@ Run context (run id, command, level, quiet) is held in ``contextvars`` so
 nested/threaded calls resolve correctly within a process. The environment
 variable ``CHIEF_OF_STAFF_RUN_ID`` is used *only* to propagate the active run
 id to child processes so their events append to the same run.
+
+Run ownership (who writes ``summary.json``)
+-------------------------------------------
+Exactly one context OWNS a run: the one that CREATED the run directory (the
+first :func:`init_run` with no ``CHIEF_OF_STAFF_RUN_ID`` set). It sets the env
+var, emits ``run_started``, and on :func:`finish_run` writes ``summary.json``
+and clears the env var it set.
+
+Any later :func:`init_run` that sees ``CHIEF_OF_STAFF_RUN_ID`` already set is a
+JOINER — cross-process (a child process) OR same-process nested. A joiner only
+appends events; its :func:`finish_run` emits a ``child_completed`` (outcome
+success/degraded) or ``child_failed`` event carrying its own local observed
+counters, NEVER writes/overwrites ``summary.json``, and restores the PREVIOUS
+context (contextvars are stacked, so a nested parent becomes active again after
+its child finishes). This prevents a joiner from clobbering the owner's summary.
+
+Observed vs emitted counters (outcome is level-independent)
+-----------------------------------------------------------
+Every :func:`log_event` call increments an **observed** severity counter
+(``ctx.counts``) REGARDLESS of the active log level. The level threshold is
+applied only to what is **emitted** (written to ``events.jsonl`` / console).
+Run outcome (success/degraded/failed) therefore derives from OBSERVED
+warnings/errors and cannot be flipped to "success" merely by raising
+``--log-level`` above the noise (a below-threshold warning still counts).
+
+Because below-threshold events never reach ``events.jsonl``, from-file counting
+alone is insufficient. The owner's ``summary.json`` counts are computed as, per
+level::
+
+    max(count in events.jsonl,
+        owner observed count + sum of children's reported observed counts)
+
+The from-file term captures every process's emitted events (children append to
+the same file); the observed term captures below-threshold events the owner (and
+its reporting children, via the ``counts`` field on ``child_*`` events) saw but
+did not emit. ``first_error`` and ``warnings[]`` are read from ``events.jsonl``
+(the cross-process source of truth), falling back to the owner's in-memory
+(already-scrubbed) values when the file recorded none.
 """
 
 from __future__ import annotations
@@ -114,6 +152,9 @@ class _RunContext:
         "first_error",
         "warnings",
         "owns_env",
+        "joined",
+        "token",
+        "prev",
     )
 
     def __init__(
@@ -124,6 +165,7 @@ class _RunContext:
         quiet: bool,
         run_dir: Path | None,
         owns_env: bool,
+        joined: bool,
     ) -> None:
         self.run_id = run_id
         self.command = command
@@ -131,10 +173,18 @@ class _RunContext:
         self.quiet = quiet
         self.run_dir = run_dir
         self.started_at = _now_iso()
+        # OBSERVED severity counters — incremented on EVERY log_event call,
+        # regardless of the level threshold (see module docstring).
         self.counts: dict[str, int] = {"error": 0, "warning": 0, "info": 0, "debug": 0}
         self.first_error: str | None = None
         self.warnings: list[str] = []
         self.owns_env = owns_env
+        # joined == True => this context JOINED an existing run (it is not the
+        # owner); its finish_run must not write summary.json nor clear the env.
+        self.joined = joined
+        # contextvars restore handle + previous context (nested-join safe).
+        self.token: Any = None
+        self.prev: _RunContext | None = None
 
 
 _CURRENT: contextvars.ContextVar[_RunContext | None] = contextvars.ContextVar(
@@ -251,6 +301,19 @@ def _redact_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def redact(obj: Any) -> Any:
+    """Return a redacted deep copy of an arbitrary JSON-able structure.
+
+    Applies the same scrubbing used for event fields to any nested
+    dict/list/str: sensitive keys (authorization/token/secret/password/cookie…)
+    become ``[redacted]``, dump-only keys (body/payload/content/snippet/…) are
+    dropped, and free strings have Bearer tokens / JWTs / ``key=secret`` pairs
+    scrubbed. Non-container leaves are returned unchanged. Used to sanitise
+    bundle payloads (diagnosis/readiness/meta) before they are archived.
+    """
+    return _redact_value(obj)
+
+
 def _redact_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     """Redact caller-supplied structured fields, dropping reserved/forbidden keys."""
 
@@ -339,6 +402,8 @@ def init_run(
     joined_id = os.getenv(RUN_ID_ENV)
 
     if joined_id:
+        # JOINER: an existing run id is already set (cross-process OR same-process
+        # nested). Append-only; the owner keeps sole responsibility for summary.
         run_dir = (project_root / ".runs" / joined_id) if project_root else None
         ctx = _RunContext(
             run_id=joined_id,
@@ -347,8 +412,10 @@ def init_run(
             quiet=bool(quiet),
             run_dir=run_dir,
             owns_env=False,
+            joined=True,
         )
-        _CURRENT.set(ctx)
+        ctx.prev = _CURRENT.get()
+        ctx.token = _CURRENT.set(ctx)
         return joined_id
 
     run_id = _new_run_id()
@@ -374,8 +441,10 @@ def init_run(
         quiet=bool(quiet),
         run_dir=run_dir,
         owns_env=owns_env,
+        joined=False,
     )
-    _CURRENT.set(ctx)
+    ctx.prev = _CURRENT.get()
+    ctx.token = _CURRENT.set(ctx)
 
     log_event("run_started", level="info", component="runtime", command_line=str(command))
     return run_id
@@ -388,26 +457,49 @@ def log_event(
     component: str | None = None,
     **fields: Any,
 ) -> None:
-    """Append one structured event. No-ops (aside from console) when no run is active.
+    """Append one structured event. A no-op when no run is active.
 
+    When no run context exists this returns immediately — no file, no console
+    (a stray event with no owning run would be orphaned/misleading). Console-only
+    mode is reserved for the case where :func:`init_run` DID create a context but
+    ``project_root`` was unresolvable (``ctx.run_dir is None``): there the event
+    is still shown on the console but never written to disk.
+
+    Observed severity counters are incremented on EVERY call regardless of the
+    active level; only what is emitted (disk/console) is threshold-filtered.
     Every string value is redacted and forbidden keys are dropped. This function
     never raises into the caller.
     """
 
     ctx = _CURRENT.get()
+    # Finding: no active run -> silent no-op (no file, no console).
+    if ctx is None:
+        return
+
     norm_level = _normalize_level(level, default="info")
     event_num = _LEVELS[norm_level]
 
-    # Determine threshold: active run's level, else default INFO.
-    threshold = _level_num(ctx.level) if ctx is not None else _LEVELS["info"]
+    # OBSERVED counters: incremented for EVERY call, regardless of threshold, so
+    # run outcome derivation sees below-threshold warnings/errors too. first_error
+    # and warnings[] track observed values (scrubbed) for the summary fallback.
+    ctx.counts[norm_level] = ctx.counts.get(norm_level, 0) + 1
+    _msg = fields.get("message")
+    msg_text = _scrub_string(str(_msg)) if _msg is not None else str(event)
+    if norm_level == "error" and ctx.first_error is None:
+        ctx.first_error = msg_text
+    if norm_level == "warning" and len(ctx.warnings) < 10:
+        ctx.warnings.append(msg_text)
+
+    # EMITTED events are threshold-filtered: below the active level -> not written.
+    threshold = _level_num(ctx.level)
     if event_num < threshold:
         return
 
     record: dict[str, Any] = {
         "timestamp": _now_iso(),
         "level": norm_level,
-        "run_id": ctx.run_id if ctx is not None else None,
-        "command": ctx.command if ctx is not None else None,
+        "run_id": ctx.run_id,
+        "command": ctx.command,
         "component": component,
         "event": str(event),
     }
@@ -415,30 +507,59 @@ def log_event(
     # Drop keys whose value is None for a compact schema.
     record = {k: v for k, v in record.items() if v is not None}
 
-    if ctx is not None:
-        ctx.counts[norm_level] = ctx.counts.get(norm_level, 0) + 1
-        msg = record.get("message")
-        msg_text = str(msg) if msg is not None else str(event)
-        if norm_level == "error" and ctx.first_error is None:
-            ctx.first_error = msg_text
-        if norm_level == "warning" and len(ctx.warnings) < 10:
-            ctx.warnings.append(msg_text)
-        if ctx.run_dir is not None:
-            _write_event_line(ctx.run_dir, record)
-        if not ctx.quiet:
-            _emit_console(record)
-    else:
-        # No active run: still print to console at the default threshold.
+    if ctx.run_dir is not None:
+        _write_event_line(ctx.run_dir, record)
+    if not ctx.quiet:
         _emit_console(record)
 
 
-def finish_run(outcome: str = "success", **summary_fields: Any) -> None:
-    """Finish the active run: emit completion event and write ``summary.json``.
+def _restore_context(ctx: _RunContext) -> None:
+    """Restore the context that was active before ``ctx`` (nested-join safe)."""
+    try:
+        if ctx.token is not None:
+            _CURRENT.reset(ctx.token)
+            return
+    except Exception:
+        pass
+    _CURRENT.set(getattr(ctx, "prev", None))
 
-    ``outcome`` is one of ``"success"``, ``"degraded"``, ``"failed"``. When it is
-    ``"failed"`` a ``run_failed`` event is emitted, otherwise ``run_completed``.
-    Clears the run context (and unsets ``CHIEF_OF_STAFF_RUN_ID`` if this process
-    set it). Never raises into the caller.
+
+def _read_events_for_summary(run_dir: Path | None) -> list[dict[str, Any]]:
+    """Parse ``events.jsonl`` (the cross-process source of truth). Never raises."""
+    events: list[dict[str, Any]] = []
+    if run_dir is None:
+        return events
+    try:
+        text = (run_dir / "events.jsonl").read_text(encoding="utf-8")
+    except Exception:
+        return events
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events
+
+
+def finish_run(outcome: str = "success", **summary_fields: Any) -> None:
+    """Finish the active run and restore the previous context.
+
+    ``outcome`` is one of ``"success"``, ``"degraded"``, ``"failed"``.
+
+    OWNER (created the run dir): emits ``run_completed``/``run_failed``, computes
+    final counts/first_error/warnings by reading ``events.jsonl`` merged with its
+    observed counters (see module docstring), writes ``summary.json`` exactly
+    once, and clears ``CHIEF_OF_STAFF_RUN_ID`` if it set it.
+
+    JOINER (joined an existing run): emits ``child_completed`` (success/degraded)
+    or ``child_failed`` carrying its own observed counters, writes NO summary, and
+    does NOT clear the env var. In both cases the previous context is restored.
+    Never raises into the caller.
     """
 
     ctx = _CURRENT.get()
@@ -449,8 +570,56 @@ def finish_run(outcome: str = "success", **summary_fields: Any) -> None:
     if outcome_str not in {"success", "degraded", "failed"}:
         outcome_str = "success"
 
+    # ── JOINER: child event only, never touch summary/env; restore parent ──
+    if ctx.joined:
+        if outcome_str == "failed":
+            log_event(
+                "child_failed", level="error", component="runtime",
+                outcome=outcome_str, counts=dict(ctx.counts),
+                first_error=ctx.first_error,
+            )
+        else:
+            log_event(
+                "child_completed", level="info", component="runtime",
+                outcome=outcome_str, counts=dict(ctx.counts),
+            )
+        _restore_context(ctx)
+        return
+
+    # ── OWNER: completion event, then summary from events.jsonl + observed ──
     event_name = "run_failed" if outcome_str == "failed" else "run_completed"
     log_event(event_name, level="info", component="runtime", outcome=outcome_str)
+
+    file_events = _read_events_for_summary(ctx.run_dir)
+    file_counts = {"error": 0, "warning": 0, "info": 0, "debug": 0}
+    child_counts = {"error": 0, "warning": 0, "info": 0, "debug": 0}
+    file_first_error: str | None = None
+    file_warnings: list[str] = []
+    for e in file_events:
+        lvl = e.get("level")
+        if lvl in file_counts:
+            file_counts[lvl] += 1
+        if lvl == "error" and file_first_error is None:
+            file_first_error = str(e.get("message") or e.get("event") or "")
+        if lvl == "warning" and len(file_warnings) < 10:
+            file_warnings.append(str(e.get("message") or e.get("event") or ""))
+        if e.get("event") in ("child_completed", "child_failed"):
+            cc = e.get("counts")
+            if isinstance(cc, Mapping):
+                for k in child_counts:
+                    try:
+                        child_counts[k] += int(cc.get(k, 0) or 0)
+                    except (TypeError, ValueError):
+                        pass
+
+    # Merge: from-file (all processes' emitted) vs observed (owner + children,
+    # which also see below-threshold events). Truthful either way.
+    counts = {
+        k: max(file_counts[k], int(ctx.counts.get(k, 0) or 0) + child_counts[k])
+        for k in ("error", "warning", "info", "debug")
+    }
+    first_error = file_first_error if file_first_error is not None else ctx.first_error
+    warnings_list = file_warnings if file_warnings else list(ctx.warnings[:10])
 
     finished_at = _now_iso()
     summary = {
@@ -459,9 +628,9 @@ def finish_run(outcome: str = "success", **summary_fields: Any) -> None:
         "started_at": ctx.started_at,
         "finished_at": finished_at,
         "outcome": outcome_str,
-        "counts": dict(ctx.counts),
-        "first_error": ctx.first_error,
-        "warnings": list(ctx.warnings[:10]),
+        "counts": counts,
+        "first_error": first_error,
+        "warnings": warnings_list[:10],
     }
     for key, value in _redact_fields(summary_fields).items():
         summary[key] = value
@@ -484,7 +653,7 @@ def finish_run(outcome: str = "success", **summary_fields: Any) -> None:
         except Exception:
             pass
 
-    _CURRENT.set(None)
+    _restore_context(ctx)
 
 
 def current_run_id() -> str | None:
@@ -581,6 +750,7 @@ def add_cli_args(parser: argparse.ArgumentParser) -> None:
 
 __all__ = [
     "REDACTED",
+    "redact",
     "init_run",
     "log_event",
     "finish_run",

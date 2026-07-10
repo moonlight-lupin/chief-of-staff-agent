@@ -1656,14 +1656,33 @@ def _humanize_age(ts: datetime) -> str:
     return f"{hours // 24}d"
 
 
-def _resolve_run_dir(config: Any, run_id: str) -> Path | None:
+def _resolve_run_dir(config: Any, run_id: str) -> tuple[Path | None, str | None]:
+    """Safely resolve a user-supplied run id to its directory.
+
+    The ONE shared gate for ``logs show / diagnose / bundle``. Returns
+    ``(run_dir, None)`` on success or ``(None, error_message)`` on rejection.
+    A run id is accepted only when it matches ``_RUN_ID_RE`` AND its path resolves
+    to a DIRECT child of the runs directory — this rejects ``../x``, absolute
+    paths, and slash-embedded ids (path-traversal containment). A well-formed but
+    absent run yields a plain "Run not found" message.
+    """
+    if not run_id or not _RUN_ID_RE.fullmatch(str(run_id)):
+        return None, (
+            f"Invalid run id: {run_id!r} — must match YYYYMMDDTHHMMSSZ-<6hex> "
+            "(no path separators or traversal)"
+        )
     runs = _runs_dir(config)
     if runs is None:
-        return None
+        return None, "Run not found: project root unresolved (no runs directory)"
     candidate = runs / run_id
-    if candidate.is_dir():
-        return candidate
-    return None
+    try:
+        if candidate.resolve().parent != runs.resolve():
+            return None, f"Invalid run id: {run_id!r} — resolves outside the runs directory"
+    except Exception:
+        return None, f"Invalid run id: {run_id!r}"
+    if not candidate.is_dir():
+        return None, f"Run not found: {run_id}"
+    return candidate, None
 
 
 def _latest_failed_run(config: Any) -> tuple[str, Path] | None:
@@ -1727,9 +1746,9 @@ def cmd_logs_show(args: argparse.Namespace) -> int:
     if not run_id:
         print("logs show requires --run-id", file=sys.stderr)
         return 1
-    run_dir = _resolve_run_dir(config, run_id)
+    run_dir, err = _resolve_run_dir(config, run_id)
     if run_dir is None:
-        print(f"Run not found: {run_id}", file=sys.stderr)
+        print(err, file=sys.stderr)
         return 1
     events: list[dict[str, Any]] = []
     events_path = run_dir / "events.jsonl"
@@ -1795,9 +1814,9 @@ def cmd_logs_diagnose(args: argparse.Namespace) -> int:
         if not run_id:
             print("logs diagnose requires --run-id or --latest-failed", file=sys.stderr)
             return 1
-        run_dir = _resolve_run_dir(config, run_id)
+        run_dir, err = _resolve_run_dir(config, run_id)
         if run_dir is None:
-            print(f"Run not found: {run_id}", file=sys.stderr)
+            print(err, file=sys.stderr)
             return 1
 
     result = log_analyser.analyse_run(run_dir)
@@ -1894,9 +1913,9 @@ def cmd_logs_bundle(args: argparse.Namespace) -> int:
         if not run_id:
             print("logs bundle requires --run-id or --latest-failed", file=sys.stderr)
             return 1
-        run_dir = _resolve_run_dir(config, run_id)
+        run_dir, err = _resolve_run_dir(config, run_id)
         if run_dir is None:
-            print(f"Run not found: {run_id}", file=sys.stderr)
+            print(err, file=sys.stderr)
             return 1
 
     output = Path(getattr(args, "output", None) or "cos-support.zip")
@@ -1915,14 +1934,24 @@ def cmd_logs_bundle(args: argparse.Namespace) -> int:
     else:
         members["summary.json"] = "{}"
 
+    # Redact every generated payload before archiving. events.jsonl/summary.json
+    # are already redacted at write time and config_shape.json is types-only;
+    # diagnosis/readiness/meta are freshly built here and may echo config or
+    # error text, so scrub them through the public runtime_log.redact() helper.
+    if runtime_log is not None and hasattr(runtime_log, "redact"):
+        _redact = runtime_log.redact
+    else:
+        def _redact(obj: Any) -> Any:
+            return obj
+
     if log_analyser is not None:
         diagnosis = log_analyser.analyse_run(run_dir)
     else:
         diagnosis = {"error": "log_analyser unavailable"}
-    members["diagnosis.json"] = _json_dump(diagnosis)
+    members["diagnosis.json"] = _json_dump(_redact(diagnosis))
 
-    members["readiness.json"] = _json_dump(_build_readiness_json(config, config_path))
-    members["meta.json"] = _json_dump(_bundle_meta(config))
+    members["readiness.json"] = _json_dump(_redact(_build_readiness_json(config, config_path)))
+    members["meta.json"] = _json_dump(_redact(_bundle_meta(config)))
     members["config_shape.json"] = _json_dump(
         _config_shape(config) if isinstance(config, Mapping) else {"available": False}
     )

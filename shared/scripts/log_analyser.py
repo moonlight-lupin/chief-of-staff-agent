@@ -255,11 +255,13 @@ def _m_onedrive_not_provisioned(events, summary):
 
 
 def _m_throttled(events, summary):
+    # Genuine client rate-limiting only: HTTP 429 or an explicit "throttled"
+    # error_class. A 503/504 outage (error_class "provider_unavailable") must NOT
+    # match here — it is handled by _m_provider_unavailable.
     out: list[str] = []
     for e in events:
-        if e.get("event") == "provider_retry" or e.get("error_class") == "throttled" or _status(e) == 429:
-            if e.get("event") in {"provider_retry", "provider_request_failed", "provider_request_completed", "provider_request_started"}:
-                out.append(_describe(e))
+        if _status(e) == 429 or e.get("error_class") == "throttled":
+            out.append(_describe(e))
     return out
 
 
@@ -283,7 +285,7 @@ def _m_network_timeout(events, summary):
 def _m_provider_unavailable(events, summary):
     out: list[str] = []
     for e in _failed_events(events):
-        if _status(e) in (503, 504):
+        if _status(e) in (503, 504) or e.get("error_class") == "provider_unavailable":
             method = str(e.get("method", "")).upper()
             cat = str(e.get("endpoint_category", "")).lower()
             # Idempotent paths: GET / HEAD or a read endpoint category.
@@ -385,9 +387,15 @@ CLASSIFICATIONS: list[dict[str, Any]] = [
         "severity": "error",
         "matcher": _m_invalid_credentials,
         "explanation": "The provider rejected the credentials themselves (e.g. an expired client secret or invalid client) — a refresh will not fix this.",
-        "remediation": "Rotate the credential / client secret and reconnect the workspace, then verify authentication.",
+        "remediation": (
+            "Rotate the credential / client secret (update the secret env var), "
+            "reconnect the workspace, then verify authentication. Check current "
+            "status, reconnect, and re-verify with the commands below."
+        ),
         "next_commands": [
-            "python shared/scripts/connect_workspace.py --reconnect",
+            "python shared/scripts/connect_workspace.py --status",
+            "python shared/scripts/connect_workspace.py --provider m365 --connect-m365",
+            "python shared/scripts/connect_workspace.py --provider m365 --verify",
             "python shared/scripts/chief_of_staff.py readiness --summary",
         ],
         "retry_safe": False,
@@ -398,9 +406,15 @@ CLASSIFICATIONS: list[dict[str, Any]] = [
         "severity": "error",
         "matcher": _m_auth_expired,
         "explanation": "The access token was expired or rejected (HTTP 401) and a token refresh is indicated before the operation can succeed.",
-        "remediation": "Refresh/reconnect the workspace credentials, then re-run the operation.",
+        "remediation": (
+            "Re-run the operation: the next token request re-authenticates "
+            "automatically (for device_code auth this triggers an interactive "
+            "sign-in). If it keeps failing, check status and re-verify the "
+            "connection with the commands below."
+        ),
         "next_commands": [
-            "python shared/scripts/connect_workspace.py --reconnect",
+            "python shared/scripts/connect_workspace.py --status",
+            "python shared/scripts/connect_workspace.py --provider m365 --verify",
             "python shared/scripts/chief_of_staff.py readiness --summary",
         ],
         "retry_safe": True,

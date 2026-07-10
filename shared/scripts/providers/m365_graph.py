@@ -226,7 +226,9 @@ def _error_class_from_status(status: int | None, code: str | None = None) -> str
     if status == 404:
         return "not_found"
     if status in (503, 504):
-        return "throttled"
+        # A 503/504 is a server-side OUTAGE, not client rate-limiting; mislabelling
+        # it "throttled" produces misleading rate-limit diagnoses for real outages.
+        return "provider_unavailable"
     if status is not None and status >= 500:
         return "network"
     return "other"
@@ -562,10 +564,29 @@ class M365GraphClient(WorkspaceClient):
             if headers:
                 hdrs.update(headers)
             _start = time.monotonic()
-            resp = self._send(
-                method, url, params=params, json=json_body, data=content,
-                headers=hdrs, timeout=timeout,
-            )
+            # Wrap the raw transport so requests.Timeout / ConnectionError / TLS
+            # errors surface a provider_request_failed (error_class=network) event
+            # before they propagate — otherwise the analyser's network_timeout rule
+            # could never fire on the real path. Behaviour is unchanged: the
+            # exception is re-raised exactly as before (reads warn+[]; guarded
+            # writes → audited failure).
+            try:
+                resp = self._send(
+                    method, url, params=params, json=json_body, data=content,
+                    headers=hdrs, timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                duration_ms = int((time.monotonic() - _start) * 1000)
+                _log_event(
+                    "provider_request_failed",
+                    level="warning" if degrade else "error", component="m365",
+                    provider=provider, operation=op, method=m,
+                    endpoint_category=category, duration_ms=duration_ms,
+                    attempt=attempt, error_class="network",
+                    exception_type=type(exc).__name__,
+                    message=str(exc)[:200],
+                )
+                raise
             duration_ms = int((time.monotonic() - _start) * 1000)
             status = resp.status_code
 

@@ -12,7 +12,7 @@ import io
 import json
 import sys
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -301,6 +301,86 @@ class TestBundle:
         rc, out = _run(config_path, "logs", "bundle", "--latest-failed", "--output", str(out_zip))
         assert rc == 0
         assert out_zip.exists()
+
+
+# ─── run-id path containment ─────────────────────────────────
+
+
+class TestRunIdContainment:
+    """`../foo`, absolute paths, and slash-embedded ids must be rejected for
+    show/diagnose/bundle — never resolved against .runs/ with a bare isdir check."""
+
+    BAD_IDS = [
+        "../evil",
+        "/etc/passwd",
+        "foo/bar",
+        "20260101T100000Z-abc123/../../secret",
+        "20260101T100000Z-abc123/x",
+    ]
+
+    @pytest.mark.parametrize("sub", ["show", "diagnose", "bundle"])
+    @pytest.mark.parametrize("bad", BAD_IDS)
+    def test_malicious_run_id_rejected(self, temp_project, tmp_path, sub, bad):
+        _, _project, config_path = temp_project
+        args = ["logs", sub, "--run-id", bad]
+        if sub == "bundle":
+            args += ["--output", str(tmp_path / "out.zip")]
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc, _out = _run(config_path, *args)
+        assert rc == 1
+        assert "Invalid run id" in err.getvalue()
+
+
+# ─── bundle payload redaction ────────────────────────────────
+
+
+class TestBundleRedaction:
+    def test_all_generated_payloads_are_redacted(self, temp_project, tmp_path, monkeypatch):
+        _, project, config_path = temp_project
+        rid = "20260101T100000Z-b0b0b0"
+        _fab_run(project, rid, [
+            {"event": "provider_request_failed", "status_code": 403,
+             "error_class": "permission_denied", "message": "denied"},
+        ], {"run_id": rid, "command": "chief_of_staff daily", "outcome": "failed"})
+
+        JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.abcDEF123_-realsignature"
+        BEARER_SECRET = "sk-live-TOPSECRET-xyz"
+        KV_SECRET = "csx-do-not-leak"
+
+        import chief_of_staff
+        # Fabricate diagnosis/readiness/meta content carrying a Bearer token,
+        # a client_secret=... pair, and a JWT — all must be scrubbed before zip.
+        monkeypatch.setattr(
+            chief_of_staff.log_analyser, "analyse_run",
+            lambda run_dir: {
+                "run_id": rid, "primary": None, "findings": [
+                    {"id": "auth", "evidence": [
+                        f"request used Bearer {BEARER_SECRET} and client_secret={KV_SECRET}"]}],
+                "raw_token": JWT,
+            },
+        )
+        monkeypatch.setattr(
+            chief_of_staff, "_build_readiness_json",
+            lambda config, config_path: {
+                "rows": [{"detail": f"auth header Bearer {BEARER_SECRET}"}],
+                "jwt": JWT, "kv": f"client_secret={KV_SECRET}",
+            },
+        )
+        monkeypatch.setattr(
+            chief_of_staff, "_bundle_meta",
+            lambda config: {"provider": "m365",
+                            "note": f"Bearer {BEARER_SECRET} {JWT} client_secret={KV_SECRET}"},
+        )
+
+        out_zip = tmp_path / "cos-support.zip"
+        rc, _out = _run(config_path, "logs", "bundle", "--run-id", rid, "--output", str(out_zip))
+        assert rc == 0
+
+        zf = zipfile.ZipFile(out_zip)
+        blob = b"".join(zf.read(name) for name in zf.namelist())
+        for needle in (JWT, BEARER_SECRET, KV_SECRET):
+            assert needle.encode() not in blob, f"leaked {needle!r} into the bundle"
 
 
 # ─── readiness pointer ───────────────────────────────────────

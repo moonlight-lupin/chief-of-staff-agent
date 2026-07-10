@@ -7,6 +7,7 @@ primary-finding ordering (error beats warning), a clean run (no findings),
 and the human-format section layout.
 """
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -276,3 +277,60 @@ def test_next_commands_substitute_run_id(tmp_path):
     joined = " ".join(result["primary"]["next_commands"])
     assert "<run-id>" not in joined
     assert "20260101T120000Z-abc123" in joined
+
+
+# ─── Structural: remediation commands must reference REAL flags ──────────────
+
+
+def _iter_static_next_commands():
+    for c in la.CLASSIFICATIONS:
+        for cmd in c["next_commands"]:
+            yield c["id"], cmd
+
+
+def test_static_next_commands_use_real_flags():
+    """Every static next_command that targets connect_workspace.py or
+    chief_of_staff.py must parse cleanly against that script's REAL argparse
+    parser. This FAILS if anyone re-adds a nonexistent flag (e.g. --reconnect)
+    to the classification table.
+
+    Mechanism: import each module, obtain its build_parser(), split the command
+    with shlex, locate the script token, and feed the argv tail to
+    parse_known_args — asserting no SystemExit and no unrecognized ("extra")
+    arguments.
+    """
+    import chief_of_staff
+    import connect_workspace
+
+    parsers = {
+        "connect_workspace.py": connect_workspace.build_parser(),
+        "chief_of_staff.py": chief_of_staff.build_parser(),
+    }
+
+    checked = 0
+    for cls_id, cmd in _iter_static_next_commands():
+        tokens = shlex.split(cmd)
+        target = idx = None
+        for i, tok in enumerate(tokens):
+            base = tok.rsplit("/", 1)[-1]
+            if base in parsers:
+                target, idx = base, i
+                break
+        if target is None:
+            continue  # a script whose parser we do not introspect (doctor, etc.)
+        tail = tokens[idx + 1:]
+        try:
+            _ns, extras = parsers[target].parse_known_args(tail)
+        except SystemExit as exc:  # argparse rejected the arguments
+            pytest.fail(f"{cls_id}: {cmd!r} rejected by {target} (SystemExit {exc.code})")
+        assert not extras, f"{cls_id}: {cmd!r} has unrecognized args {extras} for {target}"
+        checked += 1
+
+    assert checked >= 4  # we really did validate connect/chief commands
+
+
+def test_structural_check_would_catch_a_bogus_flag():
+    """Guard the guard: an invented flag surfaces as an unrecognized arg."""
+    import connect_workspace
+    _ns, extras = connect_workspace.build_parser().parse_known_args(["--reconnect"])
+    assert "--reconnect" in extras

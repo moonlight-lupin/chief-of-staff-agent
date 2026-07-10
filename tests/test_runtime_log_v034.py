@@ -292,13 +292,28 @@ def test_log_event_never_raises_on_unwritable_dir(project, monkeypatch):
     rl.finish_run("failed")
 
 
-def test_log_event_no_active_run_no_raise():
-    # No init_run; log_event should quietly print to console and not raise.
+def test_log_event_no_active_run_is_silent(project):
+    # No init_run: log_event is a SILENT no-op — no stderr, no file, no raise.
     buf = io.StringIO()
     with redirect_stderr(buf):
         rl.log_event("orphan", level="warning", component="x")
-    assert "orphan" in buf.getvalue()
+        rl.log_event("orphan_err", level="error", component="x", message="boom")
+    assert buf.getvalue() == ""  # nothing on the console
     assert rl.current_run_id() is None
+    # No run directory or events file materialised anywhere.
+    assert list((project / ".runs").glob("**/events.jsonl")) == []
+
+
+def test_console_only_survives_when_ctx_but_no_run_dir():
+    # Console-only mode is reserved for the case where init_run DID create a
+    # context but project_root was unresolvable (ctx.run_dir is None).
+    bad_cfg = {"paths": {}}
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        rl.init_run("cmd", bad_cfg)
+        rl.log_event("shown", level="warning", component="x")
+        rl.finish_run("degraded")
+    assert "shown" in buf.getvalue()  # console still emits
 
 
 # ─── secret-leak prevention ──────────────────────────────────────────────────
@@ -475,6 +490,98 @@ def test_sequential_runs_do_not_bleed(project):
     assert all(e["run_id"] == id2 for e in e2)
     assert {e["event"] for e in e1} == {"run_started", "a", "run_completed"}
     assert {e["event"] for e in e2} == {"run_started", "b", "run_completed"}
+
+
+# ─── observed vs emitted counters (outcome level-independence) ───────────────
+
+
+def test_outcome_independent_of_log_level(project):
+    # At level=error, warnings are NOT emitted to disk, but they are OBSERVED,
+    # so the run's warning count is non-zero and the outcome can be degraded.
+    run_id = rl.init_run("cmd", _config(project), level="error")
+    rl.log_event("w1", level="warning", component="x", message="be careful")
+    rl.log_event("w2", level="warning", component="x")
+    ctx = rl._CURRENT.get()
+    assert ctx.counts["warning"] >= 2  # observed regardless of the error threshold
+    rl.finish_run("degraded")
+
+    run_dir = project / ".runs" / run_id
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["outcome"] == "degraded"
+    assert summary["counts"]["warning"] >= 2  # observed warnings in the summary
+    # events.jsonl contains NO warning events (they were below the threshold);
+    # at error level with only warnings, nothing is emitted at all.
+    events_path = run_dir / "events.jsonl"
+    if events_path.exists():
+        assert not any(e.get("level") == "warning" for e in _read_events(run_dir))
+
+
+# ─── ownership model: only the owner writes summary; joiners restore ─────────
+
+
+def test_nested_same_process_join_restores_parent(project):
+    parent_id = rl.init_run("parent", _config(project))
+    # Nested join: env var already set by the parent -> this is a JOINER.
+    child_id = rl.init_run("child", _config(project))
+    assert child_id == parent_id
+    rl.log_event("in_child", level="info", component="c")
+    rl.finish_run("success")  # child finish -> child_completed, restores parent
+
+    # Parent context is active again.
+    assert rl.current_run_id() == parent_id
+    rl.log_event("after_child", level="info", component="p")
+    rl.finish_run("success")  # owner finish
+
+    run_dir = project / ".runs" / parent_id
+    events = _read_events(run_dir)
+    kinds = [e["event"] for e in events]
+    assert "child_completed" in kinds  # joiner emitted a child event, not run_completed twice
+    assert kinds.count("run_completed") == 1  # only the owner completes the run
+    after = next(e for e in events if e["event"] == "after_child")
+    assert after["run_id"] == parent_id and after["command"] == "parent"
+
+
+def test_child_finish_does_not_write_summary(project):
+    parent_id = rl.init_run("parent", _config(project))
+    rl.init_run("child", _config(project))  # joiner
+    rl.finish_run("failed")  # child finish must NOT write/overwrite summary
+    run_dir = project / ".runs" / parent_id
+    assert not (run_dir / "summary.json").exists()  # owner hasn't finished yet
+    rl.finish_run("success")  # owner finish writes it exactly once
+    assert (run_dir / "summary.json").exists()
+
+
+def test_cross_process_join_counts_include_child(project):
+    # Owner (this "process") starts the run.
+    owner_id = rl.init_run("owner", _config(project))
+    rl.log_event("owner_evt", level="info", component="o")
+    owner_ctx = rl._CURRENT.get()
+
+    # Simulate a SEPARATE child process: a fresh contextvar (no live context) but
+    # the inherited CHIEF_OF_STAFF_RUN_ID env var, so init_run joins by env.
+    rl._CURRENT.set(None)
+    assert os.environ[rl.RUN_ID_ENV] == owner_id
+    child_id = rl.init_run("child", _config(project))
+    assert child_id == owner_id
+    rl.log_event("child_error", level="error", component="c", message="child boom")
+    rl.finish_run("failed")  # child_failed, no summary, does NOT clear env
+    assert os.environ.get(rl.RUN_ID_ENV) == owner_id  # child is not the owner
+
+    run_dir = project / ".runs" / owner_id
+    # Child summary was never written by the child.
+    assert not (run_dir / "summary.json").exists()
+
+    # Owner process resumes and finishes.
+    rl._CURRENT.set(owner_ctx)
+    rl.finish_run("success")
+
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["counts"]["error"] >= 1  # includes the child's error (from file)
+    events = _read_events(run_dir)
+    assert any(e["event"] == "child_failed" for e in events)  # child_failed recorded
+    assert any(e["event"] == "child_error" for e in events)   # child events in parent file
+    # Exactly one summary, env cleared only by the owner.
+    assert rl.RUN_ID_ENV not in os.environ
 
 
 def test_add_cli_args():
