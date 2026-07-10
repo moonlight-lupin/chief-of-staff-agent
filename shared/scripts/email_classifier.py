@@ -513,3 +513,135 @@ def list_pending_org(config: Any) -> list[dict[str, Any]]:
     from pending_actions import list_pending_actions
     actions = list_pending_actions(config)
     return [a for a in actions if a.get("payload", {}).get("source") == "email_organisation"]
+
+
+# ─── Email Organisation Digest ────────────────────────────────
+
+def render_email_org_digest(config: Any) -> dict[str, Any]:
+    """Render a structured email organisation digest.
+
+    Read-only: summarises classifications, suggestions, and pending actions.
+    Never mutates Gmail.
+
+    Returns:
+    {
+        "total_classified": int,
+        "with_category": int,
+        "unmapped": int,
+        "by_category": {category: count},
+        "label_suggestions": int,
+        "archive_suggestions": int,
+        "create_label_suggestions": int,
+        "total_suggestions": int,
+        "pending_actions": int,
+        "text": str  # human-readable
+    }
+    """
+    # Load classifications
+    cls_data = _load_json(_classifications_path(config))
+    classifications = list(cls_data["items"].values())
+
+    # Load suggestions
+    sug_data = _load_json(_org_suggestions_path(config))
+    suggestions = list(sug_data["items"].values())
+
+    # Load pending org actions
+    pending = list_pending_org(config)
+
+    # Stats
+    total_cls = len(classifications)
+    with_cat = [c for c in classifications if c.get("category")]
+    unmapped = [c for c in classifications if not c.get("category")]
+
+    by_category: dict[str, int] = {}
+    for c in with_cat:
+        cat = c["category"]
+        by_category[cat] = by_category.get(cat, 0) + 1
+
+    suggested = [s for s in suggestions if s.get("state") == "suggested"]
+    label_sugs = [s for s in suggested if s.get("action_type") == "gmail.label"]
+    archive_sugs = [s for s in suggested if s.get("action_type") == "gmail.archive"]
+    create_label_sugs = [s for s in suggested if s.get("action_type") == "gmail.create_label"]
+
+    pending_count = len(pending)
+
+    # Build text
+    lines = [
+        f"📬 Email Organisation Digest",
+        f"",
+        f"Classified: {total_cls}",
+        f"With category: {len(with_cat)}",
+        f"Unmapped: {len(unmapped)}",
+    ]
+
+    if by_category:
+        lines.append("")
+        lines.append("By category:")
+        for cat, count in sorted(by_category.items(), key=lambda x: -x[1]):
+            lines.append(f"  {cat}: {count}")
+
+    lines.extend([
+        f"",
+        f"Suggestions:",
+        f"  Label: {len(label_sugs)}",
+        f"  Archive: {len(archive_sugs)}",
+        f"  Create label: {len(create_label_sugs)}",
+        f"  Total pending: {pending_count}",
+    ])
+
+    if label_sugs:
+        lines.append("")
+        lines.append("Label suggestions:")
+        for s in label_sugs[:5]:
+            conf = f"{s['confidence']:.0%}" if s.get("confidence") else "?"
+            lines.append(f"  🟢 {s['title']} ({conf})")
+        if len(label_sugs) > 5:
+            lines.append(f"  … {len(label_sugs) - 5} more")
+
+    if archive_sugs:
+        lines.append("")
+        lines.append("Archive candidates:")
+        for s in archive_sugs[:5]:
+            conf = f"{s['confidence']:.0%}" if s.get("confidence") else "?"
+            lines.append(f"  🔴 {s['title']} ({conf})")
+
+    if create_label_sugs:
+        lines.append("")
+        lines.append("New label proposals:")
+        for s in create_label_sugs:
+            lines.append(f"  🟡 {s['title']}")
+
+    lines.append("")
+    lines.append("No Gmail changes were made.")
+
+    return {
+        "total_classified": total_cls,
+        "with_category": len(with_cat),
+        "unmapped": len(unmapped),
+        "by_category": by_category,
+        "label_suggestions": len(label_sugs),
+        "archive_suggestions": len(archive_sugs),
+        "create_label_suggestions": len(create_label_sugs),
+        "total_suggestions": len(suggested),
+        "pending_actions": pending_count,
+        "text": "\n".join(lines),
+    }
+
+
+def email_org_status_for_briefing(config: Any) -> dict[str, Any]:
+    """Compact email organisation status for daily briefing integration.
+
+    Read-only summary suitable for inclusion in daily briefing.
+    Never mutates Gmail.
+    """
+    digest = render_email_org_digest(config)
+    return {
+        "classified": digest["total_classified"],
+        "with_category": digest["with_category"],
+        "unmapped": digest["unmapped"],
+        "suggestions": digest["total_suggestions"],
+        "label_suggestions": digest["label_suggestions"],
+        "archive_suggestions": digest["archive_suggestions"],
+        "create_label_suggestions": digest["create_label_suggestions"],
+        "pending_actions": digest["pending_actions"],
+    }

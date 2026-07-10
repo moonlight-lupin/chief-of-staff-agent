@@ -35,7 +35,7 @@ except Exception as exc:  # pragma: no cover
     )
     raise SystemExit(2)
 
-SOURCE_NAMES = ["gmail", "calendar", "deadlines", "pipeline", "todos", "invoices"]
+SOURCE_NAMES = ["gmail", "calendar", "deadlines", "pipeline", "todos", "invoices", "email_org"]
 
 
 def today() -> str:
@@ -285,6 +285,26 @@ def build_urgent(sources: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return urgent
 
 
+def collect_email_org(config: Any, project_root: Path) -> list[dict[str, Any]]:
+    """Collect email organisation status — read-only, never mutates Gmail."""
+    try:
+        from email_classifier import email_org_status_for_briefing
+    except ImportError:
+        return []
+    status = email_org_status_for_briefing(config)
+    # Return as a list with a single summary item
+    return [{
+        "classified": status.get("classified", 0),
+        "with_category": status.get("with_category", 0),
+        "unmapped": status.get("unmapped", 0),
+        "suggestions": status.get("suggestions", 0),
+        "label_suggestions": status.get("label_suggestions", 0),
+        "archive_suggestions": status.get("archive_suggestions", 0),
+        "create_label_suggestions": status.get("create_label_suggestions", 0),
+        "pending_actions": status.get("pending_actions", 0),
+    }]
+
+
 def collect(config_path: str | None) -> dict[str, Any]:
     if config_path:
         os.environ["CHIEF_OF_STAFF_CONFIG"] = config_path
@@ -301,6 +321,7 @@ def collect(config_path: str | None) -> dict[str, Any]:
         "pipeline": collect_pipeline,
         "todos": collect_todos,
         "invoices": collect_invoices,
+        "email_org": collect_email_org,
     }
     sources = {name: wrap_source(name, collectors[name], config, root) for name in SOURCE_NAMES}
     last = last_run("daily-briefing")
@@ -364,6 +385,18 @@ def render(briefing: dict[str, Any]) -> str:
     lines.extend(render_source("Todos", "✅", sources["todos"], lambda i: f"{i.get('title')} [{i.get('priority')}] due {i.get('due') or 'none'}"))
     lines.append("")
     lines.extend(render_source("Invoices", "💰", sources["invoices"], lambda i: f"{i.get('kind')} {i.get('id', '')} {i.get('currency', '')} {i.get('amount', '')}"))
+    lines.append("")
+    # Email organisation — read-only summary
+    email_org = sources.get("email_org", {})
+    if email_org.get("status") == "ok":
+        org_items = email_org.get("items", [])
+        if org_items:
+            org = org_items[0]
+            lines.append(f"📬 Email Organisation: {org.get('classified', 0)} classified, {org.get('with_category', 0)} with category, {org.get('suggestions', 0)} suggestions, {org.get('pending_actions', 0)} pending")
+        else:
+            lines.append("📬 Email Organisation: no data")
+    else:
+        lines.append(f"📬 Email Organisation: {email_org.get('status', 'unknown')}")
     return "\n".join(lines)
 
 

@@ -431,6 +431,94 @@ def cmd_dismiss_suggestion(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─── v0.1.28: Digest and Notification Commands ──────────────
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    """Render email organisation digest — read-only, no mutations."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from email_classifier import render_email_org_digest
+    digest = render_email_org_digest(cfg)
+    if args.summary:
+        print(digest["text"])
+    else:
+        print_json(digest)
+    return 0
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Deliver email organisation digest via a channel.
+
+    CLI channel: prints digest to stdout.
+    Email channel: creates a pending action (NOT auto-sent) for operator approval.
+
+    Notification CANNOT approve, execute, or auto-send.
+    """
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+
+    from email_classifier import render_email_org_digest
+    digest = render_email_org_digest(cfg)
+
+    if digest["total_classified"] == 0:
+        if args.summary:
+            print("No email classifications to digest. Run 'classify-inbox' first.")
+        else:
+            print_json({"delivered": False, "reason": "no_classifications"})
+        return 0
+
+    if args.channel == "cli":
+        if args.summary:
+            print(digest["text"])
+        else:
+            print_json(digest)
+        return 0
+
+    elif args.channel == "email":
+        if not args.to:
+            print("--to is required for email channel", file=sys.stderr)
+            return 1
+        from pending_actions import create_pending_action
+        from workspace_client import get_workspace_client
+        from workspace_capabilities import require_capability
+        client = get_workspace_client(cfg)
+        unsupported = require_capability(client, "gmail.send", target=args.to)
+        if unsupported:
+            if args.summary:
+                print(f"❌ gmail.send not supported by {client.provider_name}")
+            else:
+                print_json({"delivered": False, "error": "gmail.send not supported"})
+            return 1
+        action = create_pending_action(
+            config=cfg,
+            action_type="gmail.send",
+            provider=client.provider_name,
+            target=args.to,
+            payload={
+                "to": args.to,
+                "subject": args.subject,
+                "body": digest["text"],
+                "cc": None,
+                "source": "email_org_digest",
+            },
+            summary=f"Email org digest to {args.to} ({digest['total_classified']} classified)",
+        )
+        if args.summary:
+            print(f"📋 Digest email prepared ({digest['total_classified']} classified)")
+            print(f"   Approve with: send_email.py approve --action-id {action['id'] if action else '?'}")
+        else:
+            print_json({
+                "delivered": False,  # not yet delivered — pending approval
+                "pending_action_id": action["id"] if action else None,
+                "message": "Pending action created — approve to send",
+            })
+        return 0
+
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Email organisation — onboarding, classification, suggestions")
     parser.add_argument("--config", help="Path to company.yaml")
@@ -474,6 +562,15 @@ def build_parser() -> argparse.ArgumentParser:
     dismiss_sug.add_argument("--suggestion-id", required=True)
     dismiss_sug.add_argument("--reason", help="Dismissal reason")
 
+    # v0.1.28 commands
+    sub.add_parser("digest", help="Render email organisation digest")
+
+    notify = sub.add_parser("notify", help="Deliver email organisation digest via channel")
+    notify.add_argument("--channel", required=True, choices=["cli", "email"],
+                        help="Delivery channel")
+    notify.add_argument("--to", help="Email recipient (for email channel)")
+    notify.add_argument("--subject", default="Chief-of-Staff: Email Organisation Digest")
+
     return parser
 
 
@@ -505,6 +602,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_pending(args)
         elif args.command == "dismiss":
             return cmd_dismiss_suggestion(args)
+        elif args.command == "digest":
+            return cmd_digest(args)
+        elif args.command == "notify":
+            return cmd_notify(args)
         else:
             parser.error("unknown command")
             return 2
