@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chief-of-Staff top-level entrypoint (v0.3.1).
+"""Chief-of-Staff top-level entrypoint (v0.3.2).
 
 READ-ONLY orchestration layer for the daily operating loop and subsystem
 summaries. This module must NEVER approve, execute, send, write, or mutate
@@ -33,7 +33,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1222,7 +1222,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chief_of_staff.py",
         description=(
-            "Chief-of-Staff v0.3.1 — read-only daily operating loop and subsystem summaries. "
+            "Chief-of-Staff v0.3.2 — read-only daily operating loop and subsystem summaries. "
             "Never approves, executes, or mutates state."
         ),
     )

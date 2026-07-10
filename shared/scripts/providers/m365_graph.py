@@ -34,6 +34,49 @@ failure ActionResult.  Read methods (mail_search, calendar_list, files_search,
 mail_list_tags) follow the Google provider's pattern: warn + return ``[]`` on
 failure.
 
+Operational behaviour (Tier 1 hardening):
+  * **Method-aware throttle backoff.**  :meth:`_request` retries a request up to
+    ``MAX_RETRIES`` (3) times, but the policy depends on both the status and the
+    HTTP method (see :data:`IDEMPOTENT_METHODS`):
+      - ``429`` retries for ALL methods (Graph documents a throttled request as
+        NOT processed, so a retry cannot duplicate a write).
+      - ``503`` / ``504`` auto-retry ONLY idempotent methods
+        (``GET`` / ``PUT`` / ``DELETE``).  A ``504`` is ambiguous — the upstream
+        may have completed a ``POST``/``PATCH`` write (sendMail, draft, event,
+        move, category) even though the gateway timed out — so those methods are
+        NOT retried; :meth:`_request` raises a ``RuntimeError`` carrying the
+        status and verify-first guidance instead (guarded writes surface this as
+        an audited-failure ActionResult, which is the desired UX).
+      - ``401`` still retries once for all methods after a token refresh.
+    **Retry-After is honoured, never shortened.**  A valid ``Retry-After`` (delta
+    seconds, or an HTTP-date parsed to seconds-from-now) that is
+    ``<= RETRY_MAX_WAIT_S`` (30) is slept in FULL and retried; one that EXCEEDS
+    the 30s budget is DEFERRED — :meth:`_request` raises rather than sleep a
+    shortened wait and keep counting against the throttle limit.  When the header
+    is absent or invalid (non-numeric/non-date, negative, NaN, or infinite) the
+    wait falls back to exponential ``1s / 2s / 4s``; only that fallback is capped
+    at ``RETRY_MAX_WAIT_S``.  Sleeping goes through the injectable ``self._sleep``
+    so tests never actually block.  The raw HTTP call lives below
+    :meth:`_request` in :meth:`_send` (the monkeypatch seam for retry tests);
+    once the retry budget is exhausted the request behaves exactly like any other
+    non-2xx (reads warn + ``[]``, guarded writes → audited failure).
+  * **Pagination.**  The list/read methods follow ``@odata.nextLink`` (an
+    ABSOLUTE Graph URL, passed through verbatim — never re-prefixed with
+    ``base_url``) until the collection is exhausted, the caller's
+    ``max_results`` is reached (mail_search / files_search), or an internal cap
+    is hit.  calendar_list / mail_list_tags cap at ``MAX_ITEMS`` (500); no read
+    follows more than ``MAX_PAGES`` (10) links.  ``$top`` is still sent on the
+    first request, sized to what is needed.  Stopping at a cap while a nextLink
+    remains is never silent — it emits a ``warnings.warn`` naming the cap.  Each
+    ``@odata.nextLink`` is origin-checked before it is followed: it must be
+    ``https`` and its host must equal the configured Graph host, else pagination
+    stops with a warning (the bearer token is never sent off-host).
+  * **Token-refresh retry.**  On a ``401`` :meth:`_request` clears the cached
+    token (``self._token = None``), re-acquires via :meth:`_get_token`, and
+    retries the request ONCE.  A second ``401`` fails as before.  This refresh
+    is independent of the throttle-retry budget above (a 401 refresh does not
+    consume a throttle retry, and vice-versa).
+
 Immutable ids:
   Every Graph request sent through :meth:`_request` carries the
   ``Prefer: IdType="ImmutableId"`` header.  By default Graph message ids CHANGE
@@ -56,10 +99,15 @@ Provider differences vs Google/Composio:
 """
 from __future__ import annotations
 
+import math
 import sys
+import time
 import warnings
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import requests
 
@@ -73,6 +121,37 @@ from query_compiler import compile_query
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 DEFAULT_SCOPE = ["https://graph.microsoft.com/.default"]
+
+# ── Operational hardening constants (Tier 1) ──────────────────────────────
+# Method-aware throttle backoff (see _request):
+#   * 429   -> retry ALL methods (Graph documents a throttled request as NOT
+#              processed), subject to the Retry-After rules below.
+#   * 503/504 -> auto-retry ONLY idempotent methods (GET/PUT/DELETE). A 504 is
+#              ambiguous — the upstream may have completed the write even though
+#              the gateway timed out — so POST/PATCH are NOT retried; they raise
+#              with verify-first guidance instead.
+# Retry-After is honoured, never shortened: a valid header <= RETRY_MAX_WAIT_S is
+# slept in FULL and retried; a valid header > RETRY_MAX_WAIT_S is DEFERRED (raise,
+# never sleep a shortened wait). Only the exponential fallback (used when the
+# header is absent/invalid) is capped at RETRY_MAX_WAIT_S.
+RETRYABLE_STATUS = (429, 503, 504)
+MAX_RETRIES = 3
+RETRY_MAX_WAIT_S = 30
+# HTTP methods that are safe to auto-retry on an ambiguous 503/504: PUT (upload)
+# and DELETE are idempotent by HTTP semantics; POST and PATCH are not.
+IDEMPOTENT_METHODS = frozenset({"GET", "PUT", "DELETE"})
+# Surfaced when a non-idempotent write (POST/PATCH) hits an ambiguous 503/504:
+# the gateway timed out but the upstream may already have applied the write.
+AMBIGUOUS_WRITE_GUIDANCE = (
+    "The request may have completed, but confirmation was not received. "
+    "Do not retry automatically; verify the external system first."
+)
+# Pagination safety caps (follow @odata.nextLink). max_results-bearing reads
+# stop at the caller's max_results; the internal reads (calendar_list,
+# mail_list_tags) stop at MAX_ITEMS. No read follows more than MAX_PAGES links.
+# Hitting a cap while a nextLink remains is never silent — it warns.
+MAX_PAGES = 10
+MAX_ITEMS = 500
 DEVICE_SCOPE = [
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Calendars.ReadWrite",
@@ -132,6 +211,9 @@ class M365GraphClient(WorkspaceClient):
 
         self._token: str | None = None
         self._msal_app = None
+        # Injectable so retry/backoff tests don't actually block. Overridden in
+        # tests with a fake that just records the requested wait.
+        self._sleep = time.sleep
 
     # ── User base path ────────────────────────────────────────────────
 
@@ -204,6 +286,82 @@ class M365GraphClient(WorkspaceClient):
             msg = None
         return f"Graph API {resp.status_code}: {msg or (resp.text or '').strip()[:300]}"
 
+    def _send(self, method: str, url: str, **kwargs: Any) -> "requests.Response":
+        """Lowest HTTP seam: the single raw ``requests.request`` call.
+
+        Kept as its own method so the throttle/refresh retry loop in
+        :meth:`_request` can drive it, and so retry tests can monkeypatch
+        ``self._send`` with a scripted sequence of canned responses while the
+        OLD tests that patch ``requests.request`` (via this call) or patch
+        ``_request`` wholesale continue to work unchanged.
+        """
+        return requests.request(method, url, **kwargs)
+
+    @staticmethod
+    def _parse_retry_after(resp: "requests.Response") -> float | None:
+        """Parse and sanitize the ``Retry-After`` response header.
+
+        Returns the server-requested wait in seconds (finite, ``>= 0``) when the
+        header is present and VALID; returns ``None`` when the header is absent
+        or INVALID, signalling the caller to fall back to exponential backoff.
+
+        Accepted forms:
+          * delta-seconds — an integer/float number of seconds; and
+          * HTTP-date (RFC 7231) — parsed via
+            :func:`email.utils.parsedate_to_datetime` and converted to
+            seconds-from-now, clamped to ``>= 0`` (a date already in the past
+            means "retry now").
+
+        Treated as INVALID (→ ``None`` → exponential fallback): a value that is
+        neither numeric nor a parseable HTTP-date, a NEGATIVE delta-seconds, or a
+        NaN/infinite value.  We never sleep a NaN/negative wait, and we never
+        shorten a valid wait here — the ``> RETRY_MAX_WAIT_S`` defer decision is
+        made by the caller so it can raise instead of retry.
+        """
+        headers = getattr(resp, "headers", None) or {}
+        raw = headers.get("Retry-After")
+        if raw is None:
+            return None
+        # Prefer the delta-seconds form.
+        parsed: float | None
+        try:
+            parsed = float(raw)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None:
+            # Numeric: reject NaN/inf and negative deltas (→ fallback).
+            if not math.isfinite(parsed) or parsed < 0:
+                return None
+            return parsed
+        # Not numeric: try the HTTP-date form.
+        try:
+            dt = parsedate_to_datetime(str(raw))
+        except (TypeError, ValueError):
+            dt = None
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = (dt - datetime.now(timezone.utc)).total_seconds()
+        if not math.isfinite(delta):
+            return None
+        return max(0.0, delta)
+
+    def _is_same_graph_origin(self, url: str) -> bool:
+        """True iff ``url`` is https and its host equals the configured Graph
+        host (parsed from ``self.base_url``).
+
+        Used to gate ``@odata.nextLink`` following so the bearer token is never
+        sent off-host (or over cleartext http).
+        """
+        try:
+            target = urlparse(url)
+            base = urlparse(self.base_url)
+        except (ValueError, TypeError):
+            return False
+        return target.scheme == "https" and bool(target.hostname) and \
+            target.hostname == base.hostname
+
     def _request(
         self,
         method: str,
@@ -217,35 +375,150 @@ class M365GraphClient(WorkspaceClient):
         timeout: int = 30,
     ) -> Any:
         """Perform one Graph request. Returns parsed JSON dict (or raw bytes if
-        ``raw=True``). Raises RuntimeError on non-2xx responses."""
-        token = self._get_token()
-        url = f"{self.base_url}{path}"
-        # Prefer immutable ids on EVERY Graph request. By default Graph message
-        # ids change when a message moves folders (archive/trash), which would
-        # break the generic restore flow that restores by the original target id.
-        # Requesting IdType="ImmutableId" makes ids stable across moves so a
-        # persisted id/restore_target still resolves after archive/trash.
-        hdrs = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "Prefer": 'IdType="ImmutableId"',
-        }
-        if headers:
-            hdrs.update(headers)
-        resp = requests.request(
-            method, url, params=params, json=json_body, data=content,
-            headers=hdrs, timeout=timeout,
-        )
-        if not (200 <= resp.status_code < 300):
-            raise RuntimeError(self._error_message(resp))
-        if raw:
-            return resp.content
-        if resp.status_code == 204 or not (resp.content or b""):
-            return {}
-        try:
-            return resp.json()
-        except ValueError:
-            return {}
+        ``raw=True``). Raises RuntimeError on non-2xx responses.
+
+        Wraps the raw call (:meth:`_send`) with two orthogonal retry policies:
+          * throttle backoff on 429/503/504 (up to ``MAX_RETRIES``), and
+          * a single token-refresh retry on 401.
+        The two budgets are independent — a 401 refresh does not consume a
+        throttle retry. ``path`` may be a relative Graph path (prefixed with
+        ``base_url``) OR an absolute ``https://`` URL (an ``@odata.nextLink``),
+        which is used verbatim.
+        """
+        # nextLink is an absolute URL — do NOT re-prefix base_url.
+        url = path if str(path).startswith("http") else f"{self.base_url}{path}"
+        token_refreshed = False
+        throttle_attempts = 0
+        while True:
+            token = self._get_token()
+            # Prefer immutable ids on EVERY Graph request. By default Graph
+            # message ids change when a message moves folders (archive/trash),
+            # which would break the generic restore flow that restores by the
+            # original target id. Requesting IdType="ImmutableId" makes ids
+            # stable across moves so a persisted id/restore_target still
+            # resolves after archive/trash.
+            hdrs = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "Prefer": 'IdType="ImmutableId"',
+            }
+            if headers:
+                hdrs.update(headers)
+            resp = self._send(
+                method, url, params=params, json=json_body, data=content,
+                headers=hdrs, timeout=timeout,
+            )
+            status = resp.status_code
+
+            # 401: refresh the token once, then retry (independent of throttle).
+            if status == 401 and not token_refreshed:
+                token_refreshed = True
+                self._token = None
+                continue
+
+            # 429 / 503 / 504: method-aware throttle backoff, honouring
+            # Retry-After (never shortened).
+            if status in RETRYABLE_STATUS:
+                is_idempotent = str(method).upper() in IDEMPOTENT_METHODS
+                # 503/504 on a non-idempotent method (POST/PATCH) is AMBIGUOUS —
+                # the write may have completed. Never auto-retry; raise with
+                # verify-first guidance (guarded writes → audited failure).
+                if status in (503, 504) and not is_idempotent:
+                    raise RuntimeError(
+                        f"Graph API {status}: {AMBIGUOUS_WRITE_GUIDANCE}"
+                    )
+                # 429 (any method) and 503/504 (idempotent) are retryable.
+                if throttle_attempts < MAX_RETRIES:
+                    wait = self._parse_retry_after(resp)
+                    if wait is not None:
+                        # Valid Retry-After: honour it in full, or DEFER if it
+                        # exceeds the auto-retry budget (never shorten + retry).
+                        if wait > RETRY_MAX_WAIT_S:
+                            raise RuntimeError(
+                                f"Graph API {status}: Graph requested "
+                                f"Retry-After={wait:g}s which exceeds the "
+                                f"{RETRY_MAX_WAIT_S}s auto-retry budget; "
+                                f"deferred — retry later"
+                            )
+                    else:
+                        # Header absent/invalid: exponential 1s/2s/4s, capped.
+                        wait = min(float(2 ** throttle_attempts),
+                                   float(RETRY_MAX_WAIT_S))
+                    self._sleep(wait)
+                    throttle_attempts += 1
+                    continue
+
+            if not (200 <= status < 300):
+                raise RuntimeError(self._error_message(resp))
+            if raw:
+                return resp.content
+            if status == 204 or not (resp.content or b""):
+                return {}
+            try:
+                return resp.json()
+            except ValueError:
+                return {}
+
+    def _paged_values(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        max_items: int | None,
+        context: str,
+    ) -> list[dict[str, Any]]:
+        """Follow ``@odata.nextLink`` collecting the ``value`` arrays.
+
+        Stops when the collection is exhausted, ``max_items`` is reached, or
+        ``MAX_PAGES`` links have been followed. ``nextLink`` is an absolute URL
+        passed straight to :meth:`_request` (no params) — but only after an
+        origin check (:meth:`_is_same_graph_origin`): a nextLink that is not
+        https on the configured Graph host warns and STOPS pagination so the
+        bearer token is never sent off-host. Hitting a cap while a nextLink
+        still remains warns (never silent truncation). ``context`` names the
+        calling method for the warning text.
+        """
+        items: list[dict[str, Any]] = []
+        next_link: str | None = None
+        for page in range(MAX_PAGES):
+            if next_link:
+                data = self._request(method, next_link)
+            else:
+                data = self._request(method, path, params=params)
+            value = data.get("value", []) if isinstance(data, Mapping) else []
+            items.extend(v for v in value if isinstance(v, Mapping))
+            next_link = data.get("@odata.nextLink") if isinstance(data, Mapping) else None
+
+            # Origin-check the absolute nextLink before following it: it must be
+            # https AND on the configured Graph host, else we would leak the
+            # bearer token off-host/over cleartext. On violation, warn and STOP
+            # (return what we have) — treat it as "no more pages".
+            if next_link and not self._is_same_graph_origin(next_link):
+                warnings.warn(
+                    f"m365 {context}: refusing to follow @odata.nextLink "
+                    f"{next_link!r} — not https on the Graph host; stopping "
+                    f"pagination"
+                )
+                return items[:max_items] if max_items is not None else items
+
+            if max_items is not None and len(items) >= max_items:
+                had_more = bool(next_link) or len(items) > max_items
+                if had_more:
+                    warnings.warn(
+                        f"m365 {context}: truncated at max_results={max_items} "
+                        f"cap; more results were available"
+                    )
+                return items[:max_items]
+            if not next_link:
+                return items
+        # Fell out of the loop => MAX_PAGES followed with a nextLink still set.
+        if next_link:
+            warnings.warn(
+                f"m365 {context}: stopped after MAX_PAGES={MAX_PAGES} pages; "
+                f"more results were available"
+            )
+        return items
 
     # ── Normalisers ───────────────────────────────────────────────────
 
@@ -347,8 +620,10 @@ class M365GraphClient(WorkspaceClient):
                 path = f"{self._user_base()}/mailFolders/{folder}/messages"
             else:
                 path = f"{self._user_base()}/messages"
-            data = self._request("GET", path, params=params)
-            value = data.get("value", []) if isinstance(data, Mapping) else []
+            value = self._paged_values(
+                "GET", path, params=params, max_items=max_results,
+                context="mail_search",
+            )
             return [self._normalize_message(m) for m in value if isinstance(m, Mapping)]
         except Exception as exc:  # noqa: BLE001
             warnings.warn(f"m365 mail_search failed: {exc}")
@@ -358,8 +633,10 @@ class M365GraphClient(WorkspaceClient):
         """List Outlook master categories. Read-only. For m365 the tag id IS the
         category displayName."""
         try:
-            data = self._request("GET", f"{self._user_base()}/outlook/masterCategories")
-            value = data.get("value", []) if isinstance(data, Mapping) else []
+            value = self._paged_values(
+                "GET", f"{self._user_base()}/outlook/masterCategories",
+                max_items=MAX_ITEMS, context="mail_list_tags",
+            )
             out = []
             for c in value:
                 if not isinstance(c, Mapping):
@@ -472,8 +749,10 @@ class M365GraphClient(WorkspaceClient):
             end = f"{end}T23:59:59Z"
         try:
             params = {"startDateTime": start, "endDateTime": end, "$top": 100}
-            data = self._request("GET", f"{self._user_base()}/calendarView", params=params)
-            value = data.get("value", []) if isinstance(data, Mapping) else []
+            value = self._paged_values(
+                "GET", f"{self._user_base()}/calendarView", params=params,
+                max_items=MAX_ITEMS, context="calendar_list",
+            )
             return [self._normalize_event(e) for e in value if isinstance(e, Mapping)]
         except Exception as exc:  # noqa: BLE001
             warnings.warn(f"m365 calendar_list failed: {exc}")
@@ -553,8 +832,10 @@ class M365GraphClient(WorkspaceClient):
         try:
             escaped = str(query).replace("'", "''")
             path = f"{self._user_base()}/drive/root/search(q='{escaped}')"
-            data = self._request("GET", path, params={"$top": max_results})
-            value = data.get("value", []) if isinstance(data, Mapping) else []
+            value = self._paged_values(
+                "GET", path, params={"$top": max_results},
+                max_items=max_results, context="files_search",
+            )
             return [self._normalize_file(f) for f in value if isinstance(f, Mapping)]
         except Exception as exc:  # noqa: BLE001
             warnings.warn(f"m365 files_search failed: {exc}")
