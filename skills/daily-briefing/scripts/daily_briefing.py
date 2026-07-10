@@ -425,12 +425,233 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Collect but do not record delivery or update .last_briefing")
     parser.add_argument("--json", action="store_true", help="Output normalized JSON")
     parser.add_argument("--render", action="store_true", help="Render structured briefing text")
+
+    sub = parser.add_subparsers(dest="command")
+
+    # run subcommand
+    run_p = sub.add_parser("run", help="Generate structured daily briefing")
+    run_p.add_argument("--config", help="Path to company.yaml")
+    run_p.add_argument("--summary", action="store_true", help="Text summary output")
+    run_p.add_argument("--json", action="store_true", help="JSON output")
+    run_p.add_argument("--markdown", action="store_true", help="Markdown output")
+    run_p.add_argument("--since", type=int, default=24, help="Hours to look back for events (default: 24)")
+    run_p.add_argument("--limit", type=int, default=50, help="Max events to include (default: 50)")
+    run_p.add_argument("--dry-run", action="store_true", help="Do not record delivery")
+
+    # notify subcommand
+    notify_p = sub.add_parser("notify", help="Send briefing notification")
+    notify_p.add_argument("--config", help="Path to company.yaml")
+    notify_p.add_argument("--channel", choices=["cli", "email"], default="cli", help="Notification channel")
+    notify_p.add_argument("--to", help="Email recipient (for --channel email)")
+    notify_p.add_argument("--since", type=int, default=24, help="Hours to look back")
+    notify_p.add_argument("--limit", type=int, default=50, help="Max events")
+    notify_p.add_argument("--dry-run", action="store_true", help="Do not record or create pending action")
+
     return parser
+
+
+def _build_structured_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50) -> dict[str, Any]:
+    """Build the structured briefing data shape for v0.2.3."""
+    from datetime import datetime, timezone, timedelta
+
+    config = load_config(config_path)
+    operator = "Operator"
+    if config:
+        company = config.get("company", {})
+        operator = company.get("name", config.get("operator", "Operator"))
+
+    # Collect from briefing_sources (READ-ONLY)
+    try:
+        from briefing_sources import (
+            collect_pending_actions, collect_suggestions,
+            collect_recent_events, collect_email_org_stats, collect_system_health,
+        )
+    except Exception:
+        # Fallback if briefing_sources not available
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "window": f"{since_hours}h",
+            "summary": {"needs_attention": 0, "pending_approvals": 0, "suggestions": 0,
+                        "classified_emails": 0, "system_warnings": 1},
+            "sections": {"needs_attention": [], "pending_approvals": {},
+                         "email_organisation": {}, "calendar_deadlines": [],
+                         "recent_events": [], "suggested_next_actions": [],
+                         "system_health": {"state_files": "missing"}},
+            "safety": {"external_mutations_performed": False,
+                       "approvals_performed": False, "executions_performed": False},
+        }
+
+    pending = collect_pending_actions(config) if config else []
+    suggestions = collect_suggestions(config) if config else []
+    recent_events = collect_recent_events(config, since_hours=since_hours, limit=limit) if config else []
+    email_org = collect_email_org_stats(config) if config else {}
+    sys_health = collect_system_health(config) if config else {}
+
+    # Group pending by risk
+    try:
+        from action_risk import group_actions_by_risk, get_action_risk, get_risk_explanation
+        # action_risk expects "action_type" key; our pending actions use "type"
+        risk_groups = group_actions_by_risk(
+            [{**a, "action_type": a.get("type", "")} for a in pending]
+        )
+    except Exception:
+        risk_groups = {"high": [], "medium": [], "low": []}
+
+    # Build needs attention
+    needs_attention: list[dict[str, Any]] = []
+    for a in pending:
+        if a.get("state") == "requested" or a.get("state") == "pending":
+            risk = get_action_risk(a.get("type", "")) if "get_action_risk" in dir() else "low"
+            needs_attention.append({
+                "title": f"{a.get('type', '?')} — {a.get('summary', '')}",
+                "risk": risk,
+                "why": f"Pending approval: {a.get('type', '?')} action created {a.get('created_at', '?')}",
+            })
+    for s in suggestions:
+        needs_attention.append({
+            "title": f"Suggestion: {s.get('title', s.get('summary', ''))}",
+            "risk": s.get("execution_risk", s.get("risk", "low")),
+            "why": f"Suggested action in state '{s.get('state', '?')}'",
+        })
+
+    # Build suggested next actions
+    next_actions: list[dict[str, Any]] = []
+    for a in pending:
+        if a.get("state") in ("requested", "pending", "approved"):
+            risk = get_action_risk(a.get("type", "")) if "get_action_risk" in dir() else "low"
+            next_actions.append({
+                "title": f"Review: {a.get('type', '?')} — {a.get('summary', '')}",
+                "risk": risk,
+                "why": get_risk_explanation(a.get("type", ""), risk) if "get_risk_explanation" in dir() else "",
+            })
+    for s in suggestions[:5]:
+        next_actions.append({
+            "title": f"Suggestion: {s.get('title', s.get('summary', ''))}",
+            "risk": s.get("execution_risk", s.get("risk", "low")),
+            "why": f"Auto-generated from event {s.get('event_id', '?')}",
+        })
+
+    # Pending approvals grouped
+    pa_grouped: dict[str, list[dict[str, Any]]] = {}
+    for risk_level in ("high", "medium", "low"):
+        pa_grouped[risk_level] = [
+            {"action_id": a.get("id", "?"), "type": a.get("type", "?"),
+             "summary": a.get("summary", ""), "state": a.get("state", "?"),
+             "risk": risk_level, "created_at": a.get("created_at", "")}
+            for a in risk_groups.get(risk_level, [])
+            if a.get("state") in ("requested", "pending", "approved")
+        ]
+
+    # System warnings count
+    sys_warnings = 0
+    if sys_health.get("state_files") == "missing":
+        sys_warnings += 1
+    if not sys_health.get("audit_dir", True):
+        sys_warnings += 1
+    if not sys_health.get("runs_dir", True):
+        sys_warnings += 1
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window": f"{since_hours}h",
+        "operator": operator,
+        "summary": {
+            "needs_attention": len(needs_attention),
+            "pending_approvals": sum(len(v) for v in pa_grouped.values()),
+            "suggestions": len(suggestions),
+            "classified_emails": email_org.get("classified", 0),
+            "system_warnings": sys_warnings,
+        },
+        "sections": {
+            "needs_attention": needs_attention[:20],
+            "pending_approvals": pa_grouped,
+            "email_organisation": email_org,
+            "calendar_deadlines": [],
+            "recent_events": recent_events,
+            "suggested_next_actions": next_actions[:15],
+            "system_health": sys_health,
+        },
+        "safety": {
+            "external_mutations_performed": False,
+            "approvals_performed": False,
+            "executions_performed": False,
+        },
+    }
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Generate structured briefing and output in requested format."""
+    briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit)
+    from briefing_renderer import render
+    if args.json:
+        print(render(briefing, "json"))
+    elif args.markdown:
+        print(render(briefing, "markdown"))
+    else:
+        # --summary or default → text
+        print(render(briefing, "text"))
+    if not args.dry_run:
+        record_success(args.config, briefing, render(briefing, "text"))
+    return 0
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Send briefing notification via CLI or email (pending action only)."""
+    briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit)
+    from briefing_renderer import render
+
+    if args.channel == "cli":
+        print(render(briefing, "text"))
+        return 0
+    elif args.channel == "email":
+        if not args.to:
+            print("Error: --to required for email channel", file=sys.stderr)
+            return 1
+        if args.dry_run:
+            print(f"[DRY-RUN] Would create pending gmail.send to {args.to}")
+            print(render(briefing, "markdown"))
+            return 0
+        # Create a PENDING ACTION only — do NOT auto-send
+        try:
+            from pending_actions import create_pending_action
+            config = load_config(args.config)
+            if not config:
+                print("Error: cannot load config", file=sys.stderr)
+                return 1
+            rendered = render(briefing, "markdown")
+            action = create_pending_action(
+                config=config,
+                action_type="gmail.send",
+                provider="google_api",
+                target=args.to,
+                payload={
+                    "to": args.to,
+                    "subject": f"Daily Briefing — {briefing.get('generated_at', '')[:10]}",
+                    "body": rendered,
+                },
+                summary=f"Email daily briefing to {args.to}",
+            )
+            print(f"✅ Pending action created: {action['id']} (gmail.send to {args.to})")
+            print("   This will NOT auto-send. Approve it to send:")
+            print(f"   python skills/document-preparer/scripts/webhook_events.py approve --action-id {action['id']}")
+            return 0
+        except Exception as exc:
+            print(f"Error creating pending action: {exc}", file=sys.stderr)
+            return 1
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Subcommand dispatch
+    if args.command == "run":
+        return cmd_run(args)
+    elif args.command == "notify":
+        return cmd_notify(args)
+
+    # Legacy mode (no subcommand)
     try:
         briefing = collect(args.config)
         if args.json or args.dry_run and not args.render:
