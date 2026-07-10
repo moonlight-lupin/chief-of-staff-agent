@@ -1,7 +1,7 @@
 name: chief-of-staff
 version: 0.3.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, and backups."
 requires_skills: []
 optional_skills:
