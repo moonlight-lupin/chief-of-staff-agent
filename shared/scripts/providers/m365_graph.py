@@ -277,14 +277,92 @@ class M365GraphClient(WorkspaceClient):
     # ── HTTP (single seam) ────────────────────────────────────────────
 
     @staticmethod
-    def _error_message(resp: "requests.Response") -> str:
+    def _error_body(resp: "requests.Response") -> tuple[str | None, str | None]:
+        """Return ``(message, code)`` parsed from a Graph error payload
+        (``{"error": {"code": ..., "message": ...}}``); ``(None, None)`` when the
+        body is absent or not JSON."""
         try:
             payload = resp.json()
-            err = payload.get("error", {}) if isinstance(payload, Mapping) else {}
-            msg = err.get("message") if isinstance(err, Mapping) else None
         except Exception:
-            msg = None
-        return f"Graph API {resp.status_code}: {msg or (resp.text or '').strip()[:300]}"
+            return None, None
+        err = payload.get("error", {}) if isinstance(payload, Mapping) else {}
+        if not isinstance(err, Mapping):
+            return None, None
+        return err.get("message"), err.get("code")
+
+    @staticmethod
+    def _error_message(resp: "requests.Response") -> str:
+        msg, _ = M365GraphClient._error_body(resp)
+        return f"Graph API {resp.status_code}: {msg or (getattr(resp, 'text', '') or '').strip()[:300]}"
+
+    # ── Permission-specific error diagnosis ───────────────────────────
+    @staticmethod
+    def _permission_hint(
+        status: int,
+        path: str,
+        error_code: str | None,
+        secret_env: str = "M365_CLIENT_SECRET",
+    ) -> str | None:
+        """Map a Graph failure ``(status, request path, Graph error code)`` to an
+        actionable, provider-specific remediation hint, or ``None`` when nothing
+        specific applies.
+
+        Pure and deterministic given its inputs (``path`` matching is
+        case-insensitive substring). ``secret_env`` names the env var that holds
+        the client secret so the 401 hint can point at the right variable.
+
+        On a real Entra tenant the most common failure is a partially-granted or
+        un-consented application permission, so these hints steer the operator to
+        the exact API-permission / admin-consent / provisioning fix. The caller
+        APPENDS the hint to the existing ``Graph API {status}: {message}`` text —
+        it never replaces it.
+        """
+        p = str(path or "").lower()
+        code = str(error_code or "")
+        access_denied = code.lower() == "erroraccessdenied"
+
+        # Calendar: 403 (or ErrorAccessDenied) on calendarView/events.
+        if (status == 403 or access_denied) and ("/calendarview" in p or "/events" in p):
+            return ("hint: Calendars.ReadWrite permission or mailbox calendar "
+                    "access is missing.")
+        # Mail: 403 on the messages / mailFolders surfaces.
+        if status == 403 and ("/messages" in p or "/mailfolders" in p):
+            return ("hint: Mail.Read/Mail.ReadWrite application permission may be "
+                    "missing, or admin consent has not been granted (Entra: App "
+                    "registration → API permissions → Grant admin consent).")
+        # Files: 403 on any OneDrive/drive surface.
+        if status == 403 and "/drive" in p:
+            return ("hint: Files.ReadWrite.All permission may be missing, or "
+                    "OneDrive is not provisioned for this user (the user may need "
+                    "to open OneDrive once).")
+        # User lookup: 404 on a /users/ path (wrong UPN or unreadable user).
+        if status == 404 and "/users/" in p:
+            return ("hint: m365.user_principal may be incorrect, or the app cannot "
+                    "read this user (check the UPN and User.Read.All permission).")
+        # Credentials rejected: a 401 only reaches the raise/warn path AFTER the
+        # single token-refresh retry has already failed (the first 401 is
+        # intercepted and retried in _request), so any 401 seen here is a genuine
+        # credential/consent failure.
+        if status == 401:
+            return ("hint: credentials rejected — check tenant_id/client_id and "
+                    f"that the client secret in {secret_env} is current "
+                    "(secrets expire).")
+        return None
+
+    def _raise_for_status(self, resp: "requests.Response", url: str) -> None:
+        """Raise a ``RuntimeError`` for a non-2xx Graph response, APPENDING a
+        permission-specific remediation hint when one applies.
+
+        The base ``Graph API {status}: {message}`` text is preserved verbatim
+        (many callers/tests assert on it); the hint is only ever appended. Reads
+        that warn+return ``[]`` and guarded writes that convert the exception into
+        an audited-failure ``ActionResult`` both inherit the hint automatically,
+        since they surface this exception's text.
+        """
+        base = self._error_message(resp)
+        _, code = self._error_body(resp)
+        hint = self._permission_hint(resp.status_code, url, code, self.client_secret_env)
+        raise RuntimeError(f"{base} {hint}" if hint else base)
 
     def _send(self, method: str, url: str, **kwargs: Any) -> "requests.Response":
         """Lowest HTTP seam: the single raw ``requests.request`` call.
@@ -449,7 +527,7 @@ class M365GraphClient(WorkspaceClient):
                     continue
 
             if not (200 <= status < 300):
-                raise RuntimeError(self._error_message(resp))
+                self._raise_for_status(resp, url)
             if raw:
                 return resp.content
             if status == 204 or not (resp.content or b""):

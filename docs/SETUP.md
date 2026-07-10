@@ -173,6 +173,69 @@ REST API v1.0 using `requests` directly. Auth uses `msal`.
 - **Upload is simple upload only** (`PUT .../content`), limited to files **< 4 MB**; larger files need an upload session (deferred).
 - **Polling only** — Graph change-notification webhooks are deliberately deferred for this phase.
 
+## Verify your workspace
+
+A single health check is not enough on real tenants: Entra permissions and
+admin consent can be **partially** configured (mail reads fine while OneDrive
+403s, drafts work while categories are blocked). `--verify` probes each
+capability independently and reports `pass` / `fail` / `not_tested` per check.
+
+```bash
+# Read-only verification (safe; no writes)
+python shared/scripts/connect_workspace.py --verify
+
+# Read verification + opt-in non-destructive write smoke checks
+python shared/scripts/connect_workspace.py --verify-writes
+
+# Machine-readable JSON (either mode)
+python shared/scripts/connect_workspace.py --verify --json
+```
+
+`--verify` and `--verify-writes` honour `--provider <name>` to check a specific
+provider, and `--json` to emit the report as JSON (default is the human layout).
+
+Sample output:
+
+```
+Workspace verification — provider: m365
+Read ready:  yes
+Write ready: partial
+
+Authentication
+  ✓ auth — authenticated
+
+Mail
+  ✓ mail_read — 1 result(s)
+  ✓ mail_folder_scoped — 1 result(s)
+  ✓ mail_tags_list — 3 result(s)
+
+Calendar
+  ✓ calendar_read — 2 result(s)
+
+OneDrive/Files
+  ✗ files_read — m365 files_search failed: Graph API 403: Access denied
+
+Writes
+  — mail_draft — verification never sends mail
+  — mail_tag_write — provider does not support mail tag write
+  — files_write — provider does not support files.upload
+  — mail_send — verification never sends mail
+  — calendar_write — verification never creates calendar events
+```
+
+The exit code is `0` when the provider is read-ready (auth + mail read +
+calendar read all pass); for `--verify-writes` it is `0` only if additionally no
+tested write failed. Otherwise it is `1`.
+
+Notes:
+- **`--verify-writes` never sends mail and never creates calendar events.** It
+  creates a draft, applies a tag, and uploads a tiny temp file, then trashes the
+  draft and the file. `mail_send` and `calendar_write` are always reported
+  `not_tested`.
+- **The `CoS-Verify` category/label persists.** The write smoke reuses one
+  category across runs (it is not deleted); only the verification draft and
+  uploaded file are cleaned up.
+
 ## Switching Providers
 
 To switch from Google to Composio (or vice versa), just change `integrations.workspace.provider` in `company.yaml`. The Daily Briefing and all skills that use `WorkspaceClient` will automatically use the new provider.

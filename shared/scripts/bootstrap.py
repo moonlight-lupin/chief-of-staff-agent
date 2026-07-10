@@ -68,6 +68,129 @@ def _merge_preset(args: argparse.Namespace) -> dict[str, Any]:
     return preset
 
 
+WORKSPACE_PROVIDERS = ("google_api", "composio", "m365")
+M365_AUTH_MODES = ("client_credentials", "device_code")
+
+# Placeholder values written when the operator omits an identifier. They mirror
+# the "<...-guid>" style used in company.yaml.example / docs so it is obvious the
+# value must be replaced before the provider will authenticate.
+M365_TENANT_PLACEHOLDER = "<directory-tenant-guid>"
+M365_CLIENT_PLACEHOLDER = "<application-client-guid>"
+COMPOSIO_USER_PLACEHOLDER = "<composio-user-id>"
+
+
+def _validate_provider_args(args: argparse.Namespace) -> str | None:
+    """Return an error message if the chosen provider's flags are inconsistent,
+    else None. m365 + client_credentials REQUIRES a mailbox UPN (the app-only
+    flow operates on /users/{user_principal}/...)."""
+    provider = getattr(args, "workspace_provider", None)
+    if provider == "m365":
+        auth = getattr(args, "m365_auth", None) or "client_credentials"
+        if auth == "client_credentials" and not getattr(args, "user_principal", None):
+            return (
+                "m365 client_credentials auth requires --user-principal "
+                "(the mailbox UPN, e.g. cos@yourtenant.com). Pass it, or use "
+                "--m365-auth device_code for interactive delegated sign-in."
+            )
+    return None
+
+
+def _provider_overlay(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
+    """Build the config overlay for the chosen workspace provider.
+
+    Returns ``(overlay, required_env, notices, next_commands)``:
+      * ``overlay``       — a config fragment deep-merged into company.yaml. It
+        carries the ``integrations.workspace.provider`` block plus the provider's
+        NON-SECRET config section (never a secret value). EMPTY for the default /
+        ``google_api`` path so existing invocations are byte-for-byte unchanged.
+      * ``required_env``  — env var names the operator must still export.
+      * ``notices``       — human-readable notes (e.g. placeholders written).
+      * ``next_commands`` — suggested follow-up commands (doctor + verify).
+    """
+    provider = getattr(args, "workspace_provider", None)
+    overlay: dict[str, Any] = {}
+    required_env: list[str] = []
+    notices: list[str] = []
+    next_commands: list[str] = []
+
+    # Default / google_api: leave integrations untouched (back-compat).
+    if not provider or provider == "google_api":
+        return overlay, required_env, notices, next_commands
+
+    if provider == "composio":
+        user_id = getattr(args, "composio_user_id", None) or COMPOSIO_USER_PLACEHOLDER
+        if user_id == COMPOSIO_USER_PLACEHOLDER:
+            notices.append(
+                f"Wrote placeholder integrations.workspace.user_id={COMPOSIO_USER_PLACEHOLDER}; "
+                "set it to your real Composio user id before connecting."
+            )
+        overlay["integrations"] = {
+            "workspace": {
+                "provider": "composio",
+                "user_id": user_id,
+                "mcp": {
+                    "endpoint": "https://connect.composio.dev/mcp",
+                    "key_env": "COMPOSIO_MCP_KEY",
+                },
+            }
+        }
+        required_env.append("COMPOSIO_MCP_KEY")
+        next_commands = [
+            "python shared/scripts/doctor.py",
+            "python shared/scripts/connect_workspace.py --provider composio --verify",
+        ]
+        return overlay, required_env, notices, next_commands
+
+    if provider == "m365":
+        auth = getattr(args, "m365_auth", None) or "client_credentials"
+        secret_env = getattr(args, "m365_secret_env", None) or "M365_CLIENT_SECRET"
+        tenant_id = getattr(args, "tenant_id", None)
+        client_id = getattr(args, "client_id", None)
+        user_principal = getattr(args, "user_principal", None) or ""
+
+        if not tenant_id:
+            tenant_id = M365_TENANT_PLACEHOLDER
+            notices.append(
+                f"Wrote placeholder m365.tenant_id={M365_TENANT_PLACEHOLDER}; "
+                "replace it with your Entra Directory (tenant) ID."
+            )
+        if not client_id:
+            client_id = M365_CLIENT_PLACEHOLDER
+            notices.append(
+                f"Wrote placeholder m365.client_id={M365_CLIENT_PLACEHOLDER}; "
+                "replace it with your Entra Application (client) ID."
+            )
+
+        m365_block: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "client_id": client_id,
+            "client_secret_env": secret_env,
+            "auth": auth,
+        }
+        if user_principal:
+            m365_block["user_principal"] = user_principal
+
+        overlay["integrations"] = {"workspace": {"provider": "m365"}}
+        overlay["m365"] = m365_block
+
+        if auth == "client_credentials":
+            required_env.append(secret_env)
+        else:
+            notices.append(
+                "device_code auth uses interactive delegated sign-in; no client "
+                "secret env var is required."
+            )
+        next_commands = [
+            "python shared/scripts/doctor.py",
+            "python shared/scripts/connect_workspace.py --provider m365 --verify",
+        ]
+        return overlay, required_env, notices, next_commands
+
+    return overlay, required_env, notices, next_commands
+
+
 def _deep_update(base: dict[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in updates.items():
         if isinstance(value, Mapping) and isinstance(base.get(key), dict):
@@ -159,13 +282,16 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     initial = run_checks(fix=True, config=None)
     copied = _copy_examples()
     preset = _merge_preset(args)
+    overlay, required_env, provider_notices, provider_next = _provider_overlay(args)
+    if overlay:
+        _deep_update(preset, overlay)
     config_path = _write_config(preset)
     config = _load_yaml(config_path)
     root = _project_root(config, config_path)
     stores = _init_stores(root)
     wiki = _init_wiki(config, root)
     final = run_checks(fix=True, config=str(config_path))
-    return {
+    result: dict[str, Any] = {
         "config": str(config_path),
         "project_root": str(root),
         "copied_examples": copied,
@@ -180,6 +306,15 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
             "Test briefing by loading the chief-of-staff:daily-briefing skill.",
         ],
     }
+    # Only surface provider metadata when a non-default provider is chosen, so a
+    # default (google) invocation's JSON/text output stays byte-compatible.
+    provider = getattr(args, "workspace_provider", None)
+    if provider and provider != "google_api":
+        result["workspace_provider"] = provider
+        result["required_env"] = required_env
+        result["provider_notices"] = provider_notices
+        result["provider_next_commands"] = provider_next
+    return result
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -191,7 +326,34 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--business-type", help="Business type for wiki seed")
     parser.add_argument("--config", help="Preset YAML to merge non-interactively")
     parser.add_argument("--json", action="store_true", help="Print JSON summary")
+    # Provider-aware workspace bootstrap. Omitting --workspace-provider preserves
+    # the historical behaviour exactly (no integrations block is rewritten).
+    parser.add_argument(
+        "--workspace-provider", choices=WORKSPACE_PROVIDERS,
+        help="Workspace backend to configure (default: leave integrations unchanged)",
+    )
+    parser.add_argument(
+        "--m365-auth", choices=M365_AUTH_MODES, default="client_credentials",
+        help="M365 auth mode (default: client_credentials)",
+    )
+    parser.add_argument("--tenant-id", help="M365 Entra Directory (tenant) ID")
+    parser.add_argument("--client-id", help="M365 Entra Application (client) ID")
+    parser.add_argument(
+        "--user-principal",
+        help="M365 mailbox UPN (required for m365 client_credentials)",
+    )
+    parser.add_argument(
+        "--m365-secret-env", default="M365_CLIENT_SECRET",
+        help="Env var holding the M365 client secret (default: M365_CLIENT_SECRET)",
+    )
+    parser.add_argument("--composio-user-id", help="Composio user id")
     args = parser.parse_args(argv)
+
+    err = _validate_provider_args(args)
+    if err:
+        print(f"Error: {err}", file=sys.stderr)
+        return 1
+
     result = bootstrap(args)
     if args.json:
         print(json.dumps(result, indent=2))
@@ -201,6 +363,20 @@ def _main(argv: list[str] | None = None) -> int:
         print("Next steps:")
         for step in result["next_steps"]:
             print(f"- {step}")
+
+    # Provider-specific guidance: placeholders written, required env vars, and
+    # the suggested next commands (doctor + connect_workspace verify).
+    if result.get("workspace_provider"):
+        print(f"\nWorkspace provider: {result['workspace_provider']}")
+        for note in result.get("provider_notices", []):
+            print(f"- {note}")
+        for var in result.get("required_env", []):
+            print(f"Set {var} before running doctor/verify.")
+        next_cmds = result.get("provider_next_commands", [])
+        if next_cmds:
+            print("Suggested next commands:")
+            for cmd in next_cmds:
+                print(f"  {cmd}")
     return 0
 
 

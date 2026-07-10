@@ -677,12 +677,51 @@ def cmd_capabilities(config: dict[str, Any], provider_override: str | None = Non
     return 0
 
 
+def cmd_verify(config: dict[str, Any], include_writes: bool = False,
+               json_output: bool = False) -> int:
+    """Run per-capability verification of the configured workspace provider.
+
+    Read-only by default; ``include_writes`` adds the opt-in, non-destructive
+    write smoke checks (draft/tag/upload, each cleaned up). Never sends mail and
+    never creates calendar events. Exit code: 0 if read_ready (and, for
+    --verify-writes, no tested write failed), else 1.
+    """
+    try:
+        from workspace_verify import run_verification, format_report
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Could not load workspace_verify: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        report = run_verification(config, include_writes=include_writes)
+    except Exception as exc:  # noqa: BLE001
+        if json_output:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print(f"❌ Verification could not start: {exc}")
+        return 1
+
+    print(format_report(report, fmt="json" if json_output else "human"))
+
+    if not report.get("read_ready"):
+        return 1
+    if include_writes and report.get("write_ready") == "no":
+        return 1
+    return 0
+
+
 def _main() -> int:
     parser = argparse.ArgumentParser(
         description="Workspace provider onboarding and status"
     )
     parser.add_argument("--config", help="Path to company.yaml")
     parser.add_argument("--status", action="store_true", help="Print current provider status")
+    parser.add_argument("--verify", action="store_true",
+                        help="Run per-capability read verification of the workspace provider")
+    parser.add_argument("--verify-writes", action="store_true",
+                        help="Run read verification plus opt-in non-destructive write smoke checks")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit the machine-readable JSON report (with --verify/--verify-writes)")
     parser.add_argument("--provider", choices=["google_api", "composio", "m365"],
                         help="Verify or set up a specific provider")
     parser.add_argument("--connect-m365", action="store_true",
@@ -710,6 +749,12 @@ def _main() -> int:
     args = parser.parse_args()
 
     config = _load_config(args.config)
+
+    if args.verify or args.verify_writes:
+        # --provider overrides the configured workspace provider for this run.
+        if args.provider:
+            config.setdefault("integrations", {}).setdefault("workspace", {})["provider"] = args.provider
+        return cmd_verify(config, include_writes=args.verify_writes, json_output=args.json)
 
     if args.status:
         return cmd_status(config)
