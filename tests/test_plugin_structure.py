@@ -35,7 +35,7 @@ class TestPluginStructure:
             data = yaml.safe_load(f)
         assert data["name"] == "chief-of-staff"
         assert data["version"] == "0.3.0"
-        assert data["license"] == "MIT"
+        assert data["license"] == "Apache-2.0"
         assert data["requires_skills"] == []
         assert "google-workspace" in data.get("optional_skills", [])
 
@@ -70,13 +70,13 @@ class TestSkillFrontmatter:
             assert fm["version"] == "0.1.0", f"{skill_name}: version is {fm['version']}, expected 0.1.0"
 
     @pytest.mark.parametrize("skill_name", ALL_SKILLS)
-    def test_license_is_mit(self, skill_name):
+    def test_license_is_apache(self, skill_name):
         path = PLUGIN_ROOT / "skills" / skill_name / "SKILL.md"
         content = path.read_text()
         parts = content.split("---", 2)
         fm = yaml.safe_load(parts[1])
         if "license" in fm:
-            assert str(fm["license"]).upper() == "MIT", f"{skill_name}: license is {fm['license']}, expected MIT"
+            assert str(fm["license"]) == "Apache-2.0", f"{skill_name}: license is {fm['license']}, expected Apache-2.0"
 
 
 class TestConfigExamples:

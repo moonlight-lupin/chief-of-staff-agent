@@ -3,7 +3,7 @@ name: weekly-review
 description: "Use when producing the Chief-of-Staff Friday weekly review across deadlines, pipeline, bookkeeping, tasks, calendar, wiki, Drive filing, and self-sign activity."
 version: 0.1.0
 author: "moonlight-lupin"
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, weekly-review, reporting, pipeline, finance, knowledge-base]

@@ -3,7 +3,7 @@ name: backup
 description: Create scheduled tar.gz backups of key Hermes and Chief of Staff project data and upload them to Google Drive with retention pruning.
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [backup, google-drive, cron, hermes, chief-of-staff]

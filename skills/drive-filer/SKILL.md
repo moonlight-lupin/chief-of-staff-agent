@@ -3,7 +3,7 @@ name: drive-filer
 description: File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules.
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [drive, filing, google-workspace, documents, chief-of-staff]

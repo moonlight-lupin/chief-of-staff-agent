@@ -12,7 +12,7 @@ description: >
   for news digests use news-monitoring; for source-grounded Q&A use notebooklm-mode.
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:

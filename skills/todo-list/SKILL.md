@@ -3,7 +3,7 @@ name: todo-list
 description: "Use when managing internal Chief-of-Staff tasks in todos.yaml: add, list, update, complete, defer, cancel, and surface open or overdue action items for briefings and reviews."
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, tasks, todos, productivity, yaml]

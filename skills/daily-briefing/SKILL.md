@@ -3,7 +3,7 @@ name: daily-briefing
 description: "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, deadlines, pipeline, to-dos, and bookkeeping sources."
 version: 0.1.0
 author: "moonlight-lupin"
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, briefing, gmail, calendar, deadlines, finance]
