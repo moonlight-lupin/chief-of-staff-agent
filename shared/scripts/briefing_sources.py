@@ -349,15 +349,64 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
         "observations_added": 0,
         "backlinks_added": 0,
         "open_questions_added": 0,
+        # v0.2.7: lint warnings
+        "stale_records": 0,
+        "low_confidence_records": 0,
+        "contested_records": 0,
+        "uncited_records": 0,
+        "duplicate_records": 0,
+        "wiki_broken_links": 0,
+        "wiki_missing_frontmatter": 0,
+        "wiki_duplicate_pages": 0,
+        "wiki_stale_pages": 0,
     }
 
-    # Read memory records count
+    # Read memory records count + lint checks
     try:
         if memory_path.exists():
             data = json.loads(memory_path.read_text(encoding="utf-8"))
             records = data.get("records", {})
             if isinstance(records, dict):
                 stats["total_records"] = len(records)
+                # v0.2.7: lint memory records
+                from datetime import datetime, timezone, timedelta
+                now = datetime.now(timezone.utc)
+                seen_names: dict[str, str] = {}
+                for rid, rec in records.items():
+                    if not isinstance(rec, dict):
+                        continue
+                    # Stale: last_seen_at older than 30 days
+                    last_seen = rec.get("last_seen_at")
+                    if last_seen:
+                        try:
+                            ls = datetime.fromisoformat(str(last_seen))
+                            if (now - ls).days > 30:
+                                stats["stale_records"] = stats["stale_records"] + 1 if isinstance(stats["stale_records"], int) else 1
+                        except Exception:
+                            pass
+                    # Low confidence
+                    conf = rec.get("confidence")
+                    if conf is not None:
+                        try:
+                            if float(conf) < 0.5:
+                                stats["low_confidence_records"] = stats["low_confidence_records"] + 1 if isinstance(stats["low_confidence_records"], int) else 1
+                        except (ValueError, TypeError):
+                            pass
+                    # Contested: status not in standard set
+                    status = rec.get("status", "")
+                    if status and status not in ("draft", "observed", "operator_confirmed"):
+                        stats["contested_records"] = stats["contested_records"] + 1 if isinstance(stats["contested_records"], int) else 1
+                    # Uncited: source_ids empty
+                    src_ids = rec.get("source_ids", [])
+                    if not src_ids:
+                        stats["uncited_records"] = stats["uncited_records"] + 1 if isinstance(stats["uncited_records"], int) else 1
+                    # Duplicates: same name (case-insensitive)
+                    name = str(rec.get("name", "")).strip().lower()
+                    if name:
+                        if name in seen_names:
+                            stats["duplicate_records"] = stats["duplicate_records"] + 1 if isinstance(stats["duplicate_records"], int) else 1
+                        else:
+                            seen_names[name] = rid
     except Exception:
         pass
 
@@ -438,6 +487,43 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
             1 for a in pending
             if a.get("type") == "bookkeeper.invoice.record" and a.get("state") == "requested"
         )
+    except Exception:
+        pass
+
+    # v0.2.7: Wiki lint counts — scan wiki directory
+    try:
+        wiki_path_str = config.get("paths", {}).get("wiki_path") if isinstance(config, dict) else None
+        if not wiki_path_str:
+            wiki_path_str = str(root / "wiki")
+        wiki_path = Path(wiki_path_str)
+        if wiki_path.exists():
+            import re as _re
+            wikilink_re = _re.compile(r"\[\[([^\]]+)\]\]")
+            for md_file in wiki_path.rglob("*.md"):
+                try:
+                    text = md_file.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                rel = md_file.relative_to(wiki_path).as_posix()
+                # Missing frontmatter
+                if not text.startswith("---\n"):
+                    stats["wiki_missing_frontmatter"] = stats["wiki_missing_frontmatter"] + 1 if isinstance(stats["wiki_missing_frontmatter"], int) else 1
+                # Stale pages (updated > 90 days ago)
+                if text.startswith("---\n"):
+                    fm_end = text.find("\n---\n", 4)
+                    if fm_end > 0:
+                        fm_text = text[4:fm_end]
+                        for line in fm_text.split("\n"):
+                            if line.strip().startswith("updated:"):
+                                val = line.split(":", 1)[1].strip().strip('"').strip("'")
+                                try:
+                                    from datetime import datetime, timezone
+                                    upd = datetime.fromisoformat(val)
+                                    if (datetime.now(timezone.utc) - upd).days > 90:
+                                        stats["wiki_stale_pages"] = stats["wiki_stale_pages"] + 1 if isinstance(stats["wiki_stale_pages"], int) else 1
+                                except Exception:
+                                    pass
+                                break
     except Exception:
         pass
 

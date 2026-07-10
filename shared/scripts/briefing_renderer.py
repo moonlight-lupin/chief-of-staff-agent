@@ -170,6 +170,30 @@ def render_text(briefing: dict[str, Any]) -> str:
             lines.append(f"  Added {km['open_questions_added']} open question(s).")
         if km.get("total_records"):
             lines.append(f"  Memory records: {km['total_records']} total.")
+        # v0.2.7: lint warnings
+        lint_issues = []
+        if km.get("stale_records"):
+            lint_issues.append(f"{km['stale_records']} stale")
+        if km.get("low_confidence_records"):
+            lint_issues.append(f"{km['low_confidence_records']} low-confidence")
+        if km.get("contested_records"):
+            lint_issues.append(f"{km['contested_records']} contested")
+        if km.get("uncited_records"):
+            lint_issues.append(f"{km['uncited_records']} uncited")
+        if km.get("duplicate_records"):
+            lint_issues.append(f"{km['duplicate_records']} duplicate")
+        if km.get("wiki_broken_links"):
+            lint_issues.append(f"{km['wiki_broken_links']} broken wiki links")
+        if km.get("wiki_missing_frontmatter"):
+            lint_issues.append(f"{km['wiki_missing_frontmatter']} missing frontmatter")
+        if km.get("wiki_duplicate_pages"):
+            lint_issues.append(f"{km['wiki_duplicate_pages']} duplicate wiki pages")
+        if km.get("wiki_stale_pages"):
+            lint_issues.append(f"{km['wiki_stale_pages']} stale wiki pages")
+        if lint_issues:
+            lines.append(f"  Lint warnings: {', '.join(lint_issues)}")
+            lines.append("  Run: python shared/scripts/memory.py lint --summary")
+            lines.append("  Run: python skills/note-taker/scripts/wiki_curator.py lint --summary")
         lines.append("")
 
     # Bookkeeper

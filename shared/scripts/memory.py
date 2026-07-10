@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -966,6 +967,225 @@ def rollback_change(config: object, change_id: str, dry_run: bool = False) -> di
     return {"success": True, "dry_run": False, "rolled_back": change_id, "rollback_change": rollback_entry, "plan": plan}
 
 
+_STANDARD_STATUSES = frozenset({"draft", "observed", "operator_confirmed"})
+_STALE_DAYS = 30
+
+
+def lint_memory(config: object) -> dict[str, object]:
+    """Lint the memory store for structural and quality issues."""
+    memory = _load_memory(config)
+    records_obj = memory.get("records")
+    records: dict[str, object] = records_obj if isinstance(records_obj, dict) else {}
+
+    warnings: list[str] = []
+    errors: list[str] = []
+    warnings_detail: list[dict[str, object]] = []
+    stale_records = 0
+    low_confidence = 0
+    contested = 0
+    uncited = 0
+    duplicates = 0
+
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=_STALE_DAYS)
+
+    # Map normalized names/aliases -> list of record ids for duplicate detection.
+    name_index: dict[str, list[str]] = {}
+
+    for key, value in records.items():
+        if not isinstance(value, dict):
+            record_id = str(key)
+            msg = f"Record {record_id} is not an object"
+            errors.append(msg)
+            warnings_detail.append({"record_id": record_id, "issue": "invalid_record", "detail": msg})
+            continue
+
+        record_id = str(value.get("id") or key)
+        missing: list[str] = []
+        if not value.get("id"):
+            missing.append("id")
+        if not value.get("type"):
+            missing.append("type")
+        if not value.get("name"):
+            missing.append("name")
+        if missing:
+            msg = f"Record {record_id} missing required fields: {', '.join(missing)}"
+            errors.append(msg)
+            warnings_detail.append(
+                {"record_id": record_id, "issue": "missing_required", "detail": msg}
+            )
+
+        # Index names and aliases for duplicate detection.
+        names_to_index: list[str] = []
+        name = value.get("name")
+        if isinstance(name, str) and name.strip():
+            names_to_index.append(name.strip().lower())
+        aliases = value.get("aliases")
+        if isinstance(aliases, list):
+            for alias in aliases:
+                if isinstance(alias, str) and alias.strip():
+                    names_to_index.append(alias.strip().lower())
+        for n in names_to_index:
+            name_index.setdefault(n, []).append(record_id)
+
+        # Stale: last_seen_at older than 30 days.
+        last_seen = _parse_datetime(value.get("last_seen_at"))
+        if last_seen is not None and last_seen < stale_cutoff:
+            stale_records += 1
+            detail = f"last_seen_at={last_seen.isoformat()} older than {_STALE_DAYS} days"
+            warnings.append(f"{record_id}: stale — {detail}")
+            warnings_detail.append({"record_id": record_id, "issue": "stale", "detail": detail})
+        elif last_seen is None and value.get("last_seen_at") is not None:
+            # Unparseable last_seen_at is treated as potentially stale meta-issue only if set.
+            pass
+
+        # Low confidence.
+        conf = value.get("confidence")
+        if conf is not None:
+            conf_f = _to_float(conf, default=-1.0)
+            if conf_f >= 0.0 and conf_f < 0.5:
+                low_confidence += 1
+                detail = f"confidence={conf_f}"
+                warnings.append(f"{record_id}: low_confidence — {detail}")
+                warnings_detail.append(
+                    {"record_id": record_id, "issue": "low_confidence", "detail": detail}
+                )
+
+        # Contested / non-standard status.
+        status = value.get("status")
+        if status is not None and str(status) not in _STANDARD_STATUSES:
+            contested += 1
+            detail = f"status={status!r} not in {sorted(_STANDARD_STATUSES)}"
+            warnings.append(f"{record_id}: contested — {detail}")
+            warnings_detail.append(
+                {"record_id": record_id, "issue": "contested", "detail": detail}
+            )
+
+        # Uncited: source_ids empty or missing.
+        source_ids = value.get("source_ids")
+        if source_ids is None or (isinstance(source_ids, list) and len(source_ids) == 0):
+            uncited += 1
+            detail = "source_ids is empty or missing"
+            warnings.append(f"{record_id}: uncited — {detail}")
+            warnings_detail.append(
+                {"record_id": record_id, "issue": "uncited", "detail": detail}
+            )
+
+    # Duplicate names/aliases (same name or alias across multiple records).
+    reported_pairs: set[tuple[str, str, str]] = set()
+    for name_key, ids in name_index.items():
+        unique_ids = sorted(set(ids))
+        if len(unique_ids) < 2:
+            continue
+        # Count each multi-id name cluster once toward duplicates.
+        duplicates += 1
+        detail = f"name/alias {name_key!r} shared by records: {', '.join(unique_ids)}"
+        for rid in unique_ids:
+            pair_key = (rid, "duplicate", name_key)
+            if pair_key in reported_pairs:
+                continue
+            reported_pairs.add(pair_key)
+            warnings.append(f"{rid}: duplicate — {detail}")
+            warnings_detail.append(
+                {"record_id": rid, "issue": "duplicate", "detail": detail}
+            )
+
+    return {
+        "total_records": len(records),
+        "warnings": warnings,
+        "errors": errors,
+        "stale_records": stale_records,
+        "low_confidence": low_confidence,
+        "contested": contested,
+        "uncited": uncited,
+        "duplicates": duplicates,
+        "warnings_detail": warnings_detail,
+    }
+
+
+def backup_memory(config: object) -> dict[str, object]:
+    """Copy memory and change-log files to timestamped backups."""
+    knowledge = _knowledge_dir(config)
+    knowledge.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    memory_src = _memory_path(config)
+    changes_src = _changes_path(config)
+    memory_backup = knowledge / f"memory-backup-{timestamp}.json"
+    changes_backup = knowledge / f"changes-backup-{timestamp}.json"
+
+    if memory_src.exists():
+        shutil.copy2(memory_src, memory_backup)
+    else:
+        # Create empty placeholder so backup path is always written when source missing.
+        memory_backup.write_text(
+            json.dumps({"records": {}, "_version": MEMORY_VERSION}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if changes_src.exists():
+        shutil.copy2(changes_src, changes_backup)
+    else:
+        changes_backup.write_text(
+            json.dumps({"changes": [], "_version": CHANGES_VERSION}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    return {
+        "success": True,
+        "memory_backup": str(memory_backup),
+        "changes_backup": str(changes_backup),
+    }
+
+
+def cmd_lint(args: argparse.Namespace) -> int:
+    """CLI handler for the lint subcommand."""
+    config = _load_runtime_config(args.config)
+    result = lint_memory(config)
+    errors: list[object] = result["errors"] if isinstance(result.get("errors"), list) else []  # type: ignore[assignment]
+    warnings_detail: list[object] = (
+        result["warnings_detail"] if isinstance(result.get("warnings_detail"), list) else []  # type: ignore[assignment]
+    )
+    if args.summary:
+        print(
+            f"total={result['total_records']} stale={result['stale_records']} "
+            f"low_confidence={result['low_confidence']} contested={result['contested']} "
+            f"uncited={result['uncited']} duplicates={result['duplicates']} "
+            f"errors={len(errors)}"
+        )
+    else:
+        print(f"Memory lint: {result['total_records']} records")
+        print(
+            f"  stale={result['stale_records']} low_confidence={result['low_confidence']} "
+            f"contested={result['contested']} uncited={result['uncited']} "
+            f"duplicates={result['duplicates']}"
+        )
+        if errors:
+            print(f"\nErrors ({len(errors)}):")
+            for err in errors:
+                print(f"  ERROR: {err}")
+        if warnings_detail:
+            print(f"\nWarnings ({len(warnings_detail)}):")
+            for item in warnings_detail:
+                if isinstance(item, dict):
+                    print(
+                        f"  WARN [{item.get('issue')}] {item.get('record_id')}: "
+                        f"{item.get('detail')}"
+                    )
+                else:
+                    print(f"  WARN: {item}")
+        if not errors and not warnings_detail:
+            print("No issues found.")
+    return 1 if errors else 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    """CLI handler for the backup subcommand."""
+    config = _load_runtime_config(args.config)
+    result = backup_memory(config)
+    print(f"memory_backup: {result.get('memory_backup')}")
+    print(f"changes_backup: {result.get('changes_backup')}")
+    return 0
+
+
 def _load_runtime_config(config_path: str | None) -> object:
     if config_loader is None:
         return {}
@@ -1060,7 +1280,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     rollback = sub.add_parser("rollback", help="Rollback a reversible memory change")
     rollback.add_argument("--change-id", required=True, help="Change ID to rollback")
-    rollback.add_argument("--dry-run", action="store_true", help="Report rollback plan without writing")
+    rollback.add_argument("--dry-run", action="store_true", help="Show what would be rolled back without executing")
+
+    lint = sub.add_parser("lint", help="Lint memory store for issues")
+    lint.add_argument("--summary", action="store_true", help="Print summary counts only")
+
+    sub.add_parser("backup", help="Backup memory and changes files")
     return parser
 
 
@@ -1111,6 +1336,10 @@ def _main(argv: list[str] | None = None) -> int:
                 return 0
             print(f"Rollback failed: {result.get('error')}", file=sys.stderr)
             return 1
+        if args.command == "lint":
+            return cmd_lint(args)
+        if args.command == "backup":
+            return cmd_backup(args)
     except ConcurrencyError as exc:
         print(f"Concurrency error: {exc}", file=sys.stderr)
         return 2

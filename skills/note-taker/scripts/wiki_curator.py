@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -751,6 +752,23 @@ class WikiCurator:
 
     def curate_items(self, items: Sequence[SourceItem]) -> None:
         self.ensure_dirs()
+        # Auto-backup entire wiki before large batches of changes.
+        if len(items) > 5 and self.wiki_path.exists() and not self.dry_run:
+            existing = list(self.wiki_path.rglob("*"))
+            has_files = any(p.is_file() for p in existing)
+            if has_files:
+                backup_dir = self.wiki_path.parent / f".wiki-backup-{self.now.strftime('%Y%m%dT%H%M%S')}"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                for src in self.wiki_path.rglob("*"):
+                    if not src.is_file():
+                        continue
+                    rel = src.relative_to(self.wiki_path)
+                    dest = backup_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dest)
+                self.changes.append(
+                    Change("backup", backup_dir, f"pre-curate wiki backup ({len(items)} items)")
+                )
         for item in items:
             people = item.people[:8]
             projects = item.projects[:6]
@@ -963,6 +981,7 @@ def validate_wiki(config: Mapping[str, Any]) -> list[Finding]:
 
     pages = curator.all_markdown_pages()
     title_map: dict[str, Path] = {}
+    seen_titles: dict[str, tuple[str, Path]] = {}  # normalised title -> (display title, first path)
     inbound: dict[Path, int] = {path: 0 for path in pages}
     page_texts: dict[Path, str] = {}
     index_text = ""
@@ -991,6 +1010,33 @@ def validate_wiki(config: Mapping[str, Any]) -> list[Finding]:
         }
         for candidate in candidates:
             title_map[candidate] = path
+
+        # Duplicate page detection (same normalised title, different paths).
+        norm_title = _normalise_link_target(title)
+        if norm_title:
+            if norm_title in seen_titles:
+                other_title, other_path = seen_titles[norm_title]
+                if other_path != path:
+                    other_rel = curator._relative(other_path)
+                    findings.append(
+                        Finding("WARN", rel, f"Duplicate page title: '{title}' also at {other_rel}")
+                    )
+            else:
+                seen_titles[norm_title] = (title, path)
+
+        if valid:
+            if "confidence" in frontmatter:
+                try:
+                    confidence = float(frontmatter["confidence"])
+                except (TypeError, ValueError):
+                    confidence = None
+                if confidence is not None and confidence < 0.5:
+                    findings.append(
+                        Finding("WARN", rel, f"Low confidence page: confidence={frontmatter['confidence']}")
+                    )
+            status = _safe_str(frontmatter.get("status"))
+            if status == "contested":
+                findings.append(Finding("WARN", rel, "Contested page: status=contested"))
 
         updated = _safe_str(frontmatter.get("updated"))
         if updated:
@@ -1070,6 +1116,30 @@ def validate_command(args: argparse.Namespace) -> int:
     return 1 if any(f.severity == "ERROR" for f in findings) else 0
 
 
+def lint_command(args: argparse.Namespace) -> int:
+    """Lint wiki structure (alias for validate, with optional summary mode)."""
+    config = _load_configuration(args.config)
+    findings = validate_wiki(config)
+    if getattr(args, "summary", False):
+        counts: dict[str, int] = {"ERROR": 0, "WARN": 0, "INFO": 0}
+        for finding in findings:
+            counts[finding.severity] = counts.get(finding.severity, 0) + 1
+        total = sum(counts.values())
+        print(
+            f"ERROR: {counts.get('ERROR', 0)}, "
+            f"WARN: {counts.get('WARN', 0)}, "
+            f"INFO: {counts.get('INFO', 0)}, "
+            f"total: {total}"
+        )
+    else:
+        print(format_findings(findings))
+    return 1 if any(f.severity == "ERROR" for f in findings) else 0
+
+
+# Backwards-compatible alias.
+cmd_lint = lint_command
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Maintain the Chief-of-Staff Markdown wiki from local memory/events.")
     parser.add_argument("--config", help="Path to company.yaml (default: shared/config/company.yaml or CHIEF_OF_STAFF_CONFIG)")
@@ -1086,6 +1156,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = sub.add_parser("validate", help="Lint wiki structure")
     validate.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    lint = sub.add_parser("lint", help="Lint wiki structure (alias for validate with summary)")
+    lint.add_argument("--summary", action="store_true", help="Print summary counts only")
+    lint.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
@@ -1101,6 +1175,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_command(args, write=False)
     if args.command == "validate":
         return validate_command(args)
+    if args.command == "lint":
+        return lint_command(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
