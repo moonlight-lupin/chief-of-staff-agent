@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Webhook receiver — HTTP server that ingests events into event_store.
 
-The receiver:
-- Listens on a configurable host/port
-- Verifies HMAC-SHA256 signatures
-- Protects against replay attacks
-- Converts payloads via adapters
-- Ingests into event_store (idempotent by source+source_id)
-- Optionally generates suggestions after ingestion
-- Never executes, approves, or mutates external systems
+Provider-native support:
+- POST /webhooks/gmail     → Gmail (Pub/Sub envelope or direct)
+- POST /webhooks/calendar  → Calendar (X-Goog-* headers, empty body)
+- POST /webhooks/drive     → Drive (X-Goog-* headers, empty body)
+- POST /webhooks/generic   → Generic signed webhooks
+- GET  /health             → Health check with stats
 
-Safety: the receiver is read-only with respect to external systems.
-It can only: verify, parse, store, classify, and suggest.
+Safety flow:
+  verify signature → validate channel token (Calendar/Drive)
+  → reserve delivery ID → parse/adapt → ingest → complete delivery
+  On failure: release delivery (allows retry)
+
+The receiver NEVER executes, approves, or mutates external systems.
 """
 from __future__ import annotations
 
@@ -27,6 +29,8 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+MAX_BODY_BYTES = 1_048_576  # 1 MB
+
 
 class WebhookStats:
     """Track receiver statistics in memory."""
@@ -34,10 +38,21 @@ class WebhookStats:
         self.received = 0
         self.verified = 0
         self.rejected_signature = 0
+        self.rejected_channel_token = 0
         self.rejected_replay = 0
+        self.rejected_oversized = 0
+        self.rejected_bad_request = 0
         self.ingested = 0
         self.duplicated = 0
         self.errors = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+def _get_headers_dict(handler) -> dict[str, str]:
+    """Extract headers into a plain dict (case-insensitive lookup handled by BaseHTTPRequestHandler)."""
+    return {k: v for k, v in handler.headers.items()}
 
 
 def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool = False):
@@ -46,60 +61,107 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
     class WebhookHandler(BaseHTTPRequestHandler):
         def do_POST(self):
             stats.received += 1
+            parsed = urlparse(self.path)
+            endpoint = parsed.path
 
-            # Read body
-            content_length = int(self.headers.get("Content-Length", 0))
+            # Validate endpoint
+            valid_endpoints = {"/webhooks/gmail", "/webhooks/calendar",
+                               "/webhooks/drive", "/webhooks/generic"}
+            if endpoint not in valid_endpoints:
+                stats.rejected_bad_request += 1
+                self._respond(404, {"error": f"Unknown endpoint: {endpoint}"})
+                return
+
+            # Read body with size limit
+            content_length_str = self.headers.get("Content-Length", "0")
+            try:
+                content_length = int(content_length_str)
+            except (ValueError, TypeError):
+                stats.rejected_bad_request += 1
+                self._respond(400, {"error": "Invalid Content-Length"})
+                return
+
+            if content_length < 0:
+                stats.rejected_bad_request += 1
+                self._respond(400, {"error": "Negative Content-Length"})
+                return
+
+            if content_length > MAX_BODY_BYTES:
+                stats.rejected_oversized += 1
+                self._respond(413, {"error": f"Body exceeds {MAX_BODY_BYTES} bytes"})
+                return
+
             body = self.rfile.read(content_length) if content_length > 0 else b""
 
-            # Verify signature
-            from webhook_security import verify_signature, check_replay
+            # Verify HMAC signature (for gmail and generic endpoints)
+            from webhook_security import verify_signature, verify_channel_token, reserve_delivery, complete_delivery, release_delivery
             signature = self.headers.get("X-Webhook-Signature", "")
 
-            if not verify_signature(body, signature):
-                stats.rejected_signature += 1
-                self._respond(401, {"error": "Invalid or missing signature"})
-                return
+            # Calendar/Drive use X-Goog-Channel-Token instead of HMAC
+            if endpoint in ("/webhooks/calendar", "/webhooks/drive"):
+                channel_token = self.headers.get("X-Goog-Channel-Token", "")
+                if not verify_channel_token(channel_token):
+                    stats.rejected_channel_token += 1
+                    self._respond(401, {"error": "Invalid or missing channel token"})
+                    return
+            else:
+                # Gmail and generic require HMAC signature
+                if not verify_signature(body, signature):
+                    stats.rejected_signature += 1
+                    self._respond(401, {"error": "Invalid or missing signature"})
+                    return
 
             stats.verified += 1
 
-            # Check replay
-            is_valid, replay_reason = check_replay(config, signature)
+            # Parse body (may be empty for Calendar/Drive)
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                stats.rejected_bad_request += 1
+                self._respond(400, {"error": "Invalid JSON"})
+                return
+
+            # Adapt payload via endpoint-specific adapter
+            headers_dict = _get_headers_dict(self)
+            try:
+                from webhook_adapters import adapt_for_endpoint
+                event = adapt_for_endpoint(endpoint, payload, headers_dict)
+            except Exception as exc:
+                stats.errors += 1
+                self._respond(500, {"error": f"Adapter failure: {exc}"})
+                return
+
+            delivery_id = event.get("delivery_id", event.get("source_id", ""))
+
+            # Reserve delivery ID (replay protection)
+            is_valid, replay_reason = reserve_delivery(config, delivery_id)
             if not is_valid:
                 stats.rejected_replay += 1
                 self._respond(409, {"error": replay_reason})
                 return
 
-            # Parse payload
-            try:
-                payload = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                stats.errors += 1
-                self._respond(400, {"error": "Invalid JSON"})
-                return
-
-            # Detect provider and adapt
-            from webhook_adapters import detect_provider, adapt_payload
-            provider = self.headers.get("X-Webhook-Provider", "") or detect_provider(payload)
-            event = adapt_payload(provider, payload)
-
             # Ingest into event_store
-            from event_store import ingest_event
-            result = ingest_event(
-                config,
-                source=event["source"],
-                source_id=event["source_id"],
-                event_type=event["event_type"],
-                payload=event["payload"],
-            )
+            try:
+                from event_store import ingest_event
+                result = ingest_event(
+                    config,
+                    source=event["source"],
+                    source_id=event["source_id"],
+                    event_type=event["event_type"],
+                    payload=event["payload"],
+                )
+            except Exception as exc:
+                # Release delivery on failure — allows retry
+                release_delivery(config, delivery_id)
+                stats.errors += 1
+                self._respond(500, {"error": f"Ingestion failure: {exc}"})
+                return
 
             if result is None:
+                # Duplicate in event_store (already ingested before)
+                complete_delivery(config, delivery_id)
                 stats.duplicated += 1
-                self._respond(200, {"status": "duplicate"})
-                return
-
-            if result.get("status") == "duplicate":
-                stats.duplicated += 1
-                self._respond(200, {"status": "duplicate", "event_id": result.get("id")})
+                self._respond(200, {"status": "duplicate", "event_id": None})
                 return
 
             stats.ingested += 1
@@ -114,12 +176,16 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
                 except Exception:
                     pass  # Suggestion generation failure is non-fatal
 
+            # Mark delivery as completed
+            complete_delivery(config, delivery_id)
+
             self._respond(200, {
                 "status": "ingested",
                 "event_id": result.get("id"),
                 "source": event["source"],
                 "source_id": event["source_id"],
                 "event_type": event["event_type"],
+                "delivery_id": delivery_id,
                 "suggestions_generated": suggestions_generated,
             })
 
@@ -129,15 +195,7 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
             if parsed.path == "/health":
                 self._respond(200, {
                     "status": "healthy",
-                    "stats": {
-                        "received": stats.received,
-                        "verified": stats.verified,
-                        "ingested": stats.ingested,
-                        "duplicated": stats.duplicated,
-                        "rejected_signature": stats.rejected_signature,
-                        "rejected_replay": stats.rejected_replay,
-                        "errors": stats.errors,
-                    },
+                    "stats": stats.to_dict(),
                 })
                 return
             self._respond(404, {"error": "Not found"})
@@ -151,7 +209,6 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
             self.wfile.write(body)
 
         def log_message(self, format: str, *args):
-            # Suppress default logging — caller can add their own
             pass
 
     return WebhookHandler
@@ -177,10 +234,17 @@ def start_server(
     server = HTTPServer((host, port), handler)
 
     print(f"🌐 Webhook receiver listening on {host}:{port}")
-    print(f"   Signature: HMAC-SHA256 via X-Webhook-Signature header")
-    print(f"   Replay protection: enabled (24h TTL)")
+    print(f"   Endpoints:")
+    print(f"     POST /webhooks/gmail     — Gmail (Pub/Sub or direct)")
+    print(f"     POST /webhooks/calendar  — Calendar (X-Goog-* headers)")
+    print(f"     POST /webhooks/drive     — Drive (X-Goog-* headers)")
+    print(f"     POST /webhooks/generic   — Generic signed webhooks")
+    print(f"     GET  /health             — Health check")
+    print(f"   Signature: HMAC-SHA256 via X-Webhook-Signature (gmail/generic)")
+    print(f"   Channel token: {secret_check.get('channel_token', 'disabled')} (calendar/drive)")
+    print(f"   Replay protection: delivery-ID-based, 24h TTL, atomic writes")
+    print(f"   Max body: {MAX_BODY_BYTES:,} bytes")
     print(f"   Suggestion generation: {'enabled' if generate_suggestions else 'disabled'}")
-    print(f"   Health check: GET /health")
     print()
 
     try:

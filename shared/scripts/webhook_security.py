@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Webhook security — HMAC signature verification and replay protection.
+"""Webhook security — HMAC signature verification and delivery-ID-based replay protection.
 
 Security model:
-- Webhook secret is read from env var CHIEF_OF_STAFF_WEBHOOK_SECRET
-- Signatures are HMAC-SHA256 of the raw request body
-- Header name: X-Webhook-Signature (hex-encoded)
-- Replay protection: track seen signatures in a local file with TTL
+- Webhook secret via CHIEF_OF_STAFF_WEBHOOK_SECRET (HMAC-SHA256)
+- Header: X-Webhook-Signature (hex-encoded HMAC of raw body)
+- Calendar/Drive: X-Goog-Channel-Token validated against configured token
+- Replay protection: delivery-ID-based, not body-signature-based
+- Atomic cache writes (temp-file + rename)
+- Reservation-before-ingest: reserve ID → process → mark done (or release on failure)
 
 The webhook receiver NEVER executes, approves, or mutates anything.
 Security only verifies and deduplicates.
@@ -26,17 +28,18 @@ def get_webhook_secret() -> str | None:
     return os.getenv("CHIEF_OF_STAFF_WEBHOOK_SECRET")
 
 
+def get_channel_token() -> str | None:
+    """Get the X-Goog-Channel-Token for Calendar/Drive validation."""
+    return os.getenv("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN")
+
+
 def sign_payload(body: bytes, secret: str) -> str:
     """Compute HMAC-SHA256 signature of body with secret. Returns hex string."""
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
 def verify_signature(body: bytes, signature: str, secret: str | None = None) -> bool:
-    """Verify that the signature matches the body using the secret.
-
-    Uses constant-time comparison to prevent timing attacks.
-    Returns False if no secret is available.
-    """
+    """Verify HMAC-SHA256 signature using constant-time comparison."""
     if secret is None:
         secret = get_webhook_secret()
     if not secret:
@@ -45,58 +48,115 @@ def verify_signature(body: bytes, signature: str, secret: str | None = None) -> 
     return hmac.compare_digest(expected, signature)
 
 
-def _replay_cache_path(config: Any) -> Path:
-    from email_label_policy import _project_root  # reuse project root resolver
-    root = _project_root(config)
-    return root / ".webhook_replay_cache.json"
+def verify_channel_token(token: str | None) -> bool:
+    """Verify Google Calendar/Drive channel token.
+
+    If no token is configured, accepts any token (disabled mode).
+    If configured, requires exact match.
+    """
+    configured = get_channel_token()
+    if not configured:
+        return True  # Token validation disabled
+    if not token:
+        return False
+    return hmac.compare_digest(token, configured)
 
 
-def _load_replay_cache(config: Any) -> dict[str, float]:
-    path = _replay_cache_path(config)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return {k: float(v) for k, v in data.items()}
-    except (json.JSONDecodeError, OSError, ValueError):
-        return {}
-
-
-def _save_replay_cache(config: Any, cache: dict[str, float]) -> None:
-    path = _replay_cache_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
-
+# ─── Delivery-ID-based Replay Protection ───────────────────────
 
 REPLAY_TTL_SECONDS = 3600 * 24  # 24 hours
 
 
-def check_replay(
+def _replay_cache_path(config: Any) -> Path:
+    from email_label_policy import _project_root
+    root = _project_root(config)
+    return root / ".webhook_replay_cache.json"
+
+
+def _load_replay_cache(config: Any) -> dict[str, Any]:
+    path = _replay_cache_path(config)
+    if not path.exists():
+        return {"entries": {}, "_version": 0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or "entries" not in data:
+            return {"entries": {}, "_version": 0}
+        return data
+    except (json.JSONDecodeError, OSError):
+        return {"entries": {}, "_version": 0}
+
+
+def _save_replay_cache(config: Any, data: dict[str, Any]) -> None:
+    """Atomic write: write to temp file, then rename."""
+    path = _replay_cache_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_version = (data.get("_version", 0) or 0) + 1
+    data["_version"] = new_version
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def reserve_delivery(
     config: Any,
-    signature: str,
+    delivery_id: str,
     ttl_seconds: int = REPLAY_TTL_SECONDS,
 ) -> tuple[bool, str]:
-    """Check if a signature has been seen before (replay attack).
+    """Reserve a delivery ID for processing.
 
     Returns (is_valid, reason).
-    is_valid=True means this is a NEW request (not a replay).
-    is_valid=False means this signature was already seen.
+    is_valid=True means this is a NEW delivery (not seen before).
+    is_valid=False means this delivery was already seen.
+
+    States: "processing" (reserved but not done) → "done" (completed)
+    If an old "processing" entry exists past TTL, it's expired (retryable).
     """
     cache = _load_replay_cache(config)
     now = time.time()
+    entries = cache.get("entries", {})
 
     # Expire old entries
-    expired = [k for k, ts in cache.items() if now - ts > ttl_seconds]
+    expired = [k for k, v in entries.items()
+               if now - v.get("ts", 0) > ttl_seconds]
     for k in expired:
-        del cache[k]
+        del entries[k]
 
-    if signature in cache:
-        return False, "Replay detected: signature already seen"
+    entry = entries.get(delivery_id)
+    if entry:
+        if entry.get("state") == "done":
+            return False, "Replay detected: delivery already completed"
+        if entry.get("state") == "processing":
+            # Still processing — reject to prevent concurrent duplicate
+            return False, "Replay detected: delivery already processing"
+    else:
+        # New delivery — reserve it
+        entries[delivery_id] = {"state": "processing", "ts": now}
+        cache["entries"] = entries
+        _save_replay_cache(config, cache)
+        return True, "OK"
 
-    # Record this signature
-    cache[signature] = now
-    _save_replay_cache(config, cache)
-    return True, "OK"
+    return False, "Replay detected"
+
+
+def complete_delivery(config: Any, delivery_id: str) -> None:
+    """Mark a delivery as completed."""
+    cache = _load_replay_cache(config)
+    entries = cache.get("entries", {})
+    if delivery_id in entries:
+        entries[delivery_id]["state"] = "done"
+        entries[delivery_id]["ts"] = time.time()
+        cache["entries"] = entries
+        _save_replay_cache(config, cache)
+
+
+def release_delivery(config: Any, delivery_id: str) -> None:
+    """Release a delivery reservation on failure (allows retry)."""
+    cache = _load_replay_cache(config)
+    entries = cache.get("entries", {})
+    if delivery_id in entries:
+        del entries[delivery_id]
+        cache["entries"] = entries
+        _save_replay_cache(config, cache)
 
 
 def validate_secret_config() -> dict[str, Any]:
@@ -114,9 +174,11 @@ def validate_secret_config() -> dict[str, Any]:
             "error": "Secret too short (minimum 16 characters recommended)",
             "length": len(secret),
         }
+    channel_token = get_channel_token()
     return {
         "valid": True,
         "length": len(secret),
         "algorithm": "HMAC-SHA256",
         "header": "X-Webhook-Signature",
+        "channel_token": "configured" if channel_token else "disabled",
     }

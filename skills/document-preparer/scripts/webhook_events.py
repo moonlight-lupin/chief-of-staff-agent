@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Webhook events CLI — serve, inspect, replay, validate-secret.
+"""Webhook events CLI — serve, inspect, replay, validate-secret, approve, execute.
 
 Commands:
     webhook_events.py serve [--host 0.0.0.0] [--port 8787] [--generate-suggestions]
@@ -7,6 +7,9 @@ Commands:
     webhook_events.py replay --event-id <id> [--dry-run]
     webhook_events.py validate-secret
     webhook_events.py sign --body <json-string>
+    webhook_events.py approve --action-id <id> --approver "MH" --reason "Reviewed"
+    webhook_events.py execute --action-id <id>
+    webhook_events.py pending [--summary]
 
 Safety:
 - serve: starts HTTP receiver (verify → ingest → optionally suggest)
@@ -14,8 +17,9 @@ Safety:
 - replay: re-runs suggestion generation for an event (dry-run supported)
 - validate-secret: checks webhook secret is configured
 - sign: generates HMAC signature for testing
+- approve/execute: generic pending-action routing for any action type
 
-No command executes, approves, or mutates external systems.
+No command executes without explicit approval.
 """
 from __future__ import annotations
 
@@ -39,6 +43,24 @@ except Exception as exc:  # pragma: no cover
 from action_result_cli import print_json
 
 
+# ─── Action routing for approve/execute ───────────────────────
+
+ACTION_APPROVAL_CLI = {
+    "gmail.send": "send_email.py",
+    "gmail.draft": "send_email.py",
+    "gmail.archive": "delete_actions.py",
+    "gmail.trash": "delete_actions.py",
+    "gmail.label": "email_organisation.py",
+    "gmail.create_label": "email_organisation.py",
+    "calendar.cancel": "delete_actions.py",
+    "calendar.create": "calendar_actions.py",
+    "calendar.update": "calendar_actions.py",
+    "drive.trash": "delete_actions.py",
+    "drive.upload": "drive_file.py",
+    "drive.download": "drive_file.py",
+}
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """Start the webhook receiver server."""
     cfg = load_config(args.config)
@@ -60,7 +82,10 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
     from event_store import list_events
-    events = list_events(cfg, limit=args.limit * 2)  # over-fetch to filter
+    # Use source filter — list_events supports exact match,
+    # but we need prefix match for "webhook.*"
+    # Fetch a larger set and filter, but use limit properly
+    events = list_events(cfg, limit=args.limit * 10)
     webhook_events = [e for e in events if e.get("source", "").startswith("webhook.")]
     webhook_events = webhook_events[:args.limit]
 
@@ -72,7 +97,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             for ev in webhook_events:
                 icon = {"classified": "📨", "surfaced": "👀", "processed": "✅"}.get(ev.get("state"), "?")
                 print(f"{icon} {ev['id']}  {ev['source']}  [{ev.get('state', '?')}]")
-                print(f"   Type: {ev.get('type', '?')}")
+                print(f"   Type: {ev.get('event_type', ev.get('type', '?'))}")
                 print(f"   Source ID: {ev.get('source_id', '?')}")
                 print(f"   Summary: {ev.get('summary', '')}")
     else:
@@ -81,10 +106,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
-    """Re-run suggestion generation for a webhook event.
-
-    Does NOT execute anything — only generates suggestions.
-    """
+    """Re-run suggestion generation for a webhook event."""
     cfg = load_config(args.config)
     if cfg is None:
         return 1
@@ -97,7 +119,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(f"DRY-RUN: Would generate suggestions for event {ev['id']}")
         print(f"  Source: {ev.get('source')}")
-        print(f"  Type: {ev.get('type')}")
+        print(f"  Type: {ev.get('event_type', ev.get('type', '?'))}")
         print(f"  No suggestions would be executed")
         return 0
 
@@ -118,6 +140,7 @@ def cmd_validate_secret(args: argparse.Namespace) -> int:
         print(f"✅ Webhook secret configured (length: {result['length']})")
         print(f"   Algorithm: {result['algorithm']}")
         print(f"   Header: {result['header']}")
+        print(f"   Channel token: {result.get('channel_token', 'disabled')}")
         return 0
     else:
         print(f"❌ {result['error']}", file=sys.stderr)
@@ -139,8 +162,167 @@ def cmd_sign(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Generic approve — works for any pending action type."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import approve_pending_action, get_pending_action
+    action = get_pending_action(cfg, args.action_id)
+    if not action:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+    result = approve_pending_action(cfg, args.action_id, approver=args.approver, reason=args.reason)
+    if args.summary:
+        if result:
+            action_type = action.get("type", "?")
+            cli = ACTION_APPROVAL_CLI.get(action_type, "pending_actions.py")
+            print(f"✅ Approved: {action_type} ({args.action_id})")
+            print(f"   Approver: {args.approver}")
+            print(f"   Execute with: webhook_events.py execute --action-id {args.action_id}")
+        else:
+            print(f"❌ Approval failed")
+    else:
+        print_json({"approved": bool(result), "action_id": args.action_id})
+    return 0 if result else 1
+
+
+def cmd_execute(args: argparse.Namespace) -> int:
+    """Generic execute — routes to provider based on action type."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import get_pending_action, mark_executing, mark_executed, mark_failed
+    action = get_pending_action(cfg, args.action_id)
+    if not action:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+
+    state = action.get("state", "")
+    if state != "approved":
+        print(f"Action not approved (state={state}). Run approve first.", file=sys.stderr)
+        return 1
+
+    action_type = action.get("type", "")
+    payload = action.get("payload", {})
+
+    # Pre-execution gate
+    executing = mark_executing(cfg, args.action_id)
+    if not executing:
+        print(f"Cannot execute (state={state}). Approval may have expired.", file=sys.stderr)
+        return 1
+
+    from workspace_client import get_workspace_client
+    from workspace_capabilities import require_capability
+    client = get_workspace_client(cfg)
+
+    unsupported = require_capability(client, action_type, target=action.get("target", ""))
+    if unsupported:
+        mark_failed(cfg, args.action_id)
+        print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
+        return 1
+
+    try:
+        if action_type == "gmail.send":
+            result = client.gmail_send(
+                to=payload.get("to", ""),
+                subject=payload.get("subject", ""),
+                body=payload.get("body", ""),
+                cc=payload.get("cc"),
+            )
+        elif action_type == "gmail.label":
+            result = client.gmail_label(
+                message_id=payload.get("message_id", ""),
+                label_id=payload.get("label_id", ""),
+            )
+        elif action_type == "gmail.archive":
+            result = client.gmail_archive(message_id=payload.get("message_id", ""))
+        elif action_type == "gmail.create_label":
+            result = client.gmail_create_label(label_name=payload.get("label", ""))
+        elif action_type == "gmail.trash":
+            result = client.gmail_trash(message_id=payload.get("message_id", ""))
+        elif action_type == "calendar.create":
+            result = client.calendar_create(
+                summary=payload.get("summary", ""),
+                start=payload.get("start", ""),
+                end=payload.get("end", ""),
+            )
+        elif action_type == "calendar.update":
+            result = client.calendar_update(
+                event_id=payload.get("event_id", ""),
+                summary=payload.get("summary"),
+                start=payload.get("start"),
+                end=payload.get("end"),
+            )
+        elif action_type == "calendar.cancel":
+            result = client.calendar_cancel(event_id=payload.get("event_id", ""))
+        elif action_type == "drive.upload":
+            result = client.drive_upload(
+                path=payload.get("path", ""),
+                name=payload.get("name", ""),
+            )
+        elif action_type == "drive.download":
+            result = client.drive_download(
+                file_id=payload.get("file_id", ""),
+                path=payload.get("path", ""),
+            )
+        elif action_type == "drive.trash":
+            result = client.drive_trash(file_id=payload.get("file_id", ""))
+        else:
+            mark_failed(cfg, args.action_id)
+            print(f"❌ Unknown action type: {action_type}", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        mark_failed(cfg, args.action_id)
+        if args.summary:
+            print(f"❌ Execution failed: {exc}")
+        else:
+            print_json({"success": False, "error": str(exc)})
+        return 1
+
+    mark_executed(cfg, args.action_id, result if isinstance(result, dict) else {"raw": str(result)})
+
+    if args.summary:
+        success = result.get("success", False) if isinstance(result, dict) else True
+        if success:
+            print(f"✅ Executed: {action_type} ({args.action_id})")
+        else:
+            mark_failed(cfg, args.action_id)
+            err = result.get("error", "unknown") if isinstance(result, dict) else "unknown"
+            print(f"❌ Provider returned error: {err}")
+            return 1
+    else:
+        print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
+                     "result": result if isinstance(result, dict) else str(result)})
+    return 0
+
+
+def cmd_pending(args: argparse.Namespace) -> int:
+    """List all pending actions."""
+    cfg = load_config(args.config)
+    if cfg is None:
+        return 1
+    from pending_actions import list_pending_actions
+    actions = list_pending_actions(cfg)
+    if args.summary:
+        if not actions:
+            print("No pending actions")
+        else:
+            for a in actions:
+                icon = {"requested": "📨", "approved": "✅", "executed": "✅",
+                        "cancelled": "❌", "expired": "⏰", "executing": "⏳"}.get(a.get("state"), "?")
+                cli = ACTION_APPROVAL_CLI.get(a.get("type", ""), "?")
+                print(f"{icon} {a['id']}  {a.get('type', '?')}  [{a.get('state', '?')}]")
+                print(f"   {a.get('summary', '')}")
+                if a.get("state") == "requested":
+                    print(f"   Approve: webhook_events.py approve --action-id {a['id']} --approver 'MH' --reason 'ok'")
+    else:
+        print_json(actions)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Webhook receiver CLI — serve, inspect, replay")
+    parser = argparse.ArgumentParser(description="Webhook receiver and pending-action CLI")
     parser.add_argument("--config", help="Path to company.yaml")
     parser.add_argument("--summary", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -148,8 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="Start webhook receiver server")
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8787)
-    serve.add_argument("--generate-suggestions", action="store_true",
-                        help="Generate suggestions after ingestion (read-only)")
+    serve.add_argument("--generate-suggestions", action="store_true")
 
     inspect = sub.add_parser("inspect", help="Inspect webhook-originated events")
     inspect.add_argument("--limit", type=int, default=20)
@@ -161,7 +342,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("validate-secret", help="Validate webhook secret configuration")
 
     sign = sub.add_parser("sign", help="Generate HMAC signature for testing")
-    sign.add_argument("--body", required=True, help="Request body (JSON string)")
+    sign.add_argument("--body", required=True)
+
+    approve = sub.add_parser("approve", help="Approve a pending action")
+    approve.add_argument("--action-id", required=True)
+    approve.add_argument("--approver", required=True)
+    approve.add_argument("--reason", required=True)
+
+    execute = sub.add_parser("execute", help="Execute an approved pending action")
+    execute.add_argument("--action-id", required=True)
+
+    pending = sub.add_parser("pending", help="List all pending actions")
 
     return parser
 
@@ -180,6 +371,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_validate_secret(args)
         elif args.command == "sign":
             return cmd_sign(args)
+        elif args.command == "approve":
+            return cmd_approve(args)
+        elif args.command == "execute":
+            return cmd_execute(args)
+        elif args.command == "pending":
+            return cmd_pending(args)
         else:
             parser.error("unknown command")
             return 2
