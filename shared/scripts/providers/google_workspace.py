@@ -24,17 +24,41 @@ from workspace_client import WorkspaceClient
 
 
 def _find_google_api_script() -> Path:
-    """Locate google_api.py — check shared/scripts first, then installed skill."""
+    """Locate google_api.py — check shared/scripts first, then Hermes skill.
+
+    Search order:
+    1. shared/scripts/google_api.py (if shipped alongside this plugin)
+    2. $CHIEF_OF_STAFF_HERMES_HOME/skills/productivity/google-workspace/scripts/
+    3. $HERMES_HOME/skills/productivity/google-workspace/scripts/
+    4. ~/.hermes/skills/productivity/google-workspace/scripts/ (default)
+
+    The google-workspace skill is an OPTIONAL external dependency.
+    Install it via: hermes skill install google-workspace
+    Or set GOOGLE_WORKSPACE_API env var to point to a custom google_api.py.
+    """
+    # Check env override first
+    env_script = os.getenv("GOOGLE_WORKSPACE_API")
+    if env_script:
+        p = Path(env_script).expanduser()
+        if p.exists():
+            return p
+
+    # Determine Hermes home (env-configurable for non-Hermes agents)
+    hermes_env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
+    hermes_home = Path(hermes_env).expanduser() if hermes_env else Path.home() / ".hermes"
+
     candidates = [
         _PARENT / "google_api.py",
-        Path.home() / ".hermes" / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py",
-        Path.home() / ".hermes" / "skills" / "google-workspace" / "scripts" / "google_api.py",
+        hermes_home / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py",
+        hermes_home / "skills" / "google-workspace" / "scripts" / "google_api.py",
     ]
     for c in candidates:
         if c.exists():
             return c
     raise FileNotFoundError(
-        "google_api.py not found; install/configure google-workspace skill"
+        "google_api.py not found. The google-workspace skill is an optional "
+        "external dependency. Install it via 'hermes skill install google-workspace' "
+        "or set GOOGLE_WORKSPACE_API to point to a custom google_api.py."
     )
 
 

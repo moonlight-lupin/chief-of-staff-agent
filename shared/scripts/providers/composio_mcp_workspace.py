@@ -402,3 +402,12 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             return True
         except Exception:
             return False
+
+
+def get_composio_client(config: Any) -> "ComposioMCPWorkspaceClient":
+    """Factory: return the Composio MCP client.
+
+    This is the single entry point for Composio workspace operations.
+    The legacy composio_workspace.py shim delegates here.
+    """
+    return ComposioMCPWorkspaceClient(config)

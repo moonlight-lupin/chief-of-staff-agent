@@ -132,7 +132,7 @@ def get_workspace_client(config: Any) -> WorkspaceClient:
         from providers.google_workspace import GoogleWorkspaceClient
         return GoogleWorkspaceClient(config)
     elif provider == "composio":
-        from providers.composio_workspace import get_composio_client
+        from providers.composio_mcp_workspace import get_composio_client
         return get_composio_client(config)
     else:
         raise ValueError(f"Unknown workspace provider: {provider}. Use 'google_api' or 'composio'.")

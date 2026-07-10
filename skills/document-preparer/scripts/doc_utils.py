@@ -13,6 +13,9 @@ import json
 import re
 import sys
 from pathlib import Path
+
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+_DEFAULT_INDEX = _PLUGIN_ROOT / "shared" / "templates" / "index.yaml"
 from typing import Any, Iterable, Optional
 
 TOKEN_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
@@ -293,7 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--file", required=True)
     reg.add_argument("--tokens", nargs="+", required=True)
     reg.add_argument("--category", required=True)
-    reg.add_argument("--index", default="/root/.hermes/plugins/chief-of-staff/shared/templates/index.yaml")
+    reg.add_argument("--index", default=None,
+                      help="Path to template index.yaml (default: plugin's shared/templates/index.yaml)")
     reg.add_argument("--description", default="")
     reg.add_argument("--format", choices=["json", "text"], default="json")
     return parser
@@ -327,7 +331,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             payload = create_template_from_doc(args.doc, _parse_json_mapping(args.mappings, "--mappings"), args.output)
             _print_payload(payload, args.format)
         elif args.command == "register":
-            payload = register_template(args.name, args.file, args.tokens, args.category, args.index, args.description)
+            index_path = args.index or str(_DEFAULT_INDEX)
+            payload = register_template(args.name, args.file, args.tokens, args.category, index_path, args.description)
             _print_payload(payload, args.format)
         else:  # pragma: no cover - argparse prevents this
             parser.error("Unknown command")

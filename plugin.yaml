@@ -1,5 +1,5 @@
 name: chief-of-staff
-version: 0.2.0.2
+version: 0.2.1
 author: moonlight-lupin
 license: MIT
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, and backups."
@@ -8,7 +8,7 @@ optional_skills:
   - google-workspace
 
 # Skill profiles — determines which skills are registered.
-# Default profile registers all 16 skills including self-sign.
+# Default profile registers all 17 skills including self-sign and email-organisation.
 # Enterprise profile swaps self-sign for esign-connector (DocuSeal).
 skill_profiles:
   default:
@@ -28,6 +28,7 @@ skill_profiles:
       - entity-research
       - travel-itinerary
       - backup
+      - email-organisation
       - self-sign
   enterprise:
     registered:
@@ -46,6 +47,7 @@ skill_profiles:
       - entity-research
       - travel-itinerary
       - backup
+      - email-organisation
       - esign-connector
     optional:
       - self-sign

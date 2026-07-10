@@ -116,7 +116,7 @@ To enable these hooks, update `__init__.py`:
 
 ```python
 def register(ctx):
-    """Register all 16 skills + quality hooks."""
+    """Register all 17 skills + quality hooks."""
     for skill_name in [
         "daily-briefing", "deadline-tracker", "note-taker",
         "todo-list", "calendar-manager", "drive-filer",

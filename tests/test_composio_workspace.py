@@ -101,10 +101,13 @@ class TestComposioFactory:
         with pytest.raises(ValueError, match="user_id"):
             get_workspace_client(composio_config_no_user_id)
 
-    def test_sdk_mode_rejected(self, composio_config_sdk_mode):
+    def test_sdk_mode_ignored_only_mcp_supported(self, composio_config_sdk_mode):
+        """SDK mode is no longer a concept — only MCP backend exists.
+        The config mode field is ignored; MCP client is always returned."""
         from workspace_client import get_workspace_client
-        with pytest.raises(ValueError, match="SDK backend was removed"):
-            get_workspace_client(composio_config_sdk_mode)
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = get_workspace_client(composio_config_sdk_mode)
+        assert isinstance(client, ComposioMCPWorkspaceClient)
 
     def test_composio_workspace_client_alias_resolves_to_mcp(self, composio_config, mcp_key):
         from providers.composio_workspace import ComposioWorkspaceClient

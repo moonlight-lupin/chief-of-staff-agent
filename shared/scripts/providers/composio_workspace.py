@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Composio workspace provider — MCP backend alias.
+"""Composio workspace provider — deprecated shim.
 
-All Composio workspace operations route through the MCP backend
-(connect.composio.dev/mcp). The legacy SDK backend was removed in v0.1.9.
+All Composio workspace operations now route directly through the MCP backend
+(providers/composio_mcp_workspace.py). This file remains for backward
+compatibility only. New code should import from composio_mcp_workspace.
 
-This file re-exports helpers and the MCP client class for backward compat.
+Deprecated since v0.2.1. Will be removed in v0.3.0.
 """
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -18,36 +20,36 @@ if str(_PARENT) not in sys.path:
 
 from workspace_client import WorkspaceClient
 
-# Re-export shared helpers from the MCP backend
+# Re-export from the real backend
 from providers.composio_mcp_workspace import (
     load_session_meta,
     save_session_meta,
     get_enabled_tools,
+    get_composio_client,
+    ComposioMCPWorkspaceClient,
 )
 
 
-def get_composio_client(config: Any) -> WorkspaceClient:
-    """Return the Composio MCP client. SDK mode is no longer supported."""
-    integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
-    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
-    mode = str(workspace.get("mode", "mcp"))
-
-    if mode == "mcp":
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
-        return ComposioMCPWorkspaceClient(config)
-    elif mode == "sdk":
-        raise ValueError(
-            "Composio SDK backend was removed in v0.1.9. "
-            "Change mode to 'mcp' and set COMPOSIO_MCP_KEY in your .env file. "
-            "See docs/SETUP.md for migration instructions."
-        )
-    else:
-        raise ValueError(f"Unknown Composio mode: {mode}. Use 'mcp'.")
+def get_composio_client_deprecated(config: Any) -> WorkspaceClient:
+    """Deprecated alias — use composio_mcp_workspace.get_composio_client."""
+    warnings.warn(
+        "providers.composio_workspace is deprecated. "
+        "Import from providers.composio_mcp_workspace instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return get_composio_client(config)
 
 
 # Backward compat: ComposioWorkspaceClient name routes to MCP
 class ComposioWorkspaceClient(WorkspaceClient):
-    """Facade that delegates to the MCP backend."""
+    """Deprecated facade that delegates to the MCP backend."""
 
     def __new__(cls, config: Any) -> WorkspaceClient:
+        warnings.warn(
+            "ComposioWorkspaceClient is deprecated. "
+            "Use ComposioMCPWorkspaceClient directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return get_composio_client(config)

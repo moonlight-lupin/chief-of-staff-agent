@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 DEFAULT_EXCLUDES = [".env", "auth.json", "state.db", "sessions/", "logs/"]
-DEFAULT_GOOGLE_API = Path("~/.hermes/skills/productivity/google-workspace/scripts/google_api.py").expanduser()
+DEFAULT_GOOGLE_API = None  # Resolved at runtime via get_hermes_home()
 
 
 class BackupError(RuntimeError):
@@ -58,6 +58,13 @@ def _expand(path: str | Path) -> Path:
     return Path(path).expanduser().resolve()
 
 
+def _default_google_api() -> Path:
+    """Resolve google_api.py path at runtime via env-configurable home."""
+    env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
+    home = Path(env).expanduser() if env else Path.home() / ".hermes"
+    return home / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py"
+
+
 def _slug(value: str) -> str:
     value = value.strip().lower()
     value = re.sub(r"[^a-z0-9]+", "-", value)
@@ -89,7 +96,7 @@ def _hermes_home(config: dict[str, Any]) -> Path:
         project_path = _expand(project_root)
         if project_path.parent.name == "projects":
             return project_path.parent.parent
-    env_home = os.environ.get("HERMES_HOME")
+    env_home = os.environ.get("CHIEF_OF_STAFF_HERMES_HOME") or os.environ.get("HERMES_HOME")
     if env_home:
         return _expand(env_home)
     return _expand("~/.hermes")
@@ -116,7 +123,7 @@ def _backup_config(config: dict[str, Any]) -> dict[str, Any]:
         "retention_monthly": int(backup.get("retention_monthly", 12)),
         "drive_folder": backup.get("drive_folder", "09_Backups/"),
         "drive_folder_id": backup.get("drive_folder_id") or backup.get("drive_folder" if str(backup.get("drive_folder", "")).startswith("id:") else "drive_folder_id"),
-        "output_dir": backup.get("output_dir", "~/.hermes/backups"),
+        "output_dir": backup.get("output_dir") or str(_hermes_home(config) / "backups"),
         "exclude": list(backup.get("exclude", DEFAULT_EXCLUDES) or []),
     }
 
@@ -240,7 +247,7 @@ def _run_google_api(config: dict[str, Any], service: str, command: str, args: li
     script = Path(
         os.environ.get("GOOGLE_WORKSPACE_API")
         or config.get("google_api_script", "")
-        or str(DEFAULT_GOOGLE_API)
+        or str(_default_google_api())
     ).expanduser()
     if not script.exists():
         raise BackupError(f"google_api.py not found: {script}")
@@ -269,7 +276,7 @@ def upload_backup(config: dict[str, Any], archive_path: str | Path, drive_folder
     account, delegate = _google_identity(config)
     command = [
         sys.executable,
-        str(DEFAULT_GOOGLE_API),
+        str(_default_google_api()),
         "--account",
         account,
         "--as",

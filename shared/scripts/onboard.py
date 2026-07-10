@@ -279,7 +279,13 @@ def check_prerequisites() -> dict[str, Any]:
     else:
         print("⚠ Hermes command not found on PATH. Install Hermes before using scheduled workflows.")
 
-    google_skill_path = Path.home() / ".hermes" / "skills" / "productivity" / "google-workspace"
+    # Locate google-workspace skill via configurable Hermes home
+    try:
+        from config_loader import get_hermes_home
+        _hermes_home = get_hermes_home()
+    except Exception:
+        _hermes_home = Path.home() / ".hermes"
+    google_skill_path = _hermes_home / "skills" / "productivity" / "google-workspace"
     google_workspace = {"installed": google_skill_path.exists(), "path": str(google_skill_path)}
     if google_skill_path.exists():
         print(f"✓ google-workspace skill found: {google_skill_path}")
@@ -291,7 +297,11 @@ def check_prerequisites() -> dict[str, Any]:
 
 def make_default_config(company_name: str = "", jurisdiction: str = "SG", business_type: str = DEFAULT_BUSINESS_TYPE) -> dict[str, Any]:
     slug = slugify(company_name, "company")
-    project_root = f"~/.hermes/projects/{slug}/"
+    try:
+        from config_loader import get_default_project_root
+        project_root = str(get_default_project_root(slug))
+    except Exception:
+        project_root = f"~/.hermes/projects/{slug}/"
     timezone = default_timezone_for_jurisdiction(jurisdiction)
     return {
         "company": {
@@ -471,7 +481,12 @@ def build_interactive_config() -> dict[str, Any]:
 
     print("\n== Local project paths ==")
     slug = slugify(company_name)
-    project_root = prompt_text("Project data root", default=f"~/.hermes/projects/{slug}/")
+    try:
+        from config_loader import get_default_project_root
+        default_pr = str(get_default_project_root(slug))
+    except Exception:
+        default_pr = f"~/.hermes/projects/{slug}/"
+    project_root = prompt_text("Project data root", default=default_pr)
     wiki_path = prompt_text("Wiki directory", default=str(Path(project_root).expanduser() / "wiki") if not project_root.startswith("~") else f"{project_root.rstrip('/')}/wiki/")
     config["paths"].update(
         {

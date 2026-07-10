@@ -247,6 +247,14 @@ def generate_policy(
 
 # ─── Policy Storage ──────────────────────────────────────────
 
+
+def _get_hermes_home_fallback() -> Path:
+    """Hermes home for fallback paths (env-configurable)."""
+    env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".hermes"
+
 def _project_root(config: Any) -> Path:
     root = None
     if isinstance(config, Mapping):
@@ -255,7 +263,7 @@ def _project_root(config: Any) -> Path:
             root = paths.get("project_root")
     if not root:
         root = os.getenv("CHIEF_OF_STAFF_PROJECT_ROOT",
-                         str(Path.home() / ".hermes" / "projects" / "default"))
+                         str(_get_hermes_home_fallback()))
     return Path(str(root)).expanduser()
 
 

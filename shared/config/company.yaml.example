@@ -48,6 +48,8 @@ google:
 
 paths:
   # Project root stores YAML data files: pipeline.yaml, todos.yaml, invoices.yaml, expenses.yaml.
+  # The default uses ~/.hermes but you can set CHIEF_OF_STAFF_HERMES_HOME or HERMES_HOME
+  # to relocate the entire home directory for non-Hermes agents (e.g. OpenClaw).
   project_root: "~/.hermes/projects/acme-advisory/"
   # Wiki path for the Note Taker / second-brain skill.
   wiki_path: "~/.hermes/projects/acme-advisory/wiki/"

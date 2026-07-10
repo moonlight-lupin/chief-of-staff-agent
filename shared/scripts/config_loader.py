@@ -80,6 +80,28 @@ class Config(dict):
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
 
+def get_hermes_home() -> Path:
+    """Return the Hermes home directory.
+
+    Resolution order:
+    1. CHIEF_OF_STAFF_HERMES_HOME env var (for non-Hermes agents like OpenClaw)
+    2. HERMES_HOME env var (Hermes-native)
+    3. ~/.hermes (default, Hermes convention)
+
+    This centralises all ~/.hermes references so the plugin can run
+    outside a Hermes installation by setting CHIEF_OF_STAFF_HERMES_HOME.
+    """
+    env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".hermes"
+
+
+def get_default_project_root(slug: str = "default") -> Path:
+    """Return the default project root for a given project slug."""
+    return get_hermes_home() / "projects" / slug
+
+
 class ConfigError(ValueError):
     """Raised internally for validation errors."""
 
