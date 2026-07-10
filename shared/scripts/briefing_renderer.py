@@ -146,19 +146,27 @@ def render_text(briefing: dict[str, Any]) -> str:
 
     # Knowledge maintenance
     km = sections.get("knowledge_maintenance", {})
-    if km and (km.get("pages_updated") or km.get("pages_created") or km.get("observations_added")
-               or km.get("duplicates_flagged") or km.get("open_questions_added")):
+    if km and (km.get("wiki_pages_updated") or km.get("wiki_pages_created")
+               or km.get("memory_records_created") or km.get("memory_records_updated")
+               or km.get("duplicates_flagged") or km.get("conflicts_flagged")
+               or km.get("total_records")):
         lines.append("Knowledge maintenance:")
-        if km.get("pages_updated"):
-            lines.append(f"  Updated {km['pages_updated']} page(s).")
-        if km.get("pages_created"):
-            lines.append(f"  Created {km['pages_created']} new draft page(s).")
+        if km.get("wiki_pages_updated"):
+            lines.append(f"  Updated {km['wiki_pages_updated']} wiki page(s).")
+        if km.get("wiki_pages_created"):
+            lines.append(f"  Created {km['wiki_pages_created']} new wiki draft page(s).")
+        if km.get("memory_records_created"):
+            lines.append(f"  Created {km['memory_records_created']} memory record(s).")
+        if km.get("memory_records_updated"):
+            lines.append(f"  Updated {km['memory_records_updated']} memory record(s).")
         if km.get("observations_added"):
             lines.append(f"  Added {km['observations_added']} source-backed observation(s).")
         if km.get("backlinks_added"):
             lines.append(f"  Added {km['backlinks_added']} backlink(s).")
         if km.get("duplicates_flagged"):
             lines.append(f"  Flagged {km['duplicates_flagged']} possible duplicate(s) for review.")
+        if km.get("conflicts_flagged"):
+            lines.append(f"  Flagged {km['conflicts_flagged']} conflict(s) for review.")
         if km.get("open_questions_added"):
             lines.append(f"  Added {km['open_questions_added']} open question(s).")
         if km.get("total_records"):
@@ -274,19 +282,27 @@ def render_markdown(briefing: dict[str, Any]) -> str:
 
     # Knowledge maintenance
     km = sections.get("knowledge_maintenance", {})
-    if km and (km.get("pages_updated") or km.get("pages_created") or km.get("observations_added")
-               or km.get("duplicates_flagged") or km.get("open_questions_added")):
+    if km and (km.get("wiki_pages_updated") or km.get("wiki_pages_created")
+               or km.get("memory_records_created") or km.get("memory_records_updated")
+               or km.get("duplicates_flagged") or km.get("conflicts_flagged")
+               or km.get("total_records")):
         lines.append("## Knowledge Maintenance\n")
-        if km.get("pages_updated"):
-            lines.append(f"- Updated {km['pages_updated']} page(s)")
-        if km.get("pages_created"):
-            lines.append(f"- Created {km['pages_created']} new draft page(s)")
+        if km.get("wiki_pages_updated"):
+            lines.append(f"- Updated {km['wiki_pages_updated']} wiki page(s)")
+        if km.get("wiki_pages_created"):
+            lines.append(f"- Created {km['wiki_pages_created']} new wiki draft page(s)")
+        if km.get("memory_records_created"):
+            lines.append(f"- Created {km['memory_records_created']} memory record(s)")
+        if km.get("memory_records_updated"):
+            lines.append(f"- Updated {km['memory_records_updated']} memory record(s)")
         if km.get("observations_added"):
             lines.append(f"- Added {km['observations_added']} source-backed observation(s)")
         if km.get("backlinks_added"):
             lines.append(f"- Added {km['backlinks_added']} backlink(s)")
         if km.get("duplicates_flagged"):
             lines.append(f"- Flagged {km['duplicates_flagged']} possible duplicate(s)")
+        if km.get("conflicts_flagged"):
+            lines.append(f"- Flagged {km['conflicts_flagged']} conflict(s)")
         if km.get("open_questions_added"):
             lines.append(f"- Added {km['open_questions_added']} open question(s)")
         if km.get("total_records"):

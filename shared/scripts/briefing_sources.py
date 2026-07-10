@@ -326,6 +326,7 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
     """Read .knowledge/memory.json and .knowledge/memory_changes.json.
 
     Returns counts for the daily briefing knowledge maintenance section.
+    Distinguishes memory records from wiki pages.
     Degrades gracefully if files don't exist.
     """
     try:
@@ -339,11 +340,14 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
 
     stats: dict[str, object] = {
         "total_records": 0,
-        "pages_updated": 0,
-        "pages_created": 0,
+        "memory_records_created": 0,
+        "memory_records_updated": 0,
+        "wiki_pages_created": 0,
+        "wiki_pages_updated": 0,
+        "duplicates_flagged": 0,
+        "conflicts_flagged": 0,
         "observations_added": 0,
         "backlinks_added": 0,
-        "duplicates_flagged": 0,
         "open_questions_added": 0,
     }
 
@@ -357,7 +361,7 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
     except Exception:
         pass
 
-    # Read recent changes count
+    # Read recent changes — distinguish memory vs wiki
     try:
         if changes_path.exists():
             data = json.loads(changes_path.read_text(encoding="utf-8"))
@@ -367,12 +371,18 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
                     if not isinstance(ch, dict):
                         continue
                     ct = ch.get("change_type", "")
-                    if ct == "memory_create" or ct == "wiki_create":
-                        stats["pages_created"] = stats["pages_created"] + 1 if isinstance(stats["pages_created"], int) else 1
-                    elif ct == "memory_update" or ct == "wiki_update":
-                        stats["pages_updated"] = stats["pages_updated"] + 1 if isinstance(stats["pages_updated"], int) else 1
+                    if ct == "memory_create":
+                        stats["memory_records_created"] = stats["memory_records_created"] + 1 if isinstance(stats["memory_records_created"], int) else 1
+                    elif ct == "memory_update":
+                        stats["memory_records_updated"] = stats["memory_records_updated"] + 1 if isinstance(stats["memory_records_updated"], int) else 1
+                    elif ct == "wiki_create":
+                        stats["wiki_pages_created"] = stats["wiki_pages_created"] + 1 if isinstance(stats["wiki_pages_created"], int) else 1
+                    elif ct == "wiki_update":
+                        stats["wiki_pages_updated"] = stats["wiki_pages_updated"] + 1 if isinstance(stats["wiki_pages_updated"], int) else 1
                     elif ct == "duplicate_detected":
                         stats["duplicates_flagged"] = stats["duplicates_flagged"] + 1 if isinstance(stats["duplicates_flagged"], int) else 1
+                    elif ct == "conflict_detected":
+                        stats["conflicts_flagged"] = stats["conflicts_flagged"] + 1 if isinstance(stats["conflicts_flagged"], int) else 1
     except Exception:
         pass
 

@@ -504,3 +504,78 @@ class TestBriefingKnowledgeSection:
 
         output = buf.getvalue()
         assert "Knowledge" in output or "Memory" in output or "memory" in output.lower()
+
+    def test_wiki_curator_run_appears_in_briefing_stats(self, temp_with_config, monkeypatch):
+        """Wiki curator run should create wiki_create entries in memory_changes.json
+        that show up in the daily briefing knowledge maintenance section."""
+        config, project, config_path = temp_with_config
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config_path))
+
+        # Seed an event so wiki_curator has something to process
+        from event_store import ingest_event
+        ingest_event(config, source="gmail", source_id="msg-001",
+                      event_type="email_received",
+                      payload={"from": "contact@example.com", "subject": "Project alpha update"})
+
+        # Run wiki curator
+        import wiki_curator
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            wiki_curator.main(["--config", str(config_path), "run", "--since", "24h"])
+
+        # Verify wiki changes were logged to memory_changes.json
+        changes_path = project / ".knowledge" / "memory_changes.json"
+        assert changes_path.exists(), "memory_changes.json should exist after wiki_curator run"
+        data = json.loads(changes_path.read_text())
+        changes = data.get("changes", [])
+        wiki_changes = [c for c in changes if c.get("change_type", "").startswith("wiki_")]
+        assert len(wiki_changes) > 0, "Should have wiki_create or wiki_update entries"
+
+        # Now run the briefing and check that wiki stats appear
+        import daily_briefing
+        buf2 = io.StringIO()
+        with redirect_stdout(buf2):
+            daily_briefing.main(["run", "--json", "--dry-run"])
+
+        parsed = json.loads(buf2.getvalue())
+        km = parsed["sections"]["knowledge_maintenance"]
+        assert km.get("wiki_pages_created", 0) + km.get("wiki_pages_updated", 0) > 0, \
+            "Briefing should show wiki page changes"
+
+    def test_briefing_distinguishes_memory_from_wiki(self, temp_project, monkeypatch):
+        """Briefing should report memory records and wiki pages separately."""
+        config, project = temp_project
+        config_path = project / "company.yaml"
+        import yaml
+        config_path.write_text(yaml.safe_dump(config))
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config_path))
+
+        (project / ".knowledge").mkdir(exist_ok=True)
+        (project / ".knowledge" / "memory.json").write_text(json.dumps({
+            "records": {"mem_001": {"id": "mem_001"}},
+            "_version": 1,
+        }))
+        (project / ".knowledge" / "memory_changes.json").write_text(json.dumps({
+            "changes": [
+                {"id": "memchg_001", "change_type": "memory_create",
+                 "target": "mem_001", "summary": "Created", "mode": "autonomous",
+                 "source_ids": [], "risk": "low", "reversible": True},
+                {"id": "memchg_002", "change_type": "wiki_create",
+                 "target": "wiki/entities/test.md", "summary": "Created page",
+                 "mode": "autonomous", "source_ids": [], "risk": "low", "reversible": True},
+            ],
+            "_version": 2,
+        }))
+
+        import daily_briefing
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            daily_briefing.main(["run", "--json", "--dry-run"])
+
+        parsed = json.loads(buf.getvalue())
+        km = parsed["sections"]["knowledge_maintenance"]
+        assert km.get("memory_records_created", 0) == 1
+        assert km.get("wiki_pages_created", 0) == 1
+        # Should NOT have the old combined fields
+        assert "pages_created" not in km
+        assert "pages_updated" not in km

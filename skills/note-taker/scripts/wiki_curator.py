@@ -769,6 +769,7 @@ class WikiCurator:
         self.refresh_index()
         self.refresh_overview()
         self.append_action_log()
+        self.log_to_memory_changes()
 
     def all_markdown_pages(self) -> list[Path]:
         if not self.wiki_path.exists():
@@ -869,6 +870,61 @@ Auto-regenerated summary of the Chief-of-Staff wiki.
         new_content = content.rstrip() + "\n" + "\n".join(entries).rstrip() + "\n"
         _atomic_write(path, new_content, self.wiki_path)
         self.changes.append(Change("update", path, "append action log"))
+
+    def log_to_memory_changes(self) -> None:
+        """Write wiki changes into .knowledge/memory_changes.json so the
+        daily briefing can report accurate wiki page counts alongside
+        memory record counts.
+
+        Each wiki change becomes a change-log entry with change_type
+        'wiki_create' or 'wiki_update'.
+        """
+        if self.dry_run or not self.changes:
+            return
+
+        import json as _json
+        changes_path = self.project_root / ".knowledge" / "memory_changes.json"
+        try:
+            if changes_path.exists():
+                data = _json.loads(changes_path.read_text(encoding="utf-8"))
+            else:
+                data = {"changes": [], "_version": 0}
+            if not isinstance(data, dict):
+                data = {"changes": [], "_version": 0}
+            changes_list = data.get("changes", [])
+            if not isinstance(changes_list, list):
+                changes_list = []
+
+            from datetime import timezone as _tz
+            ts = self.now.isoformat()
+            for ch in self.changes:
+                # Skip the "append action log" meta-change
+                if ch.action == "update" and "append action log" in ch.detail:
+                    continue
+                rel_path = self._relative(ch.path)
+                change_type = "wiki_create" if ch.action == "create" else "wiki_update"
+                entry = {
+                    "id": f"memchg_{ts.replace(':', '').replace('-', '').replace('+', '')}_{rel_path.replace('/', '_')[:20]}",
+                    "timestamp": ts,
+                    "mode": "autonomous",
+                    "change_type": change_type,
+                    "target": f"wiki/{rel_path}",
+                    "summary": ch.detail,
+                    "source_ids": [],
+                    "risk": "low",
+                    "reversible": True,
+                }
+                changes_list.append(entry)
+
+            data["changes"] = changes_list
+            data["_version"] = data.get("_version", 0) + 1
+            changes_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = changes_path.with_suffix(".json.tmp")
+            tmp.write_text(_json.dumps(data, indent=2, default=str), encoding="utf-8")
+            tmp.replace(changes_path)
+        except Exception:
+            # Best-effort: don't fail wiki curation if change-logging fails
+            pass
 
     def report_changes(self, items: Sequence[SourceItem]) -> str:
         lines = [
