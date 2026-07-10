@@ -85,7 +85,10 @@ The `safety` field in JSON output confirms:
 
 1. **Morning:** Run `daily_briefing.py run --summary`
 2. **Review:** Check pending approvals, grouped by risk
-3. **Approve:** Use `webhook_events.py approve --action-id <id>` for items you approve
-4. **Execute:** Use `webhook_events.py execute --action-id <id>` to run approved actions
-5. **Health:** Run `doctor.py --summary` if anything looks wrong
-6. **Backup:** Run `state_tools.py backup` before making changes
+3. **Approve:** Use `review_queue.py approve --action-id <id> --approver MH --reason "..."` for items you approve
+4. **Execute:** Use `review_queue.py execute --action-id <id>` to run approved actions
+5. **Dismiss:** Use `review_queue.py dismiss --action-id <id> --reason "..."` for items not needed
+6. **Health:** Run `doctor.py --summary` if anything looks wrong
+7. **Backup:** Run `state_tools.py backup` before making changes
+
+For full review queue usage, see `docs/REVIEW_QUEUE.md`.

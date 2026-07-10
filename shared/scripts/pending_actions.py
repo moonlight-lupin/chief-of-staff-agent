@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pending action storage for gated operations (e.g. Gmail send).
 
-State machine: requested → approved → executed | cancelled
-               requested → cancelled (skip approval)
+State machine: requested → approved → executed | cancelled | dismissed
+               requested → cancelled | dismissed (skip approval)
 
 Concurrency: optimistic versioning via version counter in the JSON file.
 Each save checks the version; if it changed since load, the write is rejected.
@@ -239,6 +239,7 @@ def create_pending_action(
         "approved_at": None,
         "executed_at": None,
         "cancelled_at": None,
+        "dismissed_at": None,
         "expired_at": None,
         "result": None,
         "approver": None,
@@ -367,7 +368,7 @@ def cancel_pending_action(
     data = _load(config)
     expected_version = data.get("_version", 0)
     action = data["actions"].get(action_id)
-    if not action or action["state"] in ("executed", "cancelled"):
+    if not action or action["state"] in ("executed", "cancelled", "dismissed"):
         return None
 
     action["state"] = "cancelled"
@@ -381,6 +382,39 @@ def cancel_pending_action(
         audit_workspace_action(config, action["provider"], action["type"], "pending",
                                target=action["target"], status="cancelled",
                                extra={"action_id": action_id, "cancel_reason": reason or ""})
+    except Exception:
+        pass
+
+    return action
+
+
+def dismiss_pending_action(
+    config: Any, action_id: str,
+    reason: str | None = None,
+) -> dict[str, Any] | None:
+    """Transition a pending action from 'requested', 'approved', or 'expired' to 'dismissed'.
+
+    Returns the updated action, or None if not found or not dismissible.
+    """
+    data = _load(config)
+    expected_version = data.get("_version", 0)
+    action = data["actions"].get(action_id)
+    if not action or action["state"] not in ("requested", "approved", "expired"):
+        return None
+
+    dismiss_reason = reason if reason is not None else "No dismiss reason provided"
+    action["state"] = "dismissed"
+    action["dismissed_at"] = _now()
+    action["dismiss_reason"] = dismiss_reason
+    _save(config, data, expected_version=expected_version)
+
+    try:
+        from workspace_audit import audit_workspace_action
+        audit_workspace_action(config, action["provider"], action["type"], "pending",
+                               target=action["target"], status="dismissed",
+                               extra={"action_id": action_id,
+                                      "dismiss_reason": dismiss_reason,
+                                      "reason_missing": reason is None})
     except Exception:
         pass
 
@@ -625,7 +659,7 @@ def format_preview_for_delivery(action_id: str, preview: dict[str, Any]) -> str:
     state = preview.get("state", "?")
     icon = {
         "requested": "📨", "approved": "✅", "executed": "📤",
-        "cancelled": "❌", "expired": "⏰",
+        "cancelled": "❌", "dismissed": "🚫", "expired": "⏰",
     }.get(state, "?")
 
     lines = [

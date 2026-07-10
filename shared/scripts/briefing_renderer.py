@@ -79,10 +79,9 @@ def render_text(briefing: dict[str, Any]) -> str:
             for a in actions:
                 lines.append(f"    [{a.get('action_id', '?')}] {a.get('type', '?')} — {a.get('summary', '')}")
                 lines.append(f"      State: {a.get('state', '?')} | Created: {a.get('created_at', '?')}")
-                cmd = f"python skills/document-preparer/scripts/webhook_events.py pending --action-id {a.get('action_id', '?')}"
-                lines.append(f"      Preview: {cmd}")
-                cmd2 = f"python skills/document-preparer/scripts/webhook_events.py approve --action-id {a.get('action_id', '?')}"
-                lines.append(f"      Approve: {cmd2}")
+                lines.append(f"      Preview: python shared/scripts/review_queue.py preview --action-id {a.get('action_id', '?')}")
+                lines.append(f"      Approve: python shared/scripts/review_queue.py approve --action-id {a.get('action_id', '?')} --approver MH --reason \"Reviewed\"")
+                lines.append(f"      Execute: python shared/scripts/review_queue.py execute --action-id {a.get('action_id', '?')}")
         lines.append("")
 
     # Email organisation
@@ -224,8 +223,9 @@ def render_markdown(briefing: dict[str, Any]) -> str:
         for a in actions:
             lines.append(f"- `{a.get('action_id', '?')}` {a.get('type', '?')} — {a.get('summary', '')}")
             lines.append(f"  - State: {a.get('state', '?')}")
-            lines.append(f"  - Preview: `python skills/document-preparer/scripts/webhook_events.py pending --action-id {a.get('action_id', '?')}`")
-            lines.append(f"  - Approve: `python skills/document-preparer/scripts/webhook_events.py approve --action-id {a.get('action_id', '?')}`")
+            lines.append(f"  - Preview: `python shared/scripts/review_queue.py preview --action-id {a.get('action_id', '?')}`")
+            lines.append(f"  - Approve: `python shared/scripts/review_queue.py approve --action-id {a.get('action_id', '?')} --approver MH --reason \"Reviewed\"`")
+            lines.append(f"  - Execute: `python shared/scripts/review_queue.py execute --action-id {a.get('action_id', '?')}`")
         lines.append("")
 
     # Email organisation

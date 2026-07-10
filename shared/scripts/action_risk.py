@@ -67,8 +67,32 @@ _ACTION_EXPLANATIONS: dict[str, str] = {
 
 
 def get_action_risk(action_type: str) -> str:
-    """Return the risk level for an action type, defaulting unknown actions to low."""
-    return ACTION_RISK_MAP.get(action_type, "low")
+    """Return the risk level for an action type.
+
+    Known types use ACTION_RISK_MAP. Unknown types are classified by
+    action verb — write actions are NOT silently defaulted to 'low'.
+    """
+    if action_type in ACTION_RISK_MAP:
+        return ACTION_RISK_MAP[action_type]
+    # Unknown action — classify by verb
+    at = action_type.lower()
+    # Write/mutate verbs → high
+    write_verbs = ("send", "trash", "cancel", "delete", "upload")
+    for verb in write_verbs:
+        if verb in at:
+            return "high"
+    # Moderate write verbs → medium
+    moderate_verbs = ("create", "update", "archive", "label", "modify", "move", "rename")
+    for verb in moderate_verbs:
+        if verb in at:
+            return "medium"
+    # Read verbs → low
+    read_verbs = ("search", "download", "get", "list", "read", "query", "fetch")
+    for verb in read_verbs:
+        if verb in at:
+            return "low"
+    # Truly unknown → medium (needs_review)
+    return "medium"
 
 
 def get_risk_icon(risk: str) -> str:

@@ -86,9 +86,13 @@ class TestActionRisk:
         assert get_action_risk("drive.search") == "low"
         assert get_action_risk("gmail.search") == "low"
 
-    def test_unknown_type_defaults_low(self):
+    def test_unknown_type_defaults_to_review(self):
         from action_risk import get_action_risk
-        assert get_action_risk("unknown.action") == "low"
+        # Unknown actions no longer silently default to 'low'
+        # Write verbs → high, moderate verbs → medium, read verbs → low, truly unknown → medium
+        assert get_action_risk("unknown.action") == "medium"
+        assert get_action_risk("custom.delete") == "high"  # write verb
+        assert get_action_risk("custom.search") == "low"   # read verb
 
     def test_risk_icon(self):
         from action_risk import get_risk_icon
