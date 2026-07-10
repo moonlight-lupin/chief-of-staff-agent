@@ -85,6 +85,18 @@ def append_audit(
         "after": _plain(after or {}),
         "actor": str(actor or "agent"),
     }
+    # ── Audit → operational-log linkage (v0.3.4, additive) ────────────────
+    # Stamp the active run id so this audit (what changed) record can be
+    # correlated with the SEPARATE operational (runtime) log. Entries written
+    # outside a run omit the field, so existing consumers are unaffected.
+    try:
+        from runtime_log import current_run_id
+        run_id = current_run_id()
+    except Exception:
+        run_id = None
+    if run_id is not None:
+        entry["run_id"] = run_id
+
     path = _audit_path(store_name, config=config)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +105,12 @@ def append_audit(
             fh.flush()
             os.fsync(fh.fileno())
     except OSError as exc:
+        try:
+            from runtime_log import log_event
+            log_event("audit_write_failed", level="error", component="audit",
+                      reason=type(exc).__name__)
+        except Exception:  # pragma: no cover - logging must never break the caller
+            pass
         raise AuditLogError(f"Failed to append audit entry to {path}: {exc}") from exc
     return entry
 

@@ -52,6 +52,22 @@ def audit_workspace_action(
     if extra:
         record["extra"] = extra
 
+    # ── Audit → operational-log linkage (v0.3.4, additive) ────────────────
+    # Attach the active run id so an operational (runtime) log can be correlated
+    # with this audit (what changed) record. Records written outside a run omit
+    # the field, so existing consumers are unaffected. Surface action_id from
+    # ``extra`` to the top level when present (a stable cross-log identifier).
+    # The audit log and the operational log remain SEPARATE files.
+    try:
+        from runtime_log import current_run_id
+        run_id = current_run_id()
+    except Exception:
+        run_id = None
+    if run_id is not None:
+        record["run_id"] = run_id
+    if extra and isinstance(extra, dict) and extra.get("action_id") is not None:
+        record["action_id"] = extra["action_id"]
+
     try:
         path = _audit_path(config)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,3 +75,17 @@ def audit_workspace_action(
             fh.write(json.dumps(record) + "\n")
     except Exception as exc:
         print(f"Warning: workspace audit write failed: {exc}", file=sys.stderr)
+        _audit_write_failed(exc)
+
+
+def _audit_write_failed(exc: Exception) -> None:
+    """Emit an ``audit_write_failed`` operational event (no record contents, no
+    path) when an audit write fails. Best-effort; never raises."""
+    try:
+        from runtime_log import log_event
+        log_event(
+            "audit_write_failed", level="error", component="audit",
+            reason=type(exc).__name__,
+        )
+    except Exception:  # pragma: no cover - logging must never break the caller
+        pass

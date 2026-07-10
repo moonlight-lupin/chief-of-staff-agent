@@ -77,6 +77,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _log_event(event: str, **fields: Any) -> None:
+    """Best-effort action-lifecycle runtime log. No-ops when runtime_log is
+    unavailable or no run is active; never raises into the caller. Only ids /
+    emails are passed — never payload contents."""
+    try:
+        from runtime_log import log_event
+        log_event(event, **fields)
+    except Exception:  # pragma: no cover - logging must never break the caller
+        pass
+
+
 def _load(config: Any) -> dict[str, Any]:
     """Load pending actions from disk. Returns empty structure if missing."""
     path = _pending_path(config)
@@ -263,6 +274,12 @@ def create_pending_action(
                                extra=extra)
     except Exception:
         pass  # best-effort
+
+    _log_event(
+        "action_requested", level="info", component="pending_actions",
+        action_id=action_id, action_type=action_type, provider=provider,
+        target=target,
+    )
 
     return action
 
@@ -500,6 +517,12 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     except Exception:
         pass
 
+    _log_event(
+        "action_executed", level="info", component="pending_actions",
+        action_id=action_id, action_type=action["type"],
+        provider=action["provider"],
+    )
+
     return action
 
 
@@ -529,6 +552,12 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
                                extra={"action_id": action_id, "error": error})
     except Exception:
         pass
+
+    _log_event(
+        "action_failed", level="warning", component="pending_actions",
+        action_id=action_id, action_type=action["type"],
+        provider=action["provider"], error=error,
+    )
 
     return action
 
