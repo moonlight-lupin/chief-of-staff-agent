@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -133,20 +134,21 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
 
 def cmd_validate_secret(args: argparse.Namespace) -> int:
-    """Validate that webhook secret is configured."""
+    """Validate webhook security configuration."""
     from webhook_security import validate_secret_config
     result = validate_secret_config()
     if result["valid"]:
-        print(f"✅ Webhook secret configured (length: {result['length']})")
-        print(f"   Algorithm: {result['algorithm']}")
-        print(f"   Header: {result['header']}")
-        print(f"   Channel token: {result.get('channel_token', 'disabled')}")
-        return 0
+        print("✅ All webhook endpoints configured")
     else:
-        print(f"❌ {result['error']}", file=sys.stderr)
-        if "hint" in result:
-            print(f"   {result['hint']}", file=sys.stderr)
-        return 1
+        print("⚠️  Configuration warnings:")
+    for issue in result.get("issues", []):
+        print(f"   {issue}")
+    print()
+    print("Endpoint status:")
+    for ep, status in result.get("endpoints", {}).items():
+        icon = "✅" if status == "enabled" else "❌"
+        print(f"  {icon} /webhooks/{ep} — {status}")
+    return 0 if result["valid"] else 1
 
 
 def cmd_sign(args: argparse.Namespace) -> int:
@@ -206,6 +208,11 @@ def cmd_execute(args: argparse.Namespace) -> int:
     action_type = action.get("type", "")
     payload = action.get("payload", {})
 
+    # Reject unsupported action types BEFORE mark_executing
+    if action_type == "gmail.draft":
+        print(f"❌ gmail.draft execution not supported via generic executor. Use send_email.py or Composio MCP.", file=sys.stderr)
+        return 1
+
     # Pre-execution gate
     executing = mark_executing(cfg, args.action_id)
     if not executing:
@@ -218,9 +225,14 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     unsupported = require_capability(client, action_type, target=action.get("target", ""))
     if unsupported:
-        mark_failed(cfg, args.action_id)
+        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}")
         print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
         return 1
+
+    # Establish approved execution context — the explicit approval IS the confirmation.
+    # Set env vars for guardrails, matching send_email.py and delete_actions.py behavior.
+    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
+    os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
 
     try:
         if action_type == "gmail.send":
@@ -243,7 +255,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
             result = client.gmail_trash(message_id=payload.get("message_id", ""))
         elif action_type == "calendar.create":
             result = client.calendar_create(
-                summary=payload.get("summary", ""),
+                title=payload.get("summary", payload.get("title", "")),
                 start=payload.get("start", ""),
                 end=payload.get("end", ""),
             )
@@ -258,39 +270,43 @@ def cmd_execute(args: argparse.Namespace) -> int:
             result = client.calendar_cancel(event_id=payload.get("event_id", ""))
         elif action_type == "drive.upload":
             result = client.drive_upload(
-                path=payload.get("path", ""),
-                name=payload.get("name", ""),
+                file_path=payload.get("file_path", payload.get("path", "")),
+                parent_id=payload.get("parent_id"),
             )
         elif action_type == "drive.download":
             result = client.drive_download(
                 file_id=payload.get("file_id", ""),
-                path=payload.get("path", ""),
+                output_path=payload.get("output_path", payload.get("path", "")),
             )
         elif action_type == "drive.trash":
             result = client.drive_trash(file_id=payload.get("file_id", ""))
         else:
-            mark_failed(cfg, args.action_id)
+            mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
             print(f"❌ Unknown action type: {action_type}", file=sys.stderr)
             return 1
     except Exception as exc:
-        mark_failed(cfg, args.action_id)
+        mark_failed(cfg, args.action_id, str(exc))
         if args.summary:
             print(f"❌ Execution failed: {exc}")
         else:
             print_json({"success": False, "error": str(exc)})
         return 1
 
+    # Check provider result BEFORE marking executed
+    success = result.get("success", False) if isinstance(result, dict) else True
+    if not success:
+        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
+        mark_failed(cfg, args.action_id, error)
+        if args.summary:
+            print(f"❌ Provider returned error: {error}")
+        else:
+            print_json({"success": False, "error": error, "result": result})
+        return 1
+
     mark_executed(cfg, args.action_id, result if isinstance(result, dict) else {"raw": str(result)})
 
     if args.summary:
-        success = result.get("success", False) if isinstance(result, dict) else True
-        if success:
-            print(f"✅ Executed: {action_type} ({args.action_id})")
-        else:
-            mark_failed(cfg, args.action_id)
-            err = result.get("error", "unknown") if isinstance(result, dict) else "unknown"
-            print(f"❌ Provider returned error: {err}")
-            return 1
+        print(f"✅ Executed: {action_type} ({args.action_id})")
     else:
         print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
                      "result": result if isinstance(result, dict) else str(result)})

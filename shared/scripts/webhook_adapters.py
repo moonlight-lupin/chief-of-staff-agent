@@ -26,39 +26,22 @@ def _pad_b64(s: str) -> str:
 def adapt_gmail_pubsub(payload: dict[str, Any]) -> dict[str, Any]:
     """Adapt a Gmail Pub/Sub push notification.
 
-    Native Gmail push arrives as a Cloud Pub/Sub envelope:
-    {
-      "message": {
-        "data": "<base64url-encoded JSON with emailAddress, historyId>",
-        "messageId": "1234567890",
-        "publishTime": "2026-07-10T..."
-      },
-      "subscription": "projects/x/subscriptions/y"
-    }
+    Validates the Pub/Sub envelope structure and decoded data.
+    Raises ValueError on malformed payloads (caller should return 400/500).
     """
-    msg = payload.get("message", {})
-    encoded = msg.get("data", "")
-    message_id = str(msg.get("messageId", ""))
+    from webhook_security import validate_gmail_pubsub_payload
+
+    is_valid, reason, gmail_data = validate_gmail_pubsub_payload(payload)
+    if not is_valid:
+        raise ValueError(f"Invalid Gmail Pub/Sub payload: {reason}")
+
+    msg = payload["message"]
+    message_id = str(msg["messageId"])
     publish_time = msg.get("publishTime", "")
+    email = gmail_data["emailAddress"]
+    history_id = str(gmail_data["historyId"])
 
-    gmail_data: dict[str, Any] = {}
-    if encoded:
-        try:
-            decoded = base64.urlsafe_b64decode(_pad_b64(encoded))
-            gmail_data = json.loads(decoded)
-        except Exception:
-            gmail_data = {}
-
-    email = gmail_data.get("emailAddress", "")
-    history_id = str(gmail_data.get("historyId", ""))
-
-    # Use Pub/Sub messageId for dedup — unique per delivery
-    if message_id:
-        source_id = f"gmail-pubsub-{message_id}"
-    elif history_id:
-        source_id = f"gmail-history-{history_id}"
-    else:
-        source_id = f"gmail-{email}-{message_id or 'unknown'}"
+    source_id = f"gmail-pubsub-{message_id}"
 
     return {
         "source": "webhook.gmail",
@@ -74,7 +57,7 @@ def adapt_gmail_pubsub(payload: dict[str, Any]) -> dict[str, Any]:
             "publish_time": publish_time,
         },
         "summary": f"Gmail Pub/Sub: {email} (history {history_id}, msg {message_id})",
-        "delivery_id": message_id or source_id,
+        "delivery_id": message_id,
     }
 
 
@@ -105,22 +88,21 @@ def adapt_gmail(payload: dict[str, Any]) -> dict[str, Any]:
 def adapt_calendar_headers(headers: dict[str, str]) -> dict[str, Any]:
     """Adapt a Google Calendar push notification from X-Goog-* headers.
 
-    Calendar notifications have empty bodies. All data is in headers:
-    X-Goog-Channel-ID, X-Goog-Message-Number, X-Goog-Resource-ID,
-    X-Goog-Resource-State, X-Goog-Resource-URI, X-Goog-Channel-Token
+    Validates required headers. Raises ValueError if missing.
     """
-    channel_id = headers.get("X-Goog-Channel-ID", "")
-    message_number = headers.get("X-Goog-Message-Number", "")
-    resource_id = headers.get("X-Goog-Resource-ID", "")
-    resource_state = headers.get("X-Goog-Resource-State", "unknown")
-    resource_uri = headers.get("X-Goog-Resource-URI", "")
-    channel_token = headers.get("X-Goog-Channel-Token", "")
+    from webhook_security import validate_calendar_headers
+    is_valid, reason = validate_calendar_headers(headers)
+    if not is_valid:
+        raise ValueError(f"Invalid Calendar push headers: {reason}")
 
-    # Dedup by channel + message number — unique per delivery
-    if channel_id and message_number:
-        source_id = f"calendar-{channel_id}-{message_number}"
-    else:
-        source_id = f"calendar-{resource_id}-{resource_state}"
+    channel_id = headers["X-Goog-Channel-ID"]
+    message_number = headers["X-Goog-Message-Number"]
+    resource_id = headers["X-Goog-Resource-ID"]
+    resource_state = headers["X-Goog-Resource-State"]
+    resource_uri = headers.get("X-Goog-Resource-URI", "")
+
+    # Always use channel + message number for dedup (no fallback)
+    source_id = f"calendar-{channel_id}-{message_number}"
 
     event_type = "calendar_changed"
     if resource_state == "not_exists":
@@ -141,27 +123,43 @@ def adapt_calendar_headers(headers: dict[str, str]) -> dict[str, Any]:
             "resource_uri": resource_uri,
         },
         "summary": f"Calendar push: {resource_state} (channel {channel_id}, msg {message_number})",
-        "delivery_id": f"{channel_id}:{message_number}" if channel_id and message_number else source_id,
+        "delivery_id": f"{channel_id}:{message_number}",
     }
 
 
+# Drive resource state → event type mapping
+DRIVE_STATE_MAP = {
+    "add": "document_added",
+    "remove": "document_removed",
+    "update": "document_updated",
+    "trash": "document_trashed",
+    "untrash": "document_restored",
+    "change": "drive_changed",
+    "sync": "drive_sync",
+    "not_exists": "document_deleted",
+}
+
+
 def adapt_drive_headers(headers: dict[str, str]) -> dict[str, Any]:
-    """Adapt a Google Drive push notification from X-Goog-* headers."""
-    channel_id = headers.get("X-Goog-Channel-ID", "")
-    message_number = headers.get("X-Goog-Message-Number", "")
-    resource_id = headers.get("X-Goog-Resource-ID", "")
-    resource_state = headers.get("X-Goog-Resource-State", "unknown")
+    """Adapt a Google Drive push notification from X-Goog-* headers.
+
+    Validates required headers. Raises ValueError if missing.
+    """
+    from webhook_security import validate_drive_headers
+    is_valid, reason = validate_drive_headers(headers)
+    if not is_valid:
+        raise ValueError(f"Invalid Drive push headers: {reason}")
+
+    channel_id = headers["X-Goog-Channel-ID"]
+    message_number = headers["X-Goog-Message-Number"]
+    resource_id = headers["X-Goog-Resource-ID"]
+    resource_state = headers["X-Goog-Resource-State"]
     resource_uri = headers.get("X-Goog-Resource-URI", "")
 
-    # Dedup by channel + message number
-    if channel_id and message_number:
-        source_id = f"drive-{channel_id}-{message_number}"
-    else:
-        source_id = f"drive-{resource_id}-{resource_state}"
+    source_id = f"drive-{channel_id}-{message_number}"
 
-    event_type = "document_shared"
-    if resource_state == "not_exists":
-        event_type = "document_deleted"
+    # Map Drive resource states to event types
+    event_type = DRIVE_STATE_MAP.get(resource_state, "document_shared")
 
     return {
         "source": "webhook.drive",
@@ -176,7 +174,7 @@ def adapt_drive_headers(headers: dict[str, str]) -> dict[str, Any]:
             "resource_uri": resource_uri,
         },
         "summary": f"Drive push: {resource_state} (channel {channel_id}, msg {message_number})",
-        "delivery_id": f"{channel_id}:{message_number}" if channel_id and message_number else source_id,
+        "delivery_id": f"{channel_id}:{message_number}",
     }
 
 

@@ -137,18 +137,19 @@ class TestGmailPubSubAdapter:
 
     def test_handles_malformed_data(self):
         from webhook_adapters import adapt_gmail_pubsub
+        from webhook_security import validate_gmail_pubsub_payload
         payload = {"message": {"data": "!!!invalid!!!", "messageId": "m1"}}
-        result = adapt_gmail_pubsub(payload)
-        assert result["source_id"] == "gmail-pubsub-m1"
-        assert result["payload"]["email_address"] == ""
+        # Validation should reject, not silently produce empty fields
+        ok, reason, data = validate_gmail_pubsub_payload(payload)
+        assert not ok
+        assert "decode" in reason.lower()
 
     def test_empty_message(self):
-        from webhook_adapters import adapt_gmail_pubsub
+        from webhook_security import validate_gmail_pubsub_payload
         payload = {"message": {}, "subscription": "x"}
-        result = adapt_gmail_pubsub(payload)
-        assert result["source"] == "webhook.gmail"
-        # Should still have a delivery_id
-        assert result["delivery_id"]
+        # Missing data field — should be rejected
+        ok, reason, data = validate_gmail_pubsub_payload(payload)
+        assert not ok
 
 
 # ─── Calendar Header Adapter ─────────────────────────────────
@@ -304,9 +305,9 @@ class TestChannelToken:
 
     def test_disabled_when_not_configured(self, with_secret):
         from webhook_security import verify_channel_token
-        # No token configured — accepts anything
-        assert verify_channel_token("anything")
-        assert verify_channel_token(None)
+        # Fail-closed: no token configured = rejected
+        assert verify_channel_token("anything") is False
+        assert verify_channel_token(None) is False
 
 
 # ─── Receiver Integration ───────────────────────────────────
@@ -554,10 +555,14 @@ class TestSafety:
             ingest_event(config, "webhook.gmail", "safety-test-2", "email_received", {"x": 1})
             mock_create.assert_not_called()
 
-    def test_validate_secret_shows_channel_token(self, with_token):
+    def test_validate_secret_shows_endpoint_status(self, with_token):
         import webhook_events
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = webhook_events.main(["validate-secret"])
-        assert rc == 0
-        assert "Channel token: configured" in buf.getvalue()
+        # with_token sets secret + channel token but NOT pubsub vars,
+        # so config is not fully valid — that's OK, we check output
+        out = buf.getvalue()
+        assert "gmail" in out
+        assert "calendar" in out
+        assert "drive" in out

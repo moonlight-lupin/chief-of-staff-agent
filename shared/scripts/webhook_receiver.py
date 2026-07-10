@@ -93,19 +93,41 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
 
             body = self.rfile.read(content_length) if content_length > 0 else b""
 
-            # Verify HMAC signature (for gmail and generic endpoints)
-            from webhook_security import verify_signature, verify_channel_token, reserve_delivery, complete_delivery, release_delivery
-            signature = self.headers.get("X-Webhook-Signature", "")
+            # Authentication by endpoint type
+            from webhook_security import (
+                verify_signature, verify_channel_token, verify_pubsub_oidc,
+                reserve_delivery, complete_delivery, release_delivery,
+            )
 
-            # Calendar/Drive use X-Goog-Channel-Token instead of HMAC
-            if endpoint in ("/webhooks/calendar", "/webhooks/drive"):
+            if endpoint == "/webhooks/gmail":
+                # Gmail: try OIDC JWT first (native Pub/Sub), fall back to HMAC (dev/proxy)
+                auth_header = self.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    # Native Pub/Sub OIDC
+                    ok, reason = verify_pubsub_oidc(auth_header)
+                    if not ok:
+                        stats.rejected_signature += 1
+                        self._respond(401, {"error": f"Pub/Sub OIDC validation failed: {reason}"})
+                        return
+                else:
+                    # Dev/proxy mode with HMAC
+                    signature = self.headers.get("X-Webhook-Signature", "")
+                    if not verify_signature(body, signature):
+                        stats.rejected_signature += 1
+                        self._respond(401, {"error": "Invalid or missing signature (no OIDC token or HMAC)"})
+                        return
+
+            elif endpoint in ("/webhooks/calendar", "/webhooks/drive"):
+                # Calendar/Drive: X-Goog-Channel-Token (fail-closed)
                 channel_token = self.headers.get("X-Goog-Channel-Token", "")
                 if not verify_channel_token(channel_token):
                     stats.rejected_channel_token += 1
-                    self._respond(401, {"error": "Invalid or missing channel token"})
+                    self._respond(401, {"error": "Invalid or missing channel token (channel token required, not configured = disabled)"})
                     return
+
             else:
-                # Gmail and generic require HMAC signature
+                # Generic: HMAC signature
+                signature = self.headers.get("X-Webhook-Signature", "")
                 if not verify_signature(body, signature):
                     stats.rejected_signature += 1
                     self._respond(401, {"error": "Invalid or missing signature"})
@@ -126,6 +148,11 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
             try:
                 from webhook_adapters import adapt_for_endpoint
                 event = adapt_for_endpoint(endpoint, payload, headers_dict)
+            except ValueError as exc:
+                # Validation failure — bad request, not server error
+                stats.rejected_bad_request += 1
+                self._respond(400, {"error": f"Invalid payload: {exc}"})
+                return
             except Exception as exc:
                 stats.errors += 1
                 self._respond(500, {"error": f"Adapter failure: {exc}"})
@@ -222,30 +249,34 @@ def start_server(
 ) -> None:
     """Start the webhook receiver HTTP server."""
     from webhook_security import validate_secret_config
-    secret_check = validate_secret_config()
-    if not secret_check["valid"]:
-        print(f"❌ {secret_check['error']}", file=sys.stderr)
-        if "hint" in secret_check:
-            print(f"   {secret_check['hint']}", file=sys.stderr)
+    check = validate_secret_config()
+
+    if check["issues"]:
+        print("⚠️  Configuration warnings:")
+        for issue in check["issues"]:
+            print(f"   {issue}")
+        print()
+
+    endpoints = check.get("endpoints", {})
+    print(f"🌐 Webhook receiver listening on {host}:{port}")
+    print(f"   Endpoints:")
+    for ep, status in endpoints.items():
+        icon = "✅" if status == "enabled" else "❌"
+        print(f"     {icon} POST /webhooks/{ep} — {status}")
+    print(f"     GET  /health — health check")
+    print(f"   Auth: OIDC JWT (gmail), Channel Token (calendar/drive), HMAC (generic)")
+    print(f"   Replay: delivery-ID-based, 24h TTL, atomic writes")
+    print(f"   Max body: {MAX_BODY_BYTES:,} bytes")
+    print(f"   Suggestions: {'enabled' if generate_suggestions else 'disabled'}")
+    print()
+
+    if not any(status == "enabled" for status in endpoints.values()):
+        print("❌ No endpoints enabled — configure at least one auth method.", file=sys.stderr)
         raise SystemExit(1)
 
     stats = WebhookStats()
     handler = create_handler(config, stats, generate_suggestions)
     server = HTTPServer((host, port), handler)
-
-    print(f"🌐 Webhook receiver listening on {host}:{port}")
-    print(f"   Endpoints:")
-    print(f"     POST /webhooks/gmail     — Gmail (Pub/Sub or direct)")
-    print(f"     POST /webhooks/calendar  — Calendar (X-Goog-* headers)")
-    print(f"     POST /webhooks/drive     — Drive (X-Goog-* headers)")
-    print(f"     POST /webhooks/generic   — Generic signed webhooks")
-    print(f"     GET  /health             — Health check")
-    print(f"   Signature: HMAC-SHA256 via X-Webhook-Signature (gmail/generic)")
-    print(f"   Channel token: {secret_check.get('channel_token', 'disabled')} (calendar/drive)")
-    print(f"   Replay protection: delivery-ID-based, 24h TTL, atomic writes")
-    print(f"   Max body: {MAX_BODY_BYTES:,} bytes")
-    print(f"   Suggestion generation: {'enabled' if generate_suggestions else 'disabled'}")
-    print()
 
     try:
         server.serve_forever()

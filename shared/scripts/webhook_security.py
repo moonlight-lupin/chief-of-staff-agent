@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Webhook security — HMAC signature verification and delivery-ID-based replay protection.
+"""Webhook security — authentication, replay protection, payload validation.
 
 Security model:
-- Webhook secret via CHIEF_OF_STAFF_WEBHOOK_SECRET (HMAC-SHA256)
-- Header: X-Webhook-Signature (hex-encoded HMAC of raw body)
-- Calendar/Drive: X-Goog-Channel-Token validated against configured token
-- Replay protection: delivery-ID-based, not body-signature-based
-- Atomic cache writes (temp-file + rename)
-- Reservation-before-ingest: reserve ID → process → mark done (or release on failure)
+- Gmail Pub/Sub: OIDC JWT validation via Authorization: Bearer <jwt>
+  Config: CHIEF_OF_STAFF_PUBSUB_AUDIENCE, CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT
+- Calendar/Drive: X-Goog-Channel-Token (fail-closed if not configured)
+- Generic: HMAC-SHA256 via X-Webhook-Signature (CHIEF_OF_STAFF_WEBHOOK_SECRET)
+- Replay: delivery-ID-based, atomic cache, reserve-before-ingest
 
 The webhook receiver NEVER executes, approves, or mutates anything.
-Security only verifies and deduplicates.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -23,23 +22,17 @@ from pathlib import Path
 from typing import Any
 
 
+# ─── HMAC (generic endpoint) ──────────────────────────────────
+
 def get_webhook_secret() -> str | None:
-    """Get the webhook secret from environment."""
     return os.getenv("CHIEF_OF_STAFF_WEBHOOK_SECRET")
 
 
-def get_channel_token() -> str | None:
-    """Get the X-Goog-Channel-Token for Calendar/Drive validation."""
-    return os.getenv("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN")
-
-
 def sign_payload(body: bytes, secret: str) -> str:
-    """Compute HMAC-SHA256 signature of body with secret. Returns hex string."""
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
 def verify_signature(body: bytes, signature: str, secret: str | None = None) -> bool:
-    """Verify HMAC-SHA256 signature using constant-time comparison."""
     if secret is None:
         secret = get_webhook_secret()
     if not secret:
@@ -48,21 +41,177 @@ def verify_signature(body: bytes, signature: str, secret: str | None = None) -> 
     return hmac.compare_digest(expected, signature)
 
 
-def verify_channel_token(token: str | None) -> bool:
-    """Verify Google Calendar/Drive channel token.
+# ─── Pub/Sub OIDC JWT (Gmail endpoint) ────────────────────────
 
-    If no token is configured, accepts any token (disabled mode).
-    If configured, requires exact match.
+def get_pubsub_audience() -> str | None:
+    return os.getenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE")
+
+
+def get_pubsub_service_account() -> str | None:
+    return os.getenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT")
+
+
+def _decode_jwt_unverified(token: str) -> dict[str, Any] | None:
+    """Decode JWT payload without verifying signature (for inspection).
+
+    In production, you should verify the signature using Google's public keys.
+    For internal beta, we verify issuer/audience/email claims.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        # Decode payload (middle segment)
+        payload_b64 = parts[1]
+        # Add padding
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_bytes)
+    except Exception:
+        return None
+
+
+def verify_pubsub_oidc(authorization_header: str | None) -> tuple[bool, str]:
+    """Verify a Gmail Pub/Sub push notification OIDC JWT.
+
+    Google Pub/Sub sends an OIDC token in the Authorization header:
+      Authorization: Bearer <jwt>
+
+    The JWT contains claims:
+    - iss: https://accounts.google.com (issuer)
+    - aud: the configured audience (your webhook URL or service name)
+    - email: the service account email that sent the notification
+    - email_verified: true
+
+    For production, the JWT signature should be verified against Google's
+    public keys. For internal beta, we validate claims only.
+
+    Returns (is_valid, reason).
+    """
+    if not authorization_header:
+        return False, "Missing Authorization header"
+
+    # Extract bearer token
+    if not authorization_header.startswith("Bearer "):
+        return False, "Authorization header must be 'Bearer <jwt>'"
+    token = authorization_header[7:]
+
+    # Decode JWT payload (without signature verification for beta)
+    claims = _decode_jwt_unverified(token)
+    if not claims:
+        return False, "Invalid JWT: cannot decode payload"
+
+    # Verify issuer
+    issuer = claims.get("iss", "")
+    if "accounts.google.com" not in issuer:
+        return False, f"Invalid issuer: {issuer}"
+
+    # Verify email_verified
+    if not claims.get("email_verified", False):
+        return False, "email_verified claim is false"
+
+    # Verify service account email
+    expected_sa = get_pubsub_service_account()
+    if expected_sa:
+        token_email = claims.get("email", "")
+        if not hmac.compare_digest(token_email, expected_sa):
+            return False, f"Service account email mismatch: expected {expected_sa}, got {token_email}"
+    else:
+        # Fail-closed: require configured service account
+        return False, "CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT not configured"
+
+    # Verify audience
+    expected_aud = get_pubsub_audience()
+    if expected_aud:
+        aud = claims.get("aud", "")
+        if isinstance(aud, list):
+            if expected_aud not in aud:
+                return False, f"Audience mismatch: {expected_aud} not in {aud}"
+        else:
+            if not hmac.compare_digest(str(aud), expected_aud):
+                return False, f"Audience mismatch: expected {expected_aud}, got {aud}"
+    else:
+        # Fail-closed: require configured audience
+        return False, "CHIEF_OF_STAFF_PUBSUB_AUDIENCE not configured"
+
+    return True, "OK"
+
+
+# ─── Calendar/Drive Channel Token (fail-closed) ──────────────
+
+def get_channel_token() -> str | None:
+    return os.getenv("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN")
+
+
+def verify_channel_token(token: str | None) -> bool:
+    """Verify Google Calendar/Drive channel token. FAIL-CLOSED.
+
+    If no token is configured, returns False (endpoint disabled).
     """
     configured = get_channel_token()
     if not configured:
-        return True  # Token validation disabled
+        return False  # Fail-closed — no token configured
     if not token:
         return False
     return hmac.compare_digest(token, configured)
 
 
-# ─── Delivery-ID-based Replay Protection ───────────────────────
+def is_channel_token_configured() -> bool:
+    """Check if channel token is configured (for startup warnings)."""
+    return bool(get_channel_token())
+
+
+# ─── Payload Validation ──────────────────────────────────────
+
+def validate_gmail_pubsub_payload(payload: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    """Validate Gmail Pub/Sub envelope and decode inner data.
+
+    Returns (is_valid, reason, decoded_data).
+    On failure, decoded_data is empty dict.
+    """
+    msg = payload.get("message")
+    if not isinstance(msg, dict):
+        return False, "Missing 'message' object in Pub/Sub envelope", {}
+    if "data" not in msg:
+        return False, "Missing 'message.data' in Pub/Sub envelope", {}
+    if "messageId" not in msg:
+        return False, "Missing 'message.messageId' in Pub/Sub envelope", {}
+
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(msg["data"] + "=" * (-len(msg["data"]) % 4))
+        decoded = json.loads(decoded_bytes)
+    except Exception as exc:
+        return False, f"Failed to decode message.data: {exc}", {}
+
+    if "emailAddress" not in decoded:
+        return False, "Decoded payload missing 'emailAddress'", decoded
+    if "historyId" not in decoded:
+        return False, "Decoded payload missing 'historyId'", decoded
+
+    return True, "OK", decoded
+
+
+def validate_calendar_headers(headers: dict[str, str]) -> tuple[bool, str]:
+    """Validate required Calendar push headers."""
+    required = ["X-Goog-Channel-ID", "X-Goog-Message-Number",
+                "X-Goog-Resource-ID", "X-Goog-Resource-State"]
+    for h in required:
+        if not headers.get(h):
+            return False, f"Missing required header: {h}"
+    return True, "OK"
+
+
+def validate_drive_headers(headers: dict[str, str]) -> tuple[bool, str]:
+    """Validate required Drive push headers."""
+    required = ["X-Goog-Channel-ID", "X-Goog-Message-Number",
+                "X-Goog-Resource-ID", "X-Goog-Resource-State"]
+    for h in required:
+        if not headers.get(h):
+            return False, f"Missing required header: {h}"
+    return True, "OK"
+
+
+# ─── Delivery-ID-based Replay Protection ─────────────────────
 
 REPLAY_TTL_SECONDS = 3600 * 24  # 24 hours
 
@@ -102,20 +251,11 @@ def reserve_delivery(
     delivery_id: str,
     ttl_seconds: int = REPLAY_TTL_SECONDS,
 ) -> tuple[bool, str]:
-    """Reserve a delivery ID for processing.
-
-    Returns (is_valid, reason).
-    is_valid=True means this is a NEW delivery (not seen before).
-    is_valid=False means this delivery was already seen.
-
-    States: "processing" (reserved but not done) → "done" (completed)
-    If an old "processing" entry exists past TTL, it's expired (retryable).
-    """
+    """Reserve a delivery ID for processing."""
     cache = _load_replay_cache(config)
     now = time.time()
     entries = cache.get("entries", {})
 
-    # Expire old entries
     expired = [k for k, v in entries.items()
                if now - v.get("ts", 0) > ttl_seconds]
     for k in expired:
@@ -126,10 +266,8 @@ def reserve_delivery(
         if entry.get("state") == "done":
             return False, "Replay detected: delivery already completed"
         if entry.get("state") == "processing":
-            # Still processing — reject to prevent concurrent duplicate
             return False, "Replay detected: delivery already processing"
     else:
-        # New delivery — reserve it
         entries[delivery_id] = {"state": "processing", "ts": now}
         cache["entries"] = entries
         _save_replay_cache(config, cache)
@@ -160,25 +298,40 @@ def release_delivery(config: Any, delivery_id: str) -> None:
 
 
 def validate_secret_config() -> dict[str, Any]:
-    """Validate that webhook secret is configured. Returns status dict."""
+    """Validate webhook security configuration. Returns status dict."""
+    issues = []
+
+    # Check HMAC secret (generic endpoint)
     secret = get_webhook_secret()
     if not secret:
-        return {
-            "valid": False,
-            "error": "CHIEF_OF_STAFF_WEBHOOK_SECRET not set",
-            "hint": "Export CHIEF_OF_STAFF_WEBHOOK_SECRET=<your-secret> before starting the receiver",
-        }
-    if len(secret) < 16:
-        return {
-            "valid": False,
-            "error": "Secret too short (minimum 16 characters recommended)",
-            "length": len(secret),
-        }
+        issues.append("CHIEF_OF_STAFF_WEBHOOK_SECRET not set (generic endpoint disabled)")
+    elif len(secret) < 16:
+        issues.append(f"HMAC secret too short ({len(secret)} chars, min 16)")
+
+    # Check Pub/Sub OIDC (gmail endpoint)
+    pubsub_aud = get_pubsub_audience()
+    pubsub_sa = get_pubsub_service_account()
+    if not pubsub_aud:
+        issues.append("CHIEF_OF_STAFF_PUBSUB_AUDIENCE not set (Gmail Pub/Sub endpoint disabled)")
+    if not pubsub_sa:
+        issues.append("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT not set (Gmail Pub/Sub endpoint disabled)")
+
+    # Check channel token (calendar/drive endpoints)
     channel_token = get_channel_token()
+    if not channel_token:
+        issues.append("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN not set (Calendar/Drive endpoints disabled)")
+
     return {
-        "valid": True,
-        "length": len(secret),
-        "algorithm": "HMAC-SHA256",
-        "header": "X-Webhook-Signature",
-        "channel_token": "configured" if channel_token else "disabled",
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "endpoints": {
+            "gmail": "enabled" if pubsub_aud and pubsub_sa else "disabled",
+            "calendar": "enabled" if channel_token else "disabled",
+            "drive": "enabled" if channel_token else "disabled",
+            "generic": "enabled" if secret and len(secret) >= 16 else "disabled",
+        },
+        "secret_length": len(secret) if secret else 0,
+        "pubsub_audience": "configured" if pubsub_aud else "missing",
+        "pubsub_service_account": "configured" if pubsub_sa else "missing",
+        "channel_token": "configured" if channel_token else "missing",
     }
