@@ -43,7 +43,7 @@ def _get_registered_skills() -> list[str]:
             "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
             "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
             "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "self-sign",
+            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
         ]
     try:
         data = _load_yaml(plugin_yaml) or {}
@@ -60,14 +60,14 @@ def _get_registered_skills() -> list[str]:
             "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
             "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
             "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "self-sign",
+            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
         ])
     except Exception:
         return [
             "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
             "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
             "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "self-sign",
+            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
         ]
 
 
@@ -488,6 +488,136 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     return CheckResult("composio", "pass" if all_pass else "warn", "; ".join(details))
 
 
+def _check_webhook_config(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check webhook security configuration."""
+    try:
+        from webhook_security import validate_secret_config
+        result = validate_secret_config()
+        endpoints = result.get("endpoints", {})
+        issues = result.get("issues", [])
+        enabled = [ep for ep, st in endpoints.items() if st != "disabled"]
+        if not enabled:
+            return CheckResult("webhook_config", "warn",
+                "No webhook endpoints enabled. Set CHIEF_OF_STAFF_WEBHOOK_SECRET and/or "
+                "CHIEF_OF_STAFF_PUBSUB_AUDIENCE + CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT + "
+                "CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN. " + "; ".join(issues))
+        details = [f"{ep}: {st}" for ep, st in endpoints.items()]
+        if issues:
+            details.extend(issues)
+        return CheckResult("webhook_config", "pass" if not issues else "warn",
+            "; ".join(details))
+    except Exception as exc:
+        return CheckResult("webhook_config", "warn", f"check failed: {exc}")
+
+
+def _check_state_files(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check that state files exist and are valid JSON."""
+    root = _project_root_from_data(data, config_path)
+    if not root:
+        return CheckResult("state_files", "warn", "project root unknown")
+    state_files = [
+        ".events.json", ".pending_actions.json",
+        ".email_organisation_policy.json",
+        ".email_organisation_classifications.json",
+        ".email_organisation_suggestions.json",
+        ".webhook_replay_cache.json",
+    ]
+    state_dirs = [".audit", ".runs"]
+    details = []
+    all_pass = True
+    for name in state_files:
+        p = root / name
+        if not p.exists():
+            continue  # optional file
+        try:
+            json.loads(p.read_text())
+            details.append(f"{name}: ok")
+        except json.JSONDecodeError as exc:
+            details.append(f"{name}: MALFORMED ({exc})")
+            all_pass = False
+    for name in state_dirs:
+        p = root / name
+        if p.exists():
+            details.append(f"{name}/: ok")
+        else:
+            if fix:
+                p.mkdir(parents=True, exist_ok=True)
+                details.append(f"{name}/: created")
+            else:
+                details.append(f"{name}/: missing")
+                all_pass = False
+    return CheckResult("state_files", "pass" if all_pass else "warn",
+        "; ".join(details) if details else "no state files yet")
+
+
+def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check for orphaned 'executing' actions stuck in .pending_actions.json."""
+    root = _project_root_from_data(data, config_path)
+    if not root:
+        return CheckResult("orphaned_executing", "warn", "project root unknown")
+    pa_path = root / ".pending_actions.json"
+    if not pa_path.exists():
+        return CheckResult("orphaned_executing", "pass", "no pending actions file")
+    try:
+        pa_data = json.loads(pa_path.read_text())
+    except (json.JSONDecodeError, FileNotFoundError):
+        return CheckResult("orphaned_executing", "pass", "pending actions unreadable (checked elsewhere)")
+    # Handle both dict format ({"actions": {}}) and list format
+    if isinstance(pa_data, dict) and "actions" in pa_data:
+        actions_dict = pa_data["actions"]
+        orphaned = [(aid, a) for aid, a in actions_dict.items()
+                    if isinstance(a, dict) and a.get("state") == "executing"]
+    elif isinstance(pa_data, list):
+        orphaned = [(a.get("id", "?"), a) for a in pa_data
+                    if isinstance(a, dict) and a.get("state") == "executing"]
+    else:
+        return CheckResult("orphaned_executing", "pass", "pending actions empty or new")
+    if not orphaned:
+        return CheckResult("orphaned_executing", "pass", "no orphaned executing actions")
+    ids = [aid for aid, _ in orphaned]
+    if fix:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        for _, a in orphaned:
+            a["state"] = "approved"
+            a["last_error"] = f"Reset from orphaned 'executing' by doctor --fix at {ts}"
+        pa_path.write_text(json.dumps(pa_data, indent=2))
+        return CheckResult("orphaned_executing", "pass",
+            f"Reset {len(orphaned)} orphaned action(s) to 'approved': {', '.join(ids)}",
+            fix_applied=True)
+    return CheckResult("orphaned_executing", "warn",
+        f"{len(orphaned)} action(s) stuck in 'executing': {', '.join(ids)} — run with --fix to reset")
+
+
+def _check_capability_report(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Report provider capabilities for the configured workspace provider."""
+    if not data:
+        return CheckResult("capabilities", "warn", "config not loaded")
+    integrations = data.get("integrations", {})
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = str(workspace.get("provider", "google_api") or "google_api")
+    try:
+        from workspace_capabilities import get_capabilities, unsupported_actions, all_actions
+        caps = get_capabilities(provider)
+        unsupported = unsupported_actions(provider)
+        total = len(all_actions())
+        supported = total - len(unsupported)
+        details = [f"provider: {provider}", f"capabilities: {supported}/{total} supported"]
+        if unsupported:
+            details.append(f"unsupported: {', '.join(unsupported[:5])}{'…' if len(unsupported) > 5 else ''}")
+        return CheckResult("capabilities", "pass", "; ".join(details))
+    except Exception as exc:
+        return CheckResult("capabilities", "warn", f"check failed: {exc}")
+
+
+def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check if a smoke-test checklist exists and is recent."""
+    checklist = PLUGIN_ROOT / "docs" / "SMOKE_TEST_CHECKLIST.md"
+    if checklist.exists():
+        return CheckResult("smoke_test", "pass", f"checklist at {checklist.relative_to(PLUGIN_ROOT)}")
+    return CheckResult("smoke_test", "warn", "no smoke-test checklist found")
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,
@@ -495,6 +625,8 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_compile,
     _check_packages, _check_audit_runs,
     _check_workspace_provider, _check_composio,
+    _check_webhook_config, _check_state_files, _check_orphaned_executing,
+    _check_capability_report, _check_smoke_test,
 ]
 
 
@@ -507,6 +639,7 @@ def run_checks(fix: bool = False, config: str | None = None) -> list[CheckResult
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Chief-of-Staff plugin health check")
     parser.add_argument("--json", action="store_true", help="Print JSON report")
+    parser.add_argument("--summary", action="store_true", help="Print one-line summary")
     parser.add_argument("--fix", action="store_true", help="Attempt safe fixes")
     parser.add_argument("--config", help="Path to company.yaml")
     args = parser.parse_args(argv)
@@ -514,6 +647,20 @@ def _main(argv: list[str] | None = None) -> int:
     payload = [asdict(r) for r in report]
     if args.json:
         print(json.dumps(payload, indent=2))
+    elif args.summary:
+        passed = sum(1 for r in report if r.status == "pass")
+        warned = sum(1 for r in report if r.status == "warn")
+        failed = sum(1 for r in report if r.status == "fail")
+        fixed = sum(1 for r in report if r.fix_applied)
+        overall = "READY" if failed == 0 and warned == 0 else ("READY WITH WARNINGS" if failed == 0 else "NOT READY")
+        print(f"Chief-of-Staff: {overall}")
+        print(f"  {passed} passed, {warned} warnings, {failed} failures" + (f", {fixed} fixed" if fixed else ""))
+        if failed:
+            fails = [r.name for r in report if r.status == "fail"]
+            print(f"  Failures: {', '.join(fails)}")
+        if warned:
+            warns = [r.name for r in report if r.status == "warn"]
+            print(f"  Warnings: {', '.join(warns)}")
     else:
         for r in report:
             icon = {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(r.status, "?")
