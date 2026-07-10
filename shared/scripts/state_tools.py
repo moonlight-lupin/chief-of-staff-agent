@@ -342,32 +342,71 @@ def _pending_actions_data(project_root: Path, malformed: list[dict[str, object]]
     return data, path
 
 
-def _find_executing_actions(data: dict[str, object] | None) -> list[dict[str, object]]:
+def _find_executing_actions(data: dict[str, object] | None, min_age_minutes: int = 0) -> list[dict[str, object]]:
+    """Find executing actions, optionally filtered by minimum age.
+
+    Returns list of dicts with id, type, target, summary, executing_at, age_status.
+    age_status is one of: 'stale' (older than min_age_minutes),
+    'fresh' (younger), 'no_ts' (missing/invalid executing_at).
+    """
     if not data:
         return []
     actions = data.get("actions")
     if not isinstance(actions, dict):
         return []
     found: list[dict[str, object]] = []
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(minutes=min_age_minutes) if min_age_minutes > 0 else now
     for action_id, action in actions.items():
         if isinstance(action, dict) and action.get("state") == "executing":
+            ts_str = action.get("executing_at")
+            age_status = "no_ts"
+            if ts_str:
+                try:
+                    ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age_status = "stale" if ts < threshold else "fresh"
+                except (ValueError, TypeError):
+                    age_status = "no_ts"
             found.append({
                 "id": str(action.get("id") or action_id),
                 "type": str(action.get("type", "")),
                 "target": str(action.get("target", "")),
                 "summary": str(action.get("summary", "")),
+                "executing_at": str(ts_str or ""),
+                "age_status": age_status,
             })
     return found
 
 
-def _reset_executing_actions(data: dict[str, object], path: Path) -> list[str]:
+def _reset_executing_actions(data: dict[str, object], path: Path,
+                              min_age_minutes: int = 0, force: bool = False) -> list[str]:
+    """Reset executing actions to approved. Only resets stale ones unless force=True."""
     actions = data.get("actions")
     if not isinstance(actions, dict):
         return []
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(minutes=min_age_minutes) if min_age_minutes > 0 else now
     reset_ids: list[str] = []
     note = f"Reset from orphaned executing state by state_tools repair at {_now_iso()}; verify before executing."
     for action_id, action in actions.items():
         if isinstance(action, dict) and action.get("state") == "executing":
+            if not force:
+                ts_str = action.get("executing_at")
+                if ts_str:
+                    try:
+                        ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        if ts >= threshold:
+                            continue  # fresh, skip
+                    except (ValueError, TypeError):
+                        continue  # invalid timestamp, skip unless force
+                else:
+                    continue  # no timestamp, skip unless force
             action["state"] = "approved"
             previous = action.get("last_error")
             action["last_error"] = f"{previous}\n{note}" if previous else note
@@ -446,10 +485,10 @@ def _clean_stale_replay_entries(data: dict[str, object], path: Path, stale: list
     return removed
 
 
-def _repair(project_root: Path, dry_run: bool) -> dict[str, object]:
+def _repair(project_root: Path, dry_run: bool, min_executing_minutes: int = 15, force_reset: bool = False) -> dict[str, object]:
     malformed = _find_malformed_json(project_root)
     pending_data, pending_path = _pending_actions_data(project_root, malformed)
-    executing_actions = _find_executing_actions(pending_data)
+    executing_actions = _find_executing_actions(pending_data, min_age_minutes=min_executing_minutes)
     missing_dirs = []
     for name in REQUIRED_DIRECTORIES:
         path = project_root / name
@@ -467,7 +506,9 @@ def _repair(project_root: Path, dry_run: bool) -> dict[str, object]:
 
     if not dry_run:
         if pending_data is not None:
-            fixes["reset_actions"] = _reset_executing_actions(pending_data, pending_path)
+            fixes["reset_actions"] = _reset_executing_actions(
+                pending_data, pending_path,
+                min_age_minutes=min_executing_minutes, force=force_reset)
         created_dirs: list[str] = []
         for item in missing_dirs:
             path = Path(str(item["path"]))
@@ -477,7 +518,10 @@ def _repair(project_root: Path, dry_run: bool) -> dict[str, object]:
         if replay_data is not None:
             fixes["removed_replay_cache_entries"] = _clean_stale_replay_entries(replay_data, replay_path, stale_replay)
 
-    issue_count = len(malformed) + len(executing_actions) + len(missing_dirs) + len(stale_replay)
+    # Count only stale + no_ts as issues (fresh executing = not an issue)
+    stale_count = sum(1 for a in executing_actions if a.get("age_status") == "stale")
+    no_ts_count = sum(1 for a in executing_actions if a.get("age_status") == "no_ts")
+    issue_count = len(malformed) + stale_count + no_ts_count + len(missing_dirs) + len(stale_replay)
     return {
         "ok": True,
         "project_root": str(project_root),
@@ -493,7 +537,7 @@ def _repair(project_root: Path, dry_run: bool) -> dict[str, object]:
     }
 
 
-def _print_repair_human(result: dict[str, object]) -> None:
+def _print_repair_human(result: dict[str, object], min_executing_minutes: int = 15) -> None:
     dry_run = bool(result["dry_run"])
     verb = "would fix" if dry_run else "fixed"
     print(f"Project root: {result['project_root']}")
@@ -509,9 +553,22 @@ def _print_repair_human(result: dict[str, object]) -> None:
 
     executing = issues["executing_actions"]  # type: ignore[index]
     if executing:
-        print(f"Orphaned executing actions ({verb} by resetting to approved):")
-        for item in executing:
-            print(f"  - {item['id']} {item['type']} {item['target']}")  # type: ignore[index]
+        stale_items = [a for a in executing if a.get("age_status") == "stale"]
+        fresh_items = [a for a in executing if a.get("age_status") == "fresh"]
+        no_ts_items = [a for a in executing if a.get("age_status") == "no_ts"]
+        if stale_items:
+            print(f"Stale executing actions (>{min_executing_minutes}min old, {verb} by resetting to approved):")
+            for item in stale_items:
+                print(f"  - {item['id']} {item['type']} {item['target']} [{item.get('executing_at', '')}]")
+        if fresh_items:
+            print(f"Fresh executing actions (still running, skipped):")
+            for item in fresh_items:
+                print(f"  - {item['id']} {item['type']} {item['target']} [{item.get('executing_at', '')}]")
+        if no_ts_items:
+            print(f"Executing actions with missing/invalid executing_at (reported, not auto-reset):")
+            for item in no_ts_items:
+                print(f"  - {item['id']} {item['type']} {item['target']}")
+            print("  Use --force-reset-executing to reset these (risk: may still be running)")
 
     missing_dirs = issues["missing_directories"]  # type: ignore[index]
     if missing_dirs:
@@ -549,6 +606,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("inspect", parents=[common], help="Print a summary table of local state files")
     repair = sub.add_parser("repair", parents=[common], help="Check and repair local state file issues")
     repair.add_argument("--dry-run", action="store_true", help="Report what would be fixed without making changes")
+    repair.add_argument("--min-executing-age-minutes", type=int, default=15,
+                        help="Minimum age in minutes before an executing action is considered stale (default: 15)")
+    repair.add_argument("--force-reset-executing", action="store_true",
+                        help="Reset ALL executing actions regardless of age (use with caution: risk of duplicate execution)")
     return parser
 
 
@@ -580,11 +641,14 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "repair":
-        result = _repair(project_root, dry_run=bool(args.dry_run))
+        min_min = getattr(args, "min_executing_age_minutes", 15)
+        force = bool(getattr(args, "force_reset_executing", False))
+        result = _repair(project_root, dry_run=bool(args.dry_run),
+                         min_executing_minutes=min_min, force_reset=force)
         if json_output:
             print(json.dumps(result, indent=2, default=str))
         else:
-            _print_repair_human(result)
+            _print_repair_human(result, min_executing_minutes=min_min)
         return 0
 
     parser.error(f"unknown command: {args.command}")

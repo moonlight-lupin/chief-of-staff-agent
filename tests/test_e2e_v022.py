@@ -343,13 +343,16 @@ class TestOrphanedExecutingCleanup:
         )
         approve_pending_action(config, action["id"], approver="MH", reason="test")
 
-        # Manually set to executing (simulate crash during execution)
+        # Manually set to executing with an old timestamp (simulate crash during execution)
+        from datetime import datetime, timezone, timedelta
+        old_ts = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
         pa_path = project / ".pending_actions.json"
         pa_data = json.loads(pa_path.read_text())
         actions = pa_data.get("actions", {})
         for aid, a in actions.items():
             if aid == action["id"]:
                 a["state"] = "executing"
+                a["executing_at"] = old_ts
         pa_path.write_text(json.dumps(pa_data, indent=2))
 
         # Run doctor --fix (only the orphaned check will find it)
@@ -366,6 +369,42 @@ class TestOrphanedExecutingCleanup:
         final = get_pending_action(config, action["id"])
         assert final["state"] == "approved"
         assert "orphaned" in final.get("last_error", "").lower()
+
+    def test_fresh_executing_not_reset(self, temp_project):
+        """Executing actions younger than the threshold should NOT be reset."""
+        config, project = temp_project
+
+        from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+        action = create_pending_action(
+            config=config,
+            action_type="gmail.label",
+            provider="google_api",
+            target="msg-002",
+            payload={"message_id": "msg-002", "label_id": "L1"},
+            summary="Fresh executing test",
+        )
+        approve_pending_action(config, action["id"], approver="MH", reason="test")
+
+        # Set to executing with a RECENT timestamp (1 minute ago — should be fresh)
+        from datetime import datetime, timezone, timedelta
+        recent_ts = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        pa_path = project / ".pending_actions.json"
+        pa_data = json.loads(pa_path.read_text())
+        actions = pa_data.get("actions", {})
+        for aid, a in actions.items():
+            if aid == action["id"]:
+                a["state"] = "executing"
+                a["executing_at"] = recent_ts
+        pa_path.write_text(json.dumps(pa_data, indent=2))
+
+        # Run doctor --fix
+        import doctor
+        result = doctor._check_orphaned_executing(True, config, PLUGIN_ROOT / "shared" / "config" / "company.yaml")
+        assert "fresh" in result.detail.lower() or "skipped" in result.detail.lower()
+
+        # Verify it was NOT reset
+        final = get_pending_action(config, action["id"])
+        assert final["state"] == "executing"
 
 
 # ─── State tools ────────────────────────────────────────────

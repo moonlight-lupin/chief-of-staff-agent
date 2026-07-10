@@ -550,8 +550,16 @@ def _check_state_files(fix: bool, data: dict[str, Any] | None, config_path: Path
         "; ".join(details) if details else "no state files yet")
 
 
+ORPHANED_EXECUTING_MINUTES = 15  # Only reset executing actions older than this
+
+
 def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    """Check for orphaned 'executing' actions stuck in .pending_actions.json."""
+    """Check for orphaned 'executing' actions stuck in .pending_actions.json.
+
+    Only resets actions older than ORPHANED_EXECUTING_MINUTES to avoid
+    resetting a genuinely executing action (duplicate-execution risk).
+    Actions with missing/invalid executing_at are reported but NOT auto-reset.
+    """
     root = _project_root_from_data(data, config_path)
     if not root:
         return CheckResult("orphaned_executing", "warn", "project root unknown")
@@ -565,28 +573,73 @@ def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_pat
     # Handle both dict format ({"actions": {}}) and list format
     if isinstance(pa_data, dict) and "actions" in pa_data:
         actions_dict = pa_data["actions"]
-        orphaned = [(aid, a) for aid, a in actions_dict.items()
-                    if isinstance(a, dict) and a.get("state") == "executing"]
+        executing = [(aid, a) for aid, a in actions_dict.items()
+                     if isinstance(a, dict) and a.get("state") == "executing"]
     elif isinstance(pa_data, list):
-        orphaned = [(a.get("id", "?"), a) for a in pa_data
-                    if isinstance(a, dict) and a.get("state") == "executing"]
+        executing = [(a.get("id", "?"), a) for a in pa_data
+                     if isinstance(a, dict) and a.get("state") == "executing"]
     else:
         return CheckResult("orphaned_executing", "pass", "pending actions empty or new")
-    if not orphaned:
+    if not executing:
         return CheckResult("orphaned_executing", "pass", "no orphaned executing actions")
-    ids = [aid for aid, _ in orphaned]
-    if fix:
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        for _, a in orphaned:
+
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(minutes=ORPHANED_EXECUTING_MINUTES)
+
+    stale = []      # older than threshold → safe to reset
+    fresh = []       # younger than threshold → still running, skip
+    no_ts = []       # missing/invalid executing_at → report but don't reset
+
+    for aid, a in executing:
+        ts_str = a.get("executing_at")
+        if not ts_str:
+            no_ts.append((aid, a))
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            no_ts.append((aid, a))
+            continue
+        if ts < threshold:
+            stale.append((aid, a))
+        else:
+            fresh.append((aid, a))
+
+    stale_ids = [aid for aid, _ in stale]
+    fresh_ids = [aid for aid, _ in fresh]
+    no_ts_ids = [aid for aid, _ in no_ts]
+
+    parts = []
+    if stale_ids:
+        parts.append(f"{len(stale_ids)} stale (>{ORPHANED_EXECUTING_MINUTES}min): {', '.join(stale_ids)}")
+    if fresh_ids:
+        parts.append(f"{len(fresh_ids)} fresh (still running): {', '.join(fresh_ids)}")
+    if no_ts_ids:
+        parts.append(f"{len(no_ts_ids)} missing executing_at: {', '.join(no_ts_ids)}")
+
+    if fix and stale_ids:
+        ts = now.isoformat()
+        for _, a in stale:
             a["state"] = "approved"
-            a["last_error"] = f"Reset from orphaned 'executing' by doctor --fix at {ts}"
+            a["last_error"] = f"Reset from orphaned 'executing' by doctor --fix at {ts} (was stale >{ORPHANED_EXECUTING_MINUTES}min)"
         pa_path.write_text(json.dumps(pa_data, indent=2))
-        return CheckResult("orphaned_executing", "pass",
-            f"Reset {len(orphaned)} orphaned action(s) to 'approved': {', '.join(ids)}",
-            fix_applied=True)
+        detail = f"Reset {len(stale_ids)} stale action(s) to 'approved': {', '.join(stale_ids)}"
+        if fresh_ids:
+            detail += f"; {len(fresh_ids)} fresh skipped"
+        if no_ts_ids:
+            detail += f"; {len(no_ts_ids)} missing executing_at (not reset)"
+        return CheckResult("orphaned_executing", "pass" if not fresh_ids else "warn",
+            detail, fix_applied=True)
+    elif fix and not stale_ids:
+        # Nothing stale to reset
+        detail = "; ".join(parts) if parts else "no executing actions"
+        return CheckResult("orphaned_executing", "warn" if fresh_ids or no_ts_ids else "pass", detail)
+
     return CheckResult("orphaned_executing", "warn",
-        f"{len(orphaned)} action(s) stuck in 'executing': {', '.join(ids)} — run with --fix to reset")
+        "; ".join(parts) + (f" — run with --fix to reset stale (>{ORPHANED_EXECUTING_MINUTES}min) actions" if stale_ids else ""))
 
 
 def _check_capability_report(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
