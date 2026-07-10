@@ -238,6 +238,28 @@ def cmd_execute(args: argparse.Namespace) -> int:
             print_json(result if isinstance(result, dict) else {"raw": str(result)})
         return 0
 
+    # ─── Internal: pipeline CRM actions ──────────────────────────
+    if action_type and action_type.startswith("pipeline."):
+        from pipeline_actions import execute_pipeline_action
+        try:
+            result = execute_pipeline_action(cfg, args.action_id)
+        except Exception as exc:
+            print(f"❌ Pipeline execution failed: {exc}", file=sys.stderr)
+            return 1
+        success = result.get("success", False) if isinstance(result, dict) else True
+        if not success:
+            error = result.get("error", "pipeline execution failed") if isinstance(result, dict) else "unknown error"
+            if args.summary:
+                print(f"❌ Pipeline error: {error}")
+            else:
+                print_json(result if isinstance(result, dict) else {"success": False, "error": error})
+            return 1
+        if args.summary:
+            print(f"✅ Executed: {action_type} ({args.action_id})")
+        else:
+            print_json(result if isinstance(result, dict) else {"raw": str(result)})
+        return 0
+
     # ─── Workspace (Gmail/Calendar/Drive) actions ────────────────
     # Pre-execution gate
     executing = mark_executing(cfg, args.action_id)

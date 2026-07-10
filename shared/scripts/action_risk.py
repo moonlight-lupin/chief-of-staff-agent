@@ -14,6 +14,7 @@ HIGH_RISK_TYPES: set[str] = {
     "calendar.cancel",
     "bookkeeper.invoice.mark_paid",
     "bookkeeper.invoice.delete",
+    "pipeline.deal.delete",
 }
 
 MEDIUM_RISK_TYPES: set[str] = {
@@ -23,6 +24,8 @@ MEDIUM_RISK_TYPES: set[str] = {
     "gmail.archive",
     "bookkeeper.invoice.record",
     "bookkeeper.invoice.update",
+    "pipeline.deal.add",
+    "pipeline.deal.move_stage",
 }
 
 LOW_RISK_TYPES: set[str] = {
@@ -31,6 +34,8 @@ LOW_RISK_TYPES: set[str] = {
     "drive.search",
     "gmail.search",
     "drive.download",
+    "pipeline.deal.add_note",
+    "pipeline.deal.link_document",
 }
 
 ACTION_RISK_MAP: dict[str, str] = {

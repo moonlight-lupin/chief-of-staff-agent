@@ -530,6 +530,126 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
     return stats
 
 
+def collect_pipeline_stats(config: object) -> dict[str, object]:
+    """Read pipeline.yaml for daily briefing CRM section.
+
+    Degrades gracefully if file doesn't exist.
+    """
+    try:
+        root = _project_root(config)
+    except Exception:
+        return {}
+
+    pipeline_path = root / "pipeline.yaml"
+    stats: dict[str, object] = {
+        "active_deals": 0,
+        "stale_deals": 0,
+        "oldest_stale_id": "",
+        "oldest_stale_days": 0,
+        "oldest_stale_stage": "",
+        "recently_moved": 0,
+        "pending_crm_actions": 0,
+        "contract_signed_no_invoice": 0,
+        "invoiced_not_paid": 0,
+    }
+
+    try:
+        if not pipeline_path.exists():
+            return stats
+        import yaml as _yaml
+        data = _yaml.safe_load(pipeline_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return stats
+        deals = data.get("deals", [])
+        if not isinstance(deals, list):
+            return stats
+
+        terminal_stages = {"Paid", "Lost", "Cancelled"}
+        if isinstance(config, dict):
+            ts = config.get("terminal_stages")
+            if isinstance(ts, list):
+                terminal_stages = set(ts)
+
+        stale_threshold = 14
+        if isinstance(config, dict):
+            st = config.get("stale_threshold_days")
+            if isinstance(st, int):
+                stale_threshold = st
+
+        from datetime import date as _date, datetime as _dt
+        today = _date.today()
+        oldest_days = 0
+
+        for deal in deals:
+            if not isinstance(deal, dict):
+                continue
+            stage = str(deal.get("stage", ""))
+            # Active deals = not terminal
+            if stage not in terminal_stages:
+                stats["active_deals"] = stats["active_deals"] + 1 if isinstance(stats["active_deals"], int) else 1
+
+            # Stale detection
+            last_activity = str(deal.get("last_activity", ""))
+            if last_activity and stage not in terminal_stages:
+                try:
+                    la = _date.fromisoformat(last_activity)
+                    days_inactive = (today - la).days
+                    if days_inactive > stale_threshold:
+                        stats["stale_deals"] = stats["stale_deals"] + 1 if isinstance(stats["stale_deals"], int) else 1
+                        if days_inactive > oldest_days:
+                            oldest_days = days_inactive
+                            stats["oldest_stale_id"] = str(deal.get("id", ""))
+                            stats["oldest_stale_days"] = days_inactive
+                            stats["oldest_stale_stage"] = stage
+                except Exception:
+                    pass
+
+            # Recently moved (stage_history has entry within 7 days)
+            history = deal.get("stage_history", [])
+            if isinstance(history, list) and history:
+                last_entry = history[-1]
+                if isinstance(last_entry, dict):
+                    at = str(last_entry.get("at", ""))
+                    if at:
+                        try:
+                            moved = _date.fromisoformat(at)
+                            if (today - moved).days <= 7:
+                                stats["recently_moved"] = stats["recently_moved"] + 1 if isinstance(stats["recently_moved"], int) else 1
+                        except Exception:
+                            pass
+
+            # Contract Signed without invoice
+            if stage == "Contract Signed":
+                docs = deal.get("documents", [])
+                has_invoice = False
+                if isinstance(docs, list):
+                    for doc in docs:
+                        if isinstance(doc, dict) and "invoice" in str(doc.get("type", "")).lower():
+                            has_invoice = True
+                            break
+                if not has_invoice:
+                    stats["contract_signed_no_invoice"] = stats["contract_signed_no_invoice"] + 1 if isinstance(stats["contract_signed_no_invoice"], int) else 1
+
+            # Invoiced but not Paid
+            if stage == "Invoiced":
+                stats["invoiced_not_paid"] = stats["invoiced_not_paid"] + 1 if isinstance(stats["invoiced_not_paid"], int) else 1
+    except Exception:
+        pass
+
+    # Pending CRM actions
+    try:
+        from pending_actions import list_pending_actions
+        pending = list_pending_actions(config)
+        stats["pending_crm_actions"] = sum(
+            1 for a in pending
+            if str(a.get("type", "")).startswith("pipeline.") and a.get("state") == "requested"
+        )
+    except Exception:
+        pass
+
+    return stats
+
+
 __all__ = [
     "collect_pending_actions",
     "collect_suggestions",
@@ -539,4 +659,5 @@ __all__ = [
     "collect_calendar_summary",
     "collect_knowledge_stats",
     "collect_bookkeeper_stats",
+    "collect_pipeline_stats",
 ]

@@ -212,6 +212,29 @@ def render_text(briefing: dict[str, Any]) -> str:
         lines.append("  (No invoices written by this briefing.)")
         lines.append("")
 
+    # Pipeline / CRM
+    pl = sections.get("pipeline", {})
+    if pl and (pl.get("active_deals") or pl.get("stale_deals")
+               or pl.get("pending_crm_actions") or pl.get("recently_moved")
+               or pl.get("contract_signed_no_invoice") or pl.get("invoiced_not_paid")):
+        lines.append("Pipeline:")
+        if pl.get("active_deals"):
+            lines.append(f"  Active deals: {pl['active_deals']}")
+        if pl.get("stale_deals"):
+            lines.append(f"  Stale deals: {pl['stale_deals']}")
+        if pl.get("oldest_stale_id"):
+            lines.append(f"  Oldest stale: {pl['oldest_stale_id']} — {pl.get('oldest_stale_stage', '?')}, {pl.get('oldest_stale_days', 0)} days inactive")
+        if pl.get("recently_moved"):
+            lines.append(f"  Recently moved: {pl['recently_moved']}")
+        if pl.get("pending_crm_actions"):
+            lines.append(f"  Pending CRM actions: {pl['pending_crm_actions']}")
+        if pl.get("contract_signed_no_invoice"):
+            lines.append(f"  Contract Signed without invoice: {pl['contract_signed_no_invoice']}")
+        if pl.get("invoiced_not_paid"):
+            lines.append(f"  Invoiced but not paid: {pl['invoiced_not_paid']}")
+        lines.append("  (No pipeline mutations by this briefing.)")
+        lines.append("")
+
     # Safety footer
     if safety:
         lines.append("---")
