@@ -151,17 +151,35 @@ class TestFailures:
         # execution cannot be ready if read-only fails
         assert "Ready for approved execution: NO" in out
 
-    def test_mail_subchecks_warn_still_ready(self, temp_project, monkeypatch):
-        """mail_read passes but sub-checks fail → Mail read WARN, read-only still YES."""
+    def test_folder_scoped_fail_blocks_read_only(self, temp_project, monkeypatch):
+        """mail_folder_scoped is REQUIRED → its failure makes Mail read FAIL and
+        blocks read-only (NO, exit 1)."""
         _, _, config_path = temp_project
         checks = _all("pass")
         checks["mail_folder_scoped"] = {"status": "fail", "detail": "no scoped folder"}
+        fake = _FakeVerify(checks, read_ready=False, write_ready="partial")
+        cos = _inject(monkeypatch, fake)
+        rc, out = _run(cos, config_path, "--summary")
+        assert rc == 1
+        mail_line = next(l for l in out.splitlines() if "Mail read" in l)
+        assert "FAIL" in mail_line
+        assert "mail_folder_scoped" in mail_line
+        assert "Ready for daily read-only operation: NO" in out
+        assert "Ready for approved execution: NO" in out
+
+    def test_tags_only_fail_warns_still_ready(self, temp_project, monkeypatch):
+        """mail_tags_list is OPTIONAL → its failure only warns Mail read (with the
+        degraded wording) and read-only stays YES (exit 0)."""
+        _, _, config_path = temp_project
+        checks = _all("pass")
+        checks["mail_tags_list"] = {"status": "fail", "detail": "categories blocked"}
         fake = _FakeVerify(checks, read_ready=True, write_ready="partial")
         cos = _inject(monkeypatch, fake)
         rc, out = _run(cos, config_path, "--summary")
         assert rc == 0
-        assert "Mail read" in out
-        assert "WARN" in out
+        mail_line = next(l for l in out.splitlines() if "Mail read" in l)
+        assert "WARN" in mail_line
+        assert "email organisation features will be degraded" in mail_line
         assert "Ready for daily read-only operation: YES" in out
 
 

@@ -180,8 +180,9 @@ def test_empty_but_clean_list_is_pass(monkeypatch):
 
 
 def test_partial_permission_files_read_fails(monkeypatch):
-    # files_search warns (provider warn+return[] failure) => files_read fail,
-    # others pass, read_ready still true.
+    # files_search warns (provider warn+return[] failure) => files_read fail.
+    # files_read IS required for read_ready (bundled daily queries read Drive),
+    # so read_ready is now False.
     client = FakeClient(
         reads={"mail_read": [{"id": "m1"}], "calendar_read": [{"id": "e1"}]},
         warn_reads={"files_read": "m365 files_search failed: Graph API 403: Access denied"},
@@ -191,7 +192,40 @@ def test_partial_permission_files_read_fails(monkeypatch):
     assert rep["checks"]["files_read"]["status"] == "fail"
     assert "403" in rep["checks"]["files_read"]["detail"]
     assert rep["checks"]["mail_read"]["status"] == "pass"
-    assert rep["read_ready"] is True  # files_read not required for read_ready
+    assert rep["read_ready"] is False  # files_read is required for read_ready
+
+
+def test_folder_scoped_failure_blocks_read_ready(monkeypatch):
+    # Folder-scoped mail search (in:inbox) is required — the bundled daily
+    # queries use in:inbox / label:INBOX, so its failure blocks read_ready.
+    client = FakeClient(
+        reads={"mail_read": [{"id": "m1"}], "calendar_read": [{"id": "e1"}],
+               "files_read": [{"id": "f1"}]},
+        warn_reads={"mail_folder_scoped": "m365 mail_search failed: 403 folder scope denied"},
+    )
+    _patch_client(monkeypatch, client)
+    rep = wv.run_verification({}, include_writes=False)
+    assert rep["checks"]["mail_folder_scoped"]["status"] == "fail"
+    assert rep["checks"]["mail_read"]["status"] == "pass"
+    assert rep["read_ready"] is False
+
+
+def test_tags_list_failure_is_optional_read_ready_true(monkeypatch):
+    # mail_tags_list is OPTIONAL: its failure does NOT block read_ready, but its
+    # detail must carry the "email organisation features will be degraded" wording.
+    client = FakeClient(
+        reads={"mail_read": [{"id": "m1"}], "mail_folder_scoped": [{"id": "m2"}],
+               "calendar_read": [{"id": "e1"}], "files_read": [{"id": "f1"}]},
+        warn_reads={"mail_tags_list": "m365 mail_list_tags failed: categories blocked"},
+    )
+    _patch_client(monkeypatch, client)
+    rep = wv.run_verification({}, include_writes=False)
+    assert rep["checks"]["mail_tags_list"]["status"] == "fail"
+    assert "email organisation features will be degraded" in rep["checks"]["mail_tags_list"]["detail"]
+    assert rep["read_ready"] is True  # tags list is optional
+    # And the human report marks it visibly as optional.
+    human = wv.format_report(rep, fmt="human")
+    assert "mail_tags_list (optional)" in human
 
 
 def test_read_failure_blocks_read_ready(monkeypatch):
@@ -326,10 +360,13 @@ def test_tag_already_exists_counts_as_pass(monkeypatch):
     assert client.called("mail_tag") == [("mail_tag", ("draft-1", "CoS-Verify"))]
 
 
-def test_cleanup_failure_appends_detail_without_flipping_status(monkeypatch):
+def test_cleanup_failure_is_a_failure(monkeypatch):
+    # A write that succeeds but whose artefact cleanup fails is a FAILED check:
+    # the artefact still exists and needs manual removal, and write_ready => no.
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         writes={
             "mail_create_draft": _ok({"id": "draft-1"}),
             "mail_create_tag": _ok({"id": "CoS-Verify"}),
@@ -341,26 +378,58 @@ def test_cleanup_failure_appends_detail_without_flipping_status(monkeypatch):
     )
     _patch_client(monkeypatch, client)
     rep = wv.run_verification({}, include_writes=True)
-    assert rep["checks"]["mail_tag_write"]["status"] == "pass"
-    assert "cleanup" in rep["checks"]["mail_tag_write"]["detail"]
-    assert rep["checks"]["files_write"]["status"] == "pass"
-    assert "cleanup" in rep["checks"]["files_write"]["detail"]
-    assert rep["write_ready"] == "yes"
+    assert rep["checks"]["mail_tag_write"]["status"] == "fail"
+    assert rep["checks"]["mail_tag_write"]["detail"].startswith(
+        "Write succeeded, but verification artefact cleanup failed. Manual removal required."
+    )
+    # names the draft subject marker to remove
+    assert "Draft subject:" in rep["checks"]["mail_tag_write"]["detail"]
+    assert rep["checks"]["files_write"]["status"] == "fail"
+    assert rep["checks"]["files_write"]["detail"].startswith(
+        "Write succeeded, but verification artefact cleanup failed. Manual removal required."
+    )
+    # names the uploaded filename to remove
+    assert "Uploaded file:" in rep["checks"]["files_write"]["detail"]
+    assert rep["write_ready"] == "no"
 
 
-def test_unsupported_capability_is_not_tested(monkeypatch):
+def test_unsupported_capability_is_partial(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": False, "mail.create_tag": False,
-                      "mail.tag": False, "files.upload": False},
+                      "mail.tag": False, "mail.trash": False,
+                      "files.upload": False, "files.trash": False},
     )
     _patch_client(monkeypatch, client)
     rep = wv.run_verification({}, include_writes=True)
     assert rep["checks"]["mail_draft"]["status"] == "not_tested"
     assert rep["checks"]["mail_tag_write"]["status"] == "not_tested"
     assert rep["checks"]["files_write"]["status"] == "not_tested"
-    # no tested write failed -> yes
-    assert rep["write_ready"] == "yes"
+    # nothing actually ran -> partial (not "yes" — nothing was tested)
+    assert rep["write_ready"] == "partial"
     # no write methods were ever invoked
+    assert client.called("mail_create_draft") == []
+    assert client.called("files_upload") == []
+
+
+def test_missing_trash_capability_skips_write(monkeypatch):
+    # Provider supports the writes but NOT the trash needed to clean up. Both
+    # write families are skipped (not_tested) to avoid leaving artefacts, so no
+    # draft/upload is ever created and write_ready is "partial".
+    client = FakeClient(
+        supports_map={"mail.draft": True, "mail.create_tag": True,
+                      "mail.tag": True, "mail.trash": False,
+                      "files.upload": True, "files.trash": False},
+    )
+    _patch_client(monkeypatch, client)
+    rep = wv.run_verification({}, include_writes=True)
+    assert rep["checks"]["mail_draft"]["status"] == "not_tested"
+    assert "mail.trash" in rep["checks"]["mail_draft"]["detail"]
+    # tag write inherits the draft precondition
+    assert rep["checks"]["mail_tag_write"]["status"] == "not_tested"
+    assert rep["checks"]["files_write"]["status"] == "not_tested"
+    assert "files.trash" in rep["checks"]["files_write"]["detail"]
+    assert rep["write_ready"] == "partial"
+    # nothing was written
     assert client.called("mail_create_draft") == []
     assert client.called("files_upload") == []
 

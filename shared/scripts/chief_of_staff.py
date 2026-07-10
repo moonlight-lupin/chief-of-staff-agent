@@ -1324,22 +1324,38 @@ def _verify_check(report: Mapping[str, Any] | None, name: str, reason: str) -> t
     return mapped, detail
 
 
+_DEGRADED_TAGS_WORDING = "email organisation features will be degraded"
+
+
 def _mail_read_row(report: Mapping[str, Any] | None, reason: str) -> tuple[str, str]:
     """Row 3 — mail_read, with mail_folder_scoped + mail_tags_list folded in.
 
-    WARN if the main read passes but either sub-check does not.
+    mail_folder_scoped is REQUIRED (the bundled daily queries rely on
+    folder-scoped search), so its failure is a hard FAIL — same as mail_read
+    itself. mail_tags_list is OPTIONAL: its failure only degrades to WARN and the
+    detail must carry the "email organisation features will be degraded" wording.
     """
     status, detail = _verify_check(report, "mail_read", reason)
     if report is None or status != _R_PASS:
         return status, detail
     checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
-    issues: list[str] = []
-    for sub in ("mail_folder_scoped", "mail_tags_list"):
-        entry = checks.get(sub) if isinstance(checks.get(sub), Mapping) else {}
-        if str(entry.get("status", "")).lower() != "pass":
-            issues.append(f"{sub}: {entry.get('detail') or entry.get('status') or 'not tested'}")
-    if issues:
-        return _R_WARN, f"{detail} ({'; '.join(issues)})"
+
+    # Required sub-check: folder-scoped search. Failure => FAIL.
+    fs = checks.get("mail_folder_scoped") if isinstance(checks.get("mail_folder_scoped"), Mapping) else {}
+    if str(fs.get("status", "")).lower() != "pass":
+        fs_detail = fs.get("detail") or fs.get("status") or "not tested"
+        return _R_FAIL, f"{detail} (mail_folder_scoped: {fs_detail})"
+
+    # Optional sub-check: tags list. Failure => WARN with the degraded wording.
+    tl = checks.get("mail_tags_list") if isinstance(checks.get("mail_tags_list"), Mapping) else {}
+    if str(tl.get("status", "")).lower() != "pass":
+        tl_detail = str(tl.get("detail") or tl.get("status") or "not tested")
+        warn = f"{detail} (mail_tags_list: {tl_detail}"
+        if _DEGRADED_TAGS_WORDING not in tl_detail:
+            warn += f"; {_DEGRADED_TAGS_WORDING}"
+        warn += ")"
+        return _R_WARN, warn
+
     return status, detail
 
 

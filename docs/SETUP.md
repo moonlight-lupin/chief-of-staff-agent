@@ -198,7 +198,7 @@ Sample output:
 
 ```
 Workspace verification — provider: m365
-Read ready:  yes
+Read ready:  no
 Write ready: partial
 
 Authentication
@@ -207,7 +207,7 @@ Authentication
 Mail
   ✓ mail_read — 1 result(s)
   ✓ mail_folder_scoped — 1 result(s)
-  ✓ mail_tags_list — 3 result(s)
+  ✓ mail_tags_list (optional) — 3 result(s)
 
 Calendar
   ✓ calendar_read — 2 result(s)
@@ -223,15 +223,28 @@ Writes
   — calendar_write — verification never creates calendar events
 ```
 
-The exit code is `0` when the provider is read-ready (auth + mail read +
-calendar read all pass); for `--verify-writes` it is `0` only if additionally no
-tested write failed. Otherwise it is `1`.
+In the sample above the OneDrive read 403s, so `Read ready` is `no`: `files_read`
+is one of the reads the product depends on.
+
+The exit code is `0` when the provider is read-ready — that is, `auth`,
+`mail_read`, **folder-scoped mail search** (`mail_folder_scoped`),
+`calendar_read` and `files_read` all pass. `mail_tags_list` is **optional**: its
+failure does not affect read-readiness (email organisation features are merely
+degraded), and it is marked `(optional)` in the report. For `--verify-writes` the
+exit code is `0` only if additionally no tested write (or its cleanup) failed.
+Otherwise it is `1`.
 
 Notes:
 - **`--verify-writes` never sends mail and never creates calendar events.** It
   creates a draft, applies a tag, and uploads a tiny temp file, then trashes the
   draft and the file. `mail_send` and `calendar_write` are always reported
   `not_tested`.
+- **Writes are only attempted when they can be cleaned up.** `mail_draft` (and
+  the tag write that tags it) is skipped as `not_tested` unless the provider
+  supports `mail.trash`; `files_write` is skipped unless it supports
+  `files.trash`. This avoids leaving verification artefacts behind. If a write
+  succeeds but its cleanup fails, that check is reported `fail` (manual removal
+  required) and write-readiness becomes `no`.
 - **The `CoS-Verify` category/label persists.** The write smoke reuses one
   category across runs (it is not deleted); only the verification draft and
   uploaded file are cleaned up.

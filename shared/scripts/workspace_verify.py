@@ -16,14 +16,28 @@ Report schema (``run_verification`` return value)::
         <check name>: {"status": "pass"|"fail"|"not_tested", "detail": <short str>},
         ...
       },
-      "read_ready": <bool>,          # auth + mail_read + calendar_read all pass
+      "read_ready": <bool>,          # see read_ready semantics below
       "write_ready": "yes"|"partial"|"no",
     }
 
+``read_ready`` semantics (the reads the product actually depends on):
+  ``read_ready`` is True iff ALL of ``auth``, ``mail_read``, ``mail_folder_scoped``,
+  ``calendar_read`` and ``files_read`` pass.  The bundled daily queries rely on
+  folder-scoped search (``in:inbox`` / ``label:INBOX``) and on OneDrive/Drive
+  reads, so folder-scoped mail search and files_read are REQUIRED, not optional.
+  ``mail_tags_list`` is explicitly OPTIONAL: its failure does NOT block
+  ``read_ready`` — email organisation features are merely degraded — and its fail
+  detail carries that wording.  Required checks: auth, mail_read,
+  mail_folder_scoped, calendar_read, files_read.  Optional: mail_tags_list.
+
 ``write_ready`` semantics:
-  * ``"partial"`` — writes were not tested (``include_writes=False``).
-  * ``"no"``      — at least one TESTED write check failed.
-  * ``"yes"``     — every tested write check passed (or none were testable).
+  * ``"yes"``     — ``include_writes`` was True AND at least one representative
+                    write check actually ran AND every write check that ran
+                    passed AND all cleanup succeeded.
+  * ``"partial"`` — writes were not requested (``include_writes=False``), OR every
+                    write check was unsupported / not tested, OR cleanup could not
+                    be verified.
+  * ``"no"``      — any tested write check failed OR any cleanup failed.
 ``mail_send`` and ``calendar_write`` are ALWAYS ``not_tested``: verification never
 auto-sends mail and never creates calendar events.
 
@@ -43,13 +57,25 @@ Non-destructive by construction:
   * ``mail_tag_write`` — create (or reuse) the ``CoS-Verify`` tag/category and
                          apply it to the draft, then TRASH the draft to clean up.
   * ``files_write``    — upload a tiny temp file, then TRASH it.
+
+CLEANUP-CAPABILITY PRECONDITIONS.  A write check is only run when the provider can
+also clean up after it: ``mail_draft`` (and, transitively, ``mail_tag_write``,
+which tags the draft) requires ``mail.trash`` support; ``files_write`` requires
+``files.trash`` support.  When the cleanup capability is missing the check is
+``not_tested`` (skipped to avoid leaving artefacts) rather than attempted.
+
+CLEANUP FAILURE IS A FAILURE.  If a write itself succeeds but removing the
+verification artefact (trashing the draft / trashing the uploaded file) fails, the
+affected check becomes ``fail`` with a detail beginning "Write succeeded, but
+verification artefact cleanup failed. Manual removal required." (naming the draft
+subject marker / uploaded filename), and ``write_ready`` becomes ``"no"``.
+
 The SAFE_WRITE auto-approve env var (``CHIEF_OF_STAFF_AUTO_APPROVE``) is set for
 the duration of the write checks and restored in a ``finally`` block.
 ``CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE`` is NEVER set — destructive actions stay
-blocked.  Cleanup failures are appended to the check ``detail`` but do NOT flip a
-passing status to fail.  NOTE: the ``CoS-Verify`` category/label is created once
-and intentionally PERSISTS on the mailbox (categories are reused across runs);
-only the verification draft and uploaded file are cleaned up.
+blocked.  NOTE: the ``CoS-Verify`` category/label is created once and intentionally
+PERSISTS on the mailbox (categories are reused across runs); only the verification
+draft and uploaded file are cleaned up.
 """
 from __future__ import annotations
 
@@ -97,6 +123,9 @@ _SECTIONS: list[tuple[str, list[str]]] = [
     ("OneDrive/Files", ["files_read"]),
     ("Writes", ["mail_draft", "mail_tag_write", "files_write", "mail_send", "calendar_write"]),
 ]
+
+# Checks that are NOT required for read_ready (surfaced visibly in the report).
+_OPTIONAL_CHECKS = frozenset({"mail_tags_list"})
 
 
 # ── small helpers ──────────────────────────────────────────────────────────
@@ -190,30 +219,57 @@ def _read_check(fn: Callable[[], Any]) -> dict[str, str]:
 
 # ── write checks ───────────────────────────────────────────────────────────
 
-def _check_mail_draft(client: Any, config: Any) -> tuple[dict[str, str], str | None]:
+_CLEANUP_FAIL_PREFIX = (
+    "Write succeeded, but verification artefact cleanup failed. Manual removal required."
+)
+
+
+def _check_mail_draft(
+    client: Any, config: Any
+) -> tuple[dict[str, str], str | None, str | None]:
     if not _supported(client, "mail.draft"):
-        return _mk("not_tested", "provider does not support mail.draft"), None
+        return _mk("not_tested", "provider does not support mail.draft"), None, None
+    # Cleanup-capability precondition: never create a draft we cannot trash.
+    if not _supported(client, "mail.trash"):
+        return (
+            _mk(
+                "not_tested",
+                "cleanup capability mail.trash unsupported — skipped to avoid leaving artefacts",
+            ),
+            None,
+            None,
+        )
+    subject = f"[CoS verify] {_marker()}"
     try:
         addr = _self_address(config)
         res = client.mail_create_draft(
             to=addr,
-            subject=f"[CoS verify] {_marker()}",
+            subject=subject,
             body="Chief-of-Staff workspace verification draft. Safe to delete.",
         )
     except NotImplementedError as exc:
-        return _mk("not_tested", str(exc)), None
+        return _mk("not_tested", str(exc)), None, None
     except Exception as exc:  # noqa: BLE001
-        return _mk("fail", str(exc)), None
+        return _mk("fail", str(exc)), None, None
     d = _result_dict(res)
     draft_id = (d.get("data") or {}).get("id")
     if d.get("success") and draft_id:
-        return _mk("pass", f"draft created (id={_short(draft_id)})"), draft_id
-    return _mk("fail", d.get("error") or "draft creation returned no id in data"), None
+        return _mk("pass", f"draft created (id={_short(draft_id)})"), draft_id, subject
+    return _mk("fail", d.get("error") or "draft creation returned no id in data"), None, None
 
 
-def _check_mail_tag_write(client: Any, draft_id: str | None) -> dict[str, str]:
+def _check_mail_tag_write(
+    client: Any, draft_check: Mapping[str, str], draft_id: str | None, subject: str | None
+) -> dict[str, str]:
     if not (_supported(client, "mail.create_tag") and _supported(client, "mail.tag")):
         return _mk("not_tested", "provider does not support mail tag write")
+    # Inherit the mail_draft precondition: no draft was created (unsupported /
+    # cleanup capability missing) -> nothing to tag, so this is not_tested too.
+    if draft_check.get("status") == "not_tested":
+        return _mk(
+            "not_tested",
+            f"mail_draft not tested ({draft_check.get('detail', 'no draft')}) — nothing to tag",
+        )
     try:
         tag_id = VERIFY_TAG
         # Create the category/label; an already-exists error counts as pass (reuse).
@@ -238,14 +294,18 @@ def _check_mail_tag_write(client: Any, draft_id: str | None) -> dict[str, str]:
         else:
             check = _mk("fail", applied.get("error") or "mail_tag failed")
 
-        # Clean up the draft regardless of tag-apply outcome. A cleanup failure
-        # is appended to the detail but never flips the status.
+        # Clean up the draft regardless of tag-apply outcome. A cleanup failure is
+        # a FAILURE: the artefact still exists and needs manual removal.
+        marker = f" Draft subject: {subject}." if subject else ""
         try:
             trashed = _result_dict(client.mail_trash(draft_id))
             if not trashed.get("success"):
-                check["detail"] += f" (cleanup: draft trash failed: {trashed.get('error')})"
+                return _mk(
+                    "fail",
+                    f"{_CLEANUP_FAIL_PREFIX}{marker} (cleanup error: {trashed.get('error')})",
+                )
         except Exception as exc:  # noqa: BLE001
-            check["detail"] += f" (cleanup: draft trash failed: {exc})"
+            return _mk("fail", f"{_CLEANUP_FAIL_PREFIX}{marker} (cleanup error: {exc})")
         return check
     except Exception as exc:  # noqa: BLE001
         return _mk("fail", str(exc))
@@ -254,11 +314,18 @@ def _check_mail_tag_write(client: Any, draft_id: str | None) -> dict[str, str]:
 def _check_files_write(client: Any) -> dict[str, str]:
     if not _supported(client, "files.upload"):
         return _mk("not_tested", "provider does not support files.upload")
+    # Cleanup-capability precondition: never upload a file we cannot trash.
+    if not _supported(client, "files.trash"):
+        return _mk(
+            "not_tested",
+            "cleanup capability files.trash unsupported — skipped to avoid leaving artefacts",
+        )
     tmp_path: str | None = None
     try:
         fd, tmp_path = tempfile.mkstemp(prefix="cos-verify-", suffix=".txt")
         with os.fdopen(fd, "w") as fh:
             fh.write("Chief-of-Staff workspace verification. Safe to delete.\n")
+        filename = os.path.basename(tmp_path)
         try:
             res = client.files_upload(tmp_path)
         except NotImplementedError as exc:
@@ -267,14 +334,21 @@ def _check_files_write(client: Any) -> dict[str, str]:
         file_id = (d.get("data") or {}).get("id")
         if not (d.get("success") and file_id):
             return _mk("fail", d.get("error") or "upload returned no id in data")
-        check = _mk("pass", f"uploaded (id={_short(file_id)}); trashed")
+        # Clean up the upload. A cleanup failure is a FAILURE.
         try:
             trashed = _result_dict(client.files_trash(file_id))
             if not trashed.get("success"):
-                check["detail"] += f" (cleanup: trash failed: {trashed.get('error')})"
+                return _mk(
+                    "fail",
+                    f"{_CLEANUP_FAIL_PREFIX} Uploaded file: {filename}. "
+                    f"(cleanup error: {trashed.get('error')})",
+                )
         except Exception as exc:  # noqa: BLE001
-            check["detail"] += f" (cleanup: trash failed: {exc})"
-        return check
+            return _mk(
+                "fail",
+                f"{_CLEANUP_FAIL_PREFIX} Uploaded file: {filename}. (cleanup error: {exc})",
+            )
+        return _mk("pass", f"uploaded (id={_short(file_id)}); trashed")
     except Exception as exc:  # noqa: BLE001
         return _mk("fail", str(exc))
     finally:
@@ -291,9 +365,9 @@ def _run_write_checks(client: Any, config: Any, checks: dict[str, dict[str, str]
     saved = os.environ.get(AUTO_APPROVE_ENV)
     os.environ[AUTO_APPROVE_ENV] = "1"
     try:
-        draft_check, draft_id = _check_mail_draft(client, config)
+        draft_check, draft_id, subject = _check_mail_draft(client, config)
         checks["mail_draft"] = draft_check
-        checks["mail_tag_write"] = _check_mail_tag_write(client, draft_id)
+        checks["mail_tag_write"] = _check_mail_tag_write(client, draft_check, draft_id, subject)
         checks["files_write"] = _check_files_write(client)
     finally:
         if saved is None:
@@ -321,6 +395,15 @@ def run_verification(config: Any, include_writes: bool = False) -> dict[str, Any
     checks["mail_read"] = _read_check(lambda: client.mail_search("is:unread", max_results=1))
     checks["mail_folder_scoped"] = _read_check(lambda: client.mail_search("in:inbox", max_results=1))
     checks["mail_tags_list"] = _read_check(lambda: client.mail_list_tags())
+    # mail_tags_list is OPTIONAL for read_ready: on failure the product still
+    # runs, but email-organisation features are degraded — say so in the detail.
+    if checks["mail_tags_list"]["status"] == "fail":
+        detail = checks["mail_tags_list"]["detail"]
+        checks["mail_tags_list"]["detail"] = (
+            f"{detail}; email organisation features will be degraded"
+            if detail
+            else "email organisation features will be degraded"
+        )
     checks["calendar_read"] = _read_check(
         lambda: client.calendar_list(today.isoformat(), tomorrow.isoformat())
     )
@@ -333,15 +416,24 @@ def run_verification(config: Any, include_writes: bool = False) -> dict[str, Any
     checks["mail_send"] = _mk("not_tested", "verification never sends mail")
     checks["calendar_write"] = _mk("not_tested", "verification never creates calendar events")
 
+    # read_ready gates the reads the product actually depends on: auth, mail_read,
+    # folder-scoped mail search, calendar_read and files_read. mail_tags_list is
+    # OPTIONAL and deliberately excluded.
     read_ready = all(
-        checks[name]["status"] == "pass" for name in ("auth", "mail_read", "calendar_read")
+        checks[name]["status"] == "pass"
+        for name in ("auth", "mail_read", "mail_folder_scoped", "calendar_read", "files_read")
     )
     if not include_writes:
         write_ready = "partial"
     elif any(checks[name]["status"] == "fail" for name in _TESTED_WRITE_CHECKS):
+        # Any tested write check failed (a cleanup failure is a failed check).
         write_ready = "no"
-    else:
+    elif any(checks[name]["status"] == "pass" for name in _TESTED_WRITE_CHECKS):
+        # At least one representative write check ran and every one that ran passed.
         write_ready = "yes"
+    else:
+        # Writes requested but every write check was unsupported / not tested.
+        write_ready = "partial"
 
     return {
         "provider": client.provider_name,
@@ -370,7 +462,8 @@ def _format_human(report: Mapping[str, Any]) -> str:
             check = checks.get(name, {"status": "not_tested", "detail": ""})
             detail = check.get("detail", "")
             suffix = f" — {detail}" if detail else ""
-            lines.append(f"  {_symbol(check.get('status', 'not_tested'))} {name}{suffix}")
+            label = f"{name} (optional)" if name in _OPTIONAL_CHECKS else name
+            lines.append(f"  {_symbol(check.get('status', 'not_tested'))} {label}{suffix}")
     return "\n".join(lines)
 
 
