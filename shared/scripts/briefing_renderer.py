@@ -144,6 +144,27 @@ def render_text(briefing: dict[str, Any]) -> str:
             lines.append(f"  Runs dir: {'OK' if sh.get('runs_dir') else 'missing'}")
         lines.append("")
 
+    # Knowledge maintenance
+    km = sections.get("knowledge_maintenance", {})
+    if km and (km.get("pages_updated") or km.get("pages_created") or km.get("observations_added")
+               or km.get("duplicates_flagged") or km.get("open_questions_added")):
+        lines.append("Knowledge maintenance:")
+        if km.get("pages_updated"):
+            lines.append(f"  Updated {km['pages_updated']} page(s).")
+        if km.get("pages_created"):
+            lines.append(f"  Created {km['pages_created']} new draft page(s).")
+        if km.get("observations_added"):
+            lines.append(f"  Added {km['observations_added']} source-backed observation(s).")
+        if km.get("backlinks_added"):
+            lines.append(f"  Added {km['backlinks_added']} backlink(s).")
+        if km.get("duplicates_flagged"):
+            lines.append(f"  Flagged {km['duplicates_flagged']} possible duplicate(s) for review.")
+        if km.get("open_questions_added"):
+            lines.append(f"  Added {km['open_questions_added']} open question(s).")
+        if km.get("total_records"):
+            lines.append(f"  Memory records: {km['total_records']} total.")
+        lines.append("")
+
     # Safety footer
     if safety:
         lines.append("---")
@@ -249,6 +270,27 @@ def render_markdown(briefing: dict[str, Any]) -> str:
         if ps:
             parts = [f"{v} {k}" for k, v in ps.items() if v]
             lines.append(f"- Pending: {', '.join(parts) if parts else 'empty'}")
+        lines.append("")
+
+    # Knowledge maintenance
+    km = sections.get("knowledge_maintenance", {})
+    if km and (km.get("pages_updated") or km.get("pages_created") or km.get("observations_added")
+               or km.get("duplicates_flagged") or km.get("open_questions_added")):
+        lines.append("## Knowledge Maintenance\n")
+        if km.get("pages_updated"):
+            lines.append(f"- Updated {km['pages_updated']} page(s)")
+        if km.get("pages_created"):
+            lines.append(f"- Created {km['pages_created']} new draft page(s)")
+        if km.get("observations_added"):
+            lines.append(f"- Added {km['observations_added']} source-backed observation(s)")
+        if km.get("backlinks_added"):
+            lines.append(f"- Added {km['backlinks_added']} backlink(s)")
+        if km.get("duplicates_flagged"):
+            lines.append(f"- Flagged {km['duplicates_flagged']} possible duplicate(s)")
+        if km.get("open_questions_added"):
+            lines.append(f"- Added {km['open_questions_added']} open question(s)")
+        if km.get("total_records"):
+            lines.append(f"- Memory records: {km['total_records']} total")
         lines.append("")
 
     lines.append("---")

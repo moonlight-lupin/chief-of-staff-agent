@@ -322,6 +322,63 @@ def collect_calendar_summary(
     return sorted(summaries, key=lambda item: item.get("when", ""))
 
 
+def collect_knowledge_stats(config: object) -> dict[str, object]:
+    """Read .knowledge/memory.json and .knowledge/memory_changes.json.
+
+    Returns counts for the daily briefing knowledge maintenance section.
+    Degrades gracefully if files don't exist.
+    """
+    try:
+        root = _project_root(config)
+    except Exception:
+        return {}
+
+    knowledge_dir = root / ".knowledge"
+    memory_path = knowledge_dir / "memory.json"
+    changes_path = knowledge_dir / "memory_changes.json"
+
+    stats: dict[str, object] = {
+        "total_records": 0,
+        "pages_updated": 0,
+        "pages_created": 0,
+        "observations_added": 0,
+        "backlinks_added": 0,
+        "duplicates_flagged": 0,
+        "open_questions_added": 0,
+    }
+
+    # Read memory records count
+    try:
+        if memory_path.exists():
+            data = json.loads(memory_path.read_text(encoding="utf-8"))
+            records = data.get("records", {})
+            if isinstance(records, dict):
+                stats["total_records"] = len(records)
+    except Exception:
+        pass
+
+    # Read recent changes count
+    try:
+        if changes_path.exists():
+            data = json.loads(changes_path.read_text(encoding="utf-8"))
+            changes = data.get("changes", [])
+            if isinstance(changes, list):
+                for ch in changes:
+                    if not isinstance(ch, dict):
+                        continue
+                    ct = ch.get("change_type", "")
+                    if ct == "memory_create" or ct == "wiki_create":
+                        stats["pages_created"] = stats["pages_created"] + 1 if isinstance(stats["pages_created"], int) else 1
+                    elif ct == "memory_update" or ct == "wiki_update":
+                        stats["pages_updated"] = stats["pages_updated"] + 1 if isinstance(stats["pages_updated"], int) else 1
+                    elif ct == "duplicate_detected":
+                        stats["duplicates_flagged"] = stats["duplicates_flagged"] + 1 if isinstance(stats["duplicates_flagged"], int) else 1
+    except Exception:
+        pass
+
+    return stats
+
+
 __all__ = [
     "collect_pending_actions",
     "collect_suggestions",
@@ -329,4 +386,5 @@ __all__ = [
     "collect_email_org_stats",
     "collect_system_health",
     "collect_calendar_summary",
+    "collect_knowledge_stats",
 ]
