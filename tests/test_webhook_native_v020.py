@@ -472,7 +472,7 @@ class TestGenericApproveExecute:
         from pending_actions import create_pending_action, approve_pending_action
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
-        mock_client.gmail_label.return_value = {"success": True, "action": "gmail.label"}
+        mock_client.mail_tag.return_value = {"success": True, "action": "gmail.label"}
         mock_client.supports.side_effect = lambda a: True
 
         action = create_pending_action(
@@ -491,7 +491,7 @@ class TestGenericApproveExecute:
                 rc = webhook_events.main(["--summary", "execute", "--action-id", action["id"]])
         assert rc == 0
         assert "✅ Executed" in buf.getvalue()
-        mock_client.gmail_label.assert_called_once()
+        mock_client.mail_tag.assert_called_once()
 
     def test_execute_not_approved_fails(self, with_secret):
         config, project = with_secret
@@ -545,8 +545,8 @@ class TestSafety:
         with patch("workspace_client.get_workspace_client", return_value=mock_client):
             from event_store import ingest_event
             ingest_event(config, "webhook.gmail", "safety-test-1", "email_received", {"x": 1})
-            mock_client.gmail_send.assert_not_called()
-            mock_client.gmail_label.assert_not_called()
+            mock_client.mail_send.assert_not_called()
+            mock_client.mail_tag.assert_not_called()
 
     def test_no_pending_actions_during_webhook(self, with_secret):
         config, project = with_secret

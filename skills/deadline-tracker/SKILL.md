@@ -3,7 +3,7 @@ name: deadline-tracker
 description: "Use when tracking statutory or business deadlines for the Chief-of-Staff plugin. Loads company.yaml and jurisdiction packs, computes due dates, categorizes urgency, and feeds briefings/reviews."
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, compliance, deadlines, statutory, briefing]

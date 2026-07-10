@@ -15,7 +15,7 @@ description: >
   purpose and only from public information.
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 platforms: [linux, macos, windows]
 ---
 

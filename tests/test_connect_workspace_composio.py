@@ -28,7 +28,7 @@ def run_connect(*args, config_path=None):
 
 @pytest.fixture
 def composio_config_file():
-    with tempfile.TemporaryDirectory(dir="/root") as d:
+    with tempfile.TemporaryDirectory() as d:
         config = Path(d) / "company.yaml"
         project = Path(d) / "project"
         project.mkdir()

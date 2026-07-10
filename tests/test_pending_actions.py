@@ -64,7 +64,7 @@ def google_mock():
     mock = MagicMock()
     mock.provider_name = "google_api"
     mock.supports.side_effect = lambda action: action != "gmail.draft"
-    mock.gmail_send.return_value = {
+    mock.mail_send.return_value = {
         "success": True, "action": "gmail.send", "provider": "google_api",
         "target": "client@test.com", "data": {"id": "msg123"},
         "audited": True,
@@ -327,7 +327,7 @@ class TestSendEmailCLI:
             with redirect_stdout(buf2):
                 rc = send_email.main(["execute", "--action-id", action["id"]])
         assert rc == 0
-        google_mock.gmail_send.assert_called_once_with(
+        google_mock.mail_send.assert_called_once_with(
             to="client@test.com", subject="NDA", body="Sign this.", cc=None,
         )
 
@@ -356,7 +356,7 @@ class TestSendEmailCLI:
             import send_email
             rc = send_email.main(["execute", "--action-id", "nonexistent"])
         assert rc == 1
-        google_mock.gmail_send.assert_not_called()
+        google_mock.mail_send.assert_not_called()
 
     def test_double_execute_fails(self, temp_project, google_mock, auto_approve):
         config, project = temp_project
@@ -372,7 +372,7 @@ class TestSendEmailCLI:
             # Second execute should fail (already executed)
             rc = send_email.main(["execute", "--action-id", action["id"]])
         assert rc == 1
-        assert google_mock.gmail_send.call_count == 1  # only sent once
+        assert google_mock.mail_send.call_count == 1  # only sent once
 
 
 class TestAuditTrail:

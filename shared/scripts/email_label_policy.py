@@ -105,6 +105,54 @@ def infer_category(label_name: str, path: list[str] | None = None) -> tuple[str 
     return best_cat, best_score
 
 
+# ─── Provider-aware tag resolution ────────────────────────────
+#
+# Policy categories carry a human-readable label NAME. Different providers key
+# their tags differently:
+#   * Gmail   — the tag id is an opaque label id (e.g. "Label_12"); the name is
+#     a separate display string. mail_tag() takes the label id.
+#   * Microsoft 365 (Outlook categories) — the tag id IS the category
+#     displayName; there is no separate opaque id. mail_tag() takes the name.
+#
+# resolve_tag_id() hides this difference: given a client and a desired label
+# NAME it returns the id to pass to client.mail_tag(), matching case-insensitively
+# against the provider's existing tags. This works for any WorkspaceClient via
+# the neutral mail_list_tags()/mail_create_tag() surface — no provider
+# conditionals — because each provider already reports {"id", "name"} entries
+# with the right id semantics for that provider.
+
+
+def resolve_tag_id(client: Any, label_name: str,
+                   create_if_missing: bool = False) -> str | None:
+    """Resolve a policy label NAME to the tag id expected by client.mail_tag().
+
+    Returns the provider-appropriate id (Gmail label id, or the Outlook category
+    displayName for m365), or None if the tag does not exist and
+    ``create_if_missing`` is False. Read-only unless ``create_if_missing`` is
+    True (in which case creation still flows through the guarded
+    mail_create_tag()).
+    """
+    target = _normalize(label_name)
+    try:
+        tags = client.mail_list_tags() or []
+    except Exception:
+        tags = []
+    for tag in tags:
+        if not isinstance(tag, Mapping):
+            continue
+        name = tag.get("name") or tag.get("displayName") or ""
+        if _normalize(str(name)) == target:
+            # Prefer the explicit id; fall back to the name (m365 id == name).
+            return str(tag.get("id") or name)
+    if not create_if_missing:
+        return None
+    result = client.mail_create_tag(label_name)
+    if isinstance(result, Mapping):
+        data = result.get("data") if isinstance(result.get("data"), Mapping) else result
+        return str(data.get("id") or data.get("name") or label_name)
+    return label_name
+
+
 # ─── Label Parsing ────────────────────────────────────────────
 
 def parse_labels(raw_labels: list[dict[str, Any]]) -> dict[str, Any]:

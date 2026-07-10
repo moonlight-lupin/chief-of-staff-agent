@@ -289,23 +289,23 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
         try:
             if action_type == "gmail.send":
-                result = client.gmail_send(
+                result = client.mail_send(
                     to=payload.get("to", ""),
                     subject=payload.get("subject", ""),
                     body=payload.get("body", ""),
                     cc=payload.get("cc"),
                 )
             elif action_type == "gmail.label":
-                result = client.gmail_label(
+                result = client.mail_tag(
                     message_id=payload.get("message_id", ""),
-                    label_id=payload.get("label_id", ""),
+                    tag_id=payload.get("label_id", ""),
                 )
             elif action_type == "gmail.archive":
-                result = client.gmail_archive(message_id=payload.get("message_id", ""))
+                result = client.mail_archive(message_id=payload.get("message_id", ""))
             elif action_type == "gmail.create_label":
-                result = client.gmail_create_label(label_name=payload.get("label", ""))
+                result = client.mail_create_tag(name=payload.get("label", ""))
             elif action_type == "gmail.trash":
-                result = client.gmail_trash(message_id=payload.get("message_id", ""))
+                result = client.mail_trash(message_id=payload.get("message_id", ""))
             elif action_type == "calendar.create":
                 result = client.calendar_create(
                     title=payload.get("summary", payload.get("title", "")),
@@ -322,17 +322,17 @@ def cmd_execute(args: argparse.Namespace) -> int:
             elif action_type == "calendar.cancel":
                 result = client.calendar_cancel(event_id=payload.get("event_id", ""))
             elif action_type == "drive.upload":
-                result = client.drive_upload(
+                result = client.files_upload(
                     file_path=payload.get("file_path", payload.get("path", "")),
                     parent_id=payload.get("parent_id"),
                 )
             elif action_type == "drive.download":
-                result = client.drive_download(
+                result = client.files_download(
                     file_id=payload.get("file_id", ""),
                     output_path=payload.get("output_path", payload.get("path", "")),
                 )
             elif action_type == "drive.trash":
-                result = client.drive_trash(file_id=payload.get("file_id", ""))
+                result = client.files_trash(file_id=payload.get("file_id", ""))
             else:
                 mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
                 print(f"❌ Unknown action type: {action_type}", file=sys.stderr)

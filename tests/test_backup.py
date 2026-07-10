@@ -107,7 +107,7 @@ class TestBackupCreation:
         # Create minimal fake structure directly in tmp_path (avoid /tmp full)
         # Use /root for the test instead since /tmp is tmpfs
         import tempfile
-        with tempfile.TemporaryDirectory(dir="/root") as workdir:
+        with tempfile.TemporaryDirectory() as workdir:
             root = Path(workdir)
             create_fake_hermes(root)
             config = {
@@ -138,7 +138,7 @@ class TestBackupCreation:
         """Test that backup result object has expected attributes."""
         from backup import create_backup
         import tempfile
-        with tempfile.TemporaryDirectory(dir="/root") as workdir:
+        with tempfile.TemporaryDirectory() as workdir:
             root = Path(workdir)
             create_fake_hermes(root)
             config = {

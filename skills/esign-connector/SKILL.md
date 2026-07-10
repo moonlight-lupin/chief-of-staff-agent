@@ -3,7 +3,7 @@ name: esign-connector
 description: "Send documents for e-signature via self-hosted DocuSeal instance. Create templates, send to submitters, check status, download signed copies, cancel submissions. Integrates with Document Preparer and Pipeline Manager."
 version: 0.1.1
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   requires_skills: [google-workspace]
 ---

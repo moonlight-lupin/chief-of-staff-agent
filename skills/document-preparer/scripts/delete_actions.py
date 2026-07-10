@@ -288,10 +288,27 @@ def cmd_execute(args: argparse.Namespace) -> int:
     method_name = meta["provider_method"]
     client = get_client(cfg)
 
-    # Soft-delete actions are destructive — set the flag
+    # Capability gate — refuse an approved action the provider cannot support
+    # (e.g. m365 calendar.cancel, whose capability is False) BEFORE invoking any
+    # provider method. Mirrors webhook_events.cmd_execute exactly: the action is
+    # already in 'executing' state (mark_executing above), so mark_failed
+    # transitions it back to 'approved' with last_error recorded for retry.
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, action_type, target=action.get("target", ""))
+    if unsupported:
+        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}")
+        print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
+        return 1
+
+    # Establish the approved-execution context — the explicit approval IS the
+    # confirmation. Set AUTO_APPROVE (so reversible SAFE_WRITE actions such as
+    # calendar.cancel pass the non-interactive gate) and ALLOW_DESTRUCTIVE, then
+    # restore the previous values so we don't leak state into other processes.
+    old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
+    old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
+    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
 
-    # Call the provider method
     try:
         method = getattr(client, method_name, None)
         if method is None:
@@ -309,10 +326,29 @@ def cmd_execute(args: argparse.Namespace) -> int:
         mark_failed(cfg, args.action_id, str(exc))
         print(f"Execute failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if old_auto is None:
+            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = old_auto
+        if old_destructive is None:
+            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
+
+    # Check the provider result BEFORE marking executed — a provider failure
+    # (success=False) must transition the action to failed (back to 'approved'
+    # for retry), NOT be recorded as executed. Mirrors webhook_events.cmd_execute.
+    success = result.get("success", False) if isinstance(result, dict) else True
+    if not success:
+        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
+        mark_failed(cfg, args.action_id, error)
+        print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+        return 1
 
     mark_executed(cfg, args.action_id, result)
     print_result(result, args.summary, f"{meta['label']}: {action['target']}")
-    return 0 if result.get("success") else 1
+    return 0
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
@@ -341,6 +377,26 @@ RESTORE_ACTIONS = {
     "gmail.trash": {"label": "Restore trashed Gmail message", "method": "gmail_untrash"},
     "calendar.cancel": {"label": "Restore cancelled calendar event", "method": "calendar_uncancel"},
 }
+
+
+def _restore_target(action: dict) -> str:
+    """Resolve the id to restore.
+
+    Some providers (m365/Graph) change an object's id when it moves folders
+    (archive/trash). The executed provider result persists the post-move id as
+    ``restore_target`` (falling back to ``id``); prefer that over the original
+    action ``target`` so restore addresses the object where it actually landed.
+    Falls back to the original target when no executed result is recorded (the
+    common case for providers whose ids are stable, e.g. Google).
+    """
+    result = action.get("result")
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, dict):
+            restore_id = data.get("restore_target") or data.get("id")
+            if restore_id:
+                return str(restore_id)
+    return action.get("target", "")
 
 
 def cmd_restore(args: argparse.Namespace) -> int:
@@ -378,8 +434,9 @@ def cmd_restore(args: argparse.Namespace) -> int:
         print(f"Provider does not implement {meta['method']}", file=sys.stderr)
         return 1
 
-    result = method(action["target"])
-    print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+    restore_target = _restore_target(action)
+    result = method(restore_target)
+    print_result(result, args.summary, f"{meta['label']}: {restore_target}")
     return 0 if result.get("success") else 1
 
 

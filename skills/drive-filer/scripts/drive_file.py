@@ -39,7 +39,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         print("Could not load config", file=sys.stderr)
         return 1
     client = get_client(cfg)
-    results = client.drive_search(args.query or "", max_results=args.max)
+    results = client.files_search(args.query or "", max_results=args.max)
     print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -75,7 +75,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Drive file would be uploaded")
         return 0
 
-    result = client.drive_upload(args.file, parent_id=args.parent)
+    result = client.files_upload(args.file, parent_id=args.parent)
     print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
@@ -108,7 +108,7 @@ def cmd_download(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Drive file would be downloaded")
         return 0
 
-    result = client.drive_download(args.file_id, args.output)
+    result = client.files_download(args.file_id, args.output)
     print_result(result, args.summary, "Drive file downloaded")
     return 0 if result.get("success") else 1
 

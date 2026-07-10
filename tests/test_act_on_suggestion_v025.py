@@ -53,8 +53,8 @@ def mock_client():
     mock.provider_name = "google_api"
     mock.supports.side_effect = lambda a: True
     mock.calendar_list.return_value = [{"id": "e1", "summary": "Test event"}]
-    mock.drive_search.return_value = [{"id": "f1", "name": "test.txt"}]
-    mock.gmail_search.return_value = [{"id": "m1", "subject": "Test"}]
+    mock.files_search.return_value = [{"id": "f1", "name": "test.txt"}]
+    mock.mail_search.return_value = [{"id": "m1", "subject": "Test"}]
     return mock
 
 
@@ -96,7 +96,7 @@ class TestActDryRun:
         assert result["mode"] == "dry_run"
         assert result["would_execute_directly"] is True
         assert result["would_create_pending"] is False
-        mock_client.drive_search.assert_not_called()  # dry-run doesn't execute
+        mock_client.files_search.assert_not_called()  # dry-run doesn't execute
 
     def test_dry_run_write_action(self, temp_project, mock_client):
         from suggested_actions import act_on_suggestion
@@ -107,7 +107,7 @@ class TestActDryRun:
         assert result["mode"] == "dry_run"
         assert result["would_execute_directly"] is False
         assert result["would_create_pending"] is True
-        mock_client.gmail_send.assert_not_called()
+        mock_client.mail_send.assert_not_called()
 
 
 # ─── Safe Read Actions ────────────────────────────────────────
@@ -123,7 +123,7 @@ class TestSafeReadActions:
             result = act_on_suggestion(config, sug["id"])
         assert result["mode"] == "read_executed"
         assert result["success"] is True
-        mock_client.drive_search.assert_called_once()
+        mock_client.files_search.assert_called_once()
 
     def test_calendar_list_executes(self, temp_project, mock_client):
         from suggested_actions import act_on_suggestion
@@ -167,7 +167,7 @@ class TestWriteActionsCreatePending:
         assert result["success"] is True
         assert result["action_id"] is not None
         # NEVER calls gmail_send directly
-        mock_client.gmail_send.assert_not_called()
+        mock_client.mail_send.assert_not_called()
 
     def test_gmail_draft_creates_pending(self, temp_project, mock_client):
         from suggested_actions import act_on_suggestion

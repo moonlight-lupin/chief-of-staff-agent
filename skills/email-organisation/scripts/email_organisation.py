@@ -59,7 +59,7 @@ def cmd_inspect_labels(args: argparse.Namespace) -> int:
         return 1
 
     from email_label_policy import parse_labels
-    raw_labels = client.gmail_list_labels()
+    raw_labels = client.mail_list_tags()
     parsed = parse_labels(raw_labels)
 
     if args.summary:
@@ -118,7 +118,7 @@ def cmd_propose_policy(args: argparse.Namespace) -> int:
         return 1
 
     from email_label_policy import parse_labels, generate_policy, save_proposal
-    raw_labels = client.gmail_list_labels()
+    raw_labels = client.mail_list_tags()
     parsed = parse_labels(raw_labels)
     policy = generate_policy(parsed, provider=client.provider_name)
     path = save_proposal(cfg, policy)
@@ -291,7 +291,7 @@ def cmd_classify_inbox(args: argparse.Namespace) -> int:
             print_json(unsupported)
         return 1
 
-    emails = client.gmail_search(query="is:inbox", max_results=args.limit)
+    emails = client.mail_search(query="in:inbox", max_results=args.limit)
     result = do_classify(cfg, emails, limit=args.limit)
 
     if args.summary:

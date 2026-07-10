@@ -651,9 +651,9 @@ def act_on_suggestion(
             if action_type == "calendar.list":
                 result = client.calendar_list(start="", end="")
             elif action_type == "drive.search":
-                result = client.drive_search(query="", max_results=10)
+                result = client.files_search(query="", max_results=10)
             elif action_type == "gmail.search":
-                result = client.gmail_search(query="", max_results=10)
+                result = client.mail_search(query="", max_results=10)
             else:
                 return {"success": False, "mode": "error",
                         "action_type": action_type,

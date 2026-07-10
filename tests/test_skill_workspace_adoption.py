@@ -57,11 +57,11 @@ def mock_workspace_client(fake_config):
     mock.provider_name = "google_api"
     mock.health_check.return_value = True
     # Read methods return lists
-    mock.gmail_search.return_value = [{"id": "m1", "subject": "Test email"}]
+    mock.mail_search.return_value = [{"id": "m1", "subject": "Test email"}]
     mock.calendar_list.return_value = [{"id": "e1", "summary": "Test event"}]
-    mock.drive_search.return_value = [{"id": "f1", "name": "test.pdf"}]
+    mock.files_search.return_value = [{"id": "f1", "name": "test.pdf"}]
     # Write methods return ActionResult-shaped dicts
-    mock.gmail_create_draft.return_value = {
+    mock.mail_create_draft.return_value = {
         "success": True, "action": "gmail.draft", "provider": "google_api",
         "tool_slug": "", "target": "test@test.com", "data": {"id": "d1"},
         "error": None, "audited": True,
@@ -75,12 +75,12 @@ def mock_workspace_client(fake_config):
         "success": True, "action": "calendar.update", "provider": "google_api",
         "tool_slug": "", "target": "e1", "data": {}, "error": None, "audited": True,
     }
-    mock.drive_upload.return_value = {
+    mock.files_upload.return_value = {
         "success": True, "action": "drive.upload", "provider": "google_api",
         "tool_slug": "", "target": "/tmp/test.pdf", "data": {"id": "f1"},
         "error": None, "audited": True,
     }
-    mock.drive_download.return_value = {
+    mock.files_download.return_value = {
         "success": True, "action": "drive.download", "provider": "google_api",
         "tool_slug": "", "target": "f1", "data": {"path": "/tmp/out.pdf"},
         "error": None, "audited": True,
@@ -146,7 +146,7 @@ class TestDriveFiler:
             import drive_file
             rc = drive_file.main(["search", "--query", "NDA", "--max", "5"])
         assert rc == 0
-        mock_workspace_client.drive_search.assert_called_once_with("NDA", max_results=5)
+        mock_workspace_client.files_search.assert_called_once_with("NDA", max_results=5)
 
     def test_upload_calls_drive_upload(self, fake_config, mock_workspace_client, auto_approve, tmp_path):
         test_file = tmp_path / "test.pdf"
@@ -156,7 +156,7 @@ class TestDriveFiler:
             import drive_file
             rc = drive_file.main(["upload", "--file", str(test_file), "--parent", "folder123"])
         assert rc == 0
-        mock_workspace_client.drive_upload.assert_called_once_with(str(test_file), parent_id="folder123")
+        mock_workspace_client.files_upload.assert_called_once_with(str(test_file), parent_id="folder123")
 
     def test_download_calls_drive_download(self, fake_config, mock_workspace_client, auto_approve):
         with patch("drive_file.load_config", return_value=fake_config), \
@@ -164,7 +164,7 @@ class TestDriveFiler:
             import drive_file
             rc = drive_file.main(["download", "--file-id", "f1", "--output", "/tmp/out.pdf"])
         assert rc == 0
-        mock_workspace_client.drive_download.assert_called_once_with("f1", "/tmp/out.pdf")
+        mock_workspace_client.files_download.assert_called_once_with("f1", "/tmp/out.pdf")
 
     def test_does_not_import_provider_internals(self):
         import drive_file
@@ -185,7 +185,7 @@ class TestDocumentPreparer:
             import document_actions
             rc = document_actions.main(["upload", "--file", str(test_file), "--parent", "folder"])
         assert rc == 0
-        mock_workspace_client.drive_upload.assert_called_once()
+        mock_workspace_client.files_upload.assert_called_once()
 
     def test_search_calls_drive_search(self, fake_config, mock_workspace_client):
         with patch("document_actions.load_config", return_value=fake_config), \
@@ -193,7 +193,7 @@ class TestDocumentPreparer:
             import document_actions
             rc = document_actions.main(["search", "--query", "NDA"])
         assert rc == 0
-        mock_workspace_client.drive_search.assert_called_once()
+        mock_workspace_client.files_search.assert_called_once()
 
     def test_draft_email_calls_gmail_create_draft(self, fake_config, mock_workspace_client, auto_approve):
         with patch("document_actions.load_config", return_value=fake_config), \
@@ -201,7 +201,7 @@ class TestDocumentPreparer:
             import document_actions
             rc = document_actions.main(["draft-email", "--to", "c@test.com", "--subject", "Test", "--body", "Body"])
         assert rc == 0
-        mock_workspace_client.gmail_create_draft.assert_called_once_with(
+        mock_workspace_client.mail_create_draft.assert_called_once_with(
             "c@test.com", "Test", "Body", cc=None,
         )
 
@@ -220,9 +220,9 @@ class TestMeetingPrep:
             ])
         assert rc == 0
         # Should call gmail_search for each attendee
-        assert mock_workspace_client.gmail_search.call_count == 2
+        assert mock_workspace_client.mail_search.call_count == 2
         mock_workspace_client.calendar_list.assert_called_once()
-        mock_workspace_client.drive_search.assert_called_once()
+        mock_workspace_client.files_search.assert_called_once()
 
     def test_gmail_context_calls_gmail_search(self, fake_config, mock_workspace_client):
         with patch("workspace_actions.load_config", return_value=fake_config), \
@@ -230,7 +230,7 @@ class TestMeetingPrep:
             import workspace_actions
             rc = workspace_actions.main(["gmail-context", "--query", "from:a@x.com"])
         assert rc == 0
-        mock_workspace_client.gmail_search.assert_called_once()
+        mock_workspace_client.mail_search.assert_called_once()
 
     def test_calendar_context_calls_calendar_list(self, fake_config, mock_workspace_client):
         with patch("workspace_actions.load_config", return_value=fake_config), \
@@ -246,10 +246,10 @@ class TestMeetingPrep:
              patch("workspace_actions.get_client", return_value=mock_workspace_client):
             import workspace_actions
             workspace_actions.main(["gather", "--event-id", "e1"])
-        mock_workspace_client.gmail_create_draft.assert_not_called()
+        mock_workspace_client.mail_create_draft.assert_not_called()
         mock_workspace_client.calendar_create.assert_not_called()
         mock_workspace_client.calendar_update.assert_not_called()
-        mock_workspace_client.drive_upload.assert_not_called()
+        mock_workspace_client.files_upload.assert_not_called()
 
 
 class TestWeeklyReview:
@@ -261,9 +261,9 @@ class TestWeeklyReview:
             import workspace_collect
             rc = workspace_collect.main(["all", "--week-start", "2026-07-06"])
         assert rc == 0
-        mock_workspace_client.gmail_search.assert_called_once()
+        mock_workspace_client.mail_search.assert_called_once()
         mock_workspace_client.calendar_list.assert_called_once()
-        mock_workspace_client.drive_search.assert_called_once()
+        mock_workspace_client.files_search.assert_called_once()
 
     def test_gmail_calls_gmail_search(self, fake_config, mock_workspace_client):
         with patch("workspace_collect.load_config", return_value=fake_config), \
@@ -271,7 +271,7 @@ class TestWeeklyReview:
             import workspace_collect
             rc = workspace_collect.main(["gmail"])
         assert rc == 0
-        mock_workspace_client.gmail_search.assert_called_once()
+        mock_workspace_client.mail_search.assert_called_once()
 
     def test_calendar_calls_calendar_list(self, fake_config, mock_workspace_client):
         with patch("workspace_collect.load_config", return_value=fake_config), \
@@ -287,9 +287,9 @@ class TestWeeklyReview:
              patch("workspace_collect.get_client", return_value=mock_workspace_client):
             import workspace_collect
             workspace_collect.main(["all"])
-        mock_workspace_client.gmail_create_draft.assert_not_called()
+        mock_workspace_client.mail_create_draft.assert_not_called()
         mock_workspace_client.calendar_create.assert_not_called()
-        mock_workspace_client.drive_upload.assert_not_called()
+        mock_workspace_client.files_upload.assert_not_called()
 
 
 class TestActionResultShape:

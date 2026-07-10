@@ -279,6 +279,58 @@ def collect_system_health(config: dict[str, Any] | None) -> dict[str, Any]:
         }
 
 
+def transform_calendar_events(
+    events: Any,
+    now: datetime | None = None,
+    end: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Transform raw provider/agent calendar events into briefing summaries.
+
+    Pure compute — takes already-fetched event dicts (from a workspace client
+    OR from an agent-provided ``--input`` envelope) and normalizes them.
+    When ``now`` and ``end`` are both given, events outside that window are
+    dropped; otherwise all parseable events are kept. Returns a list sorted by
+    start time. Never raises on malformed input — bad records are skipped.
+    """
+    summaries: list[dict[str, Any]] = []
+    try:
+        for event in events or []:
+            if not isinstance(event, Mapping):
+                continue
+            when = _calendar_event_time(event)
+            if when is None:
+                continue
+            if now is not None and end is not None and not (now <= when <= end):
+                continue
+            summaries.append(_calendar_summary(event, when))
+    except Exception:
+        return []
+    return sorted(summaries, key=lambda item: item.get("when", ""))
+
+
+def collect_calendar_summary_from_records(
+    events: Any,
+    hours_ahead: int | None = None,
+) -> list[dict[str, Any]]:
+    """Build calendar summaries from pre-fetched event records (fetch/compute split).
+
+    Entry point for the ``--input`` envelope path: the agent has already fetched
+    calendar events with its native connector, so no workspace client is
+    constructed. Pass the envelope's ``events`` list. When ``hours_ahead`` is
+    given, events are windowed from now; otherwise all events are kept.
+    """
+    now: datetime | None = None
+    end: datetime | None = None
+    if hours_ahead is not None:
+        try:
+            hours = max(0, int(hours_ahead))
+        except (TypeError, ValueError):
+            hours = 48
+        now = datetime.now(timezone.utc)
+        end = now + timedelta(hours=hours)
+    return transform_calendar_events(events, now=now, end=end)
+
+
 def collect_calendar_summary(
     config: dict[str, Any] | None,
     hours_ahead: int = 48,
@@ -287,7 +339,9 @@ def collect_calendar_summary(
 
     Calendar access is optional. If the google/workspace client is unavailable,
     misconfigured, or returns malformed data, this function returns an empty
-    list instead of raising.
+    list instead of raising. Fetching is separated from transformation:
+    ``transform_calendar_events`` handles the compute half and is reused by the
+    agent-provided ``--input`` path via ``collect_calendar_summary_from_records``.
     """
     try:
         hours = max(0, int(hours_ahead))
@@ -307,19 +361,7 @@ def collect_calendar_summary(
     except Exception:
         return []
 
-    summaries: list[dict[str, Any]] = []
-    try:
-        for event in events:
-            if not isinstance(event, Mapping):
-                continue
-            when = _calendar_event_time(event)
-            if when is None or not (now <= when <= end):
-                continue
-            summaries.append(_calendar_summary(event, when))
-    except Exception:
-        return []
-
-    return sorted(summaries, key=lambda item: item.get("when", ""))
+    return transform_calendar_events(events, now=now, end=end)
 
 
 def collect_knowledge_stats(config: object) -> dict[str, object]:
@@ -669,6 +711,8 @@ __all__ = [
     "collect_email_org_stats",
     "collect_system_health",
     "collect_calendar_summary",
+    "collect_calendar_summary_from_records",
+    "transform_calendar_events",
     "collect_knowledge_stats",
     "collect_bookkeeper_stats",
     "collect_pipeline_stats",

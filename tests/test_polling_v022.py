@@ -51,7 +51,7 @@ def mock_client():
     mock = MagicMock()
     mock.provider_name = "google_api"
     mock.supports.side_effect = lambda action: True
-    mock.gmail_search.return_value = [
+    mock.mail_search.return_value = [
         {"id": "msg001", "subject": "NDA Review", "from": "client@x.com",
          "snippet": "Please review the NDA", "labelIds": ["INBOX"]},
         {"id": "msg002", "subject": "Invoice", "from": "billing@x.com",
@@ -63,7 +63,7 @@ def mock_client():
         {"id": "evt002", "summary": "Cancelled Meeting", "status": "cancelled",
          "start": "2026-07-10T14:00:00Z", "end": "2026-07-10T15:00:00Z"},
     ]
-    mock.drive_search.return_value = [
+    mock.files_search.return_value = [
         {"id": "file001", "name": "NDA_Template.docx", "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
          "webViewLink": "https://drive.google.com/file/d/file001/view"},
         {"id": "file002", "name": "Budget.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -163,8 +163,8 @@ class TestPollGmail:
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             poll_gmail(config, max_results=10)
-        mock_client.gmail_send.assert_not_called()
-        mock_client.gmail_create_draft.assert_not_called()
+        mock_client.mail_send.assert_not_called()
+        mock_client.mail_create_draft.assert_not_called()
 
 
 # ─── Polling: Calendar ────────────────────────────────────────
@@ -240,8 +240,8 @@ class TestPollDrive:
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             poll_drive(config, max_results=10)
-        mock_client.drive_upload.assert_not_called()
-        mock_client.drive_trash.assert_not_called()
+        mock_client.files_upload.assert_not_called()
+        mock_client.files_trash.assert_not_called()
 
 
 # ─── Polling: All Sources ─────────────────────────────────────
@@ -325,7 +325,7 @@ class TestPollAll:
         config, project = temp_project
         mock_bad = MagicMock()
         mock_bad.provider_name = "google_api"
-        mock_bad.gmail_search.side_effect = Exception("Auth failed")
+        mock_bad.mail_search.side_effect = Exception("Auth failed")
         with patch("poll_events.get_client", return_value=mock_bad):
             result = poll_gmail(config, max_results=10)
         assert result["errors"] == 1

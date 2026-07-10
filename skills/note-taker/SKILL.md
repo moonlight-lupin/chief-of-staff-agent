@@ -3,7 +3,7 @@ name: note-taker
 description: Maintain a Chief of Staff second-brain wiki for business and personal knowledge using a three-layer markdown architecture with OKF v0.1 frontmatter.
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [wiki, notes, knowledge-base, okf, chief-of-staff]

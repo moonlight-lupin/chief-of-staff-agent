@@ -331,7 +331,7 @@ class TestExecutionFailurePaths:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.gmail_label.return_value = {"success": False, "error": "label not found"}
+        mock_client.mail_tag.return_value = {"success": False, "error": "label not found"}
         action_id = self._create_and_approve(config, "gmail.label",
             {"message_id": "m1", "label_id": "L1"}, mock_client)
 
@@ -356,7 +356,7 @@ class TestExecutionFailurePaths:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.gmail_send.side_effect = Exception("network timeout")
+        mock_client.mail_send.side_effect = Exception("network timeout")
         action_id = self._create_and_approve(config, "gmail.send",
             {"to": "x@y.com", "subject": "test", "body": "test"}, mock_client)
 
@@ -411,7 +411,7 @@ class TestExecutionFailurePaths:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.gmail_label.return_value = {"success": True, "action": "gmail.label"}
+        mock_client.mail_tag.return_value = {"success": True, "action": "gmail.label"}
         action_id = self._create_and_approve(config, "gmail.label",
             {"message_id": "m1", "label_id": "L1"}, mock_client)
 
@@ -434,7 +434,7 @@ class TestExecutionFailurePaths:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.gmail_send.return_value = {"success": True}
+        mock_client.mail_send.return_value = {"success": True}
 
         # Capture env vars during the provider call
         captured = {}
@@ -442,7 +442,7 @@ class TestExecutionFailurePaths:
             captured["auto"] = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
             captured["destructive"] = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
             return {"success": True}
-        mock_client.gmail_send.side_effect = capture_send
+        mock_client.mail_send.side_effect = capture_send
 
         action_id = self._create_and_approve(config, "gmail.send",
             {"to": "x@y.com", "subject": "test", "body": "test"}, mock_client)
@@ -490,7 +490,7 @@ class TestMethodSignatures:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.drive_upload.return_value = {"success": True}
+        mock_client.files_upload.return_value = {"success": True}
         from pending_actions import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="drive.upload", provider="google_api",
@@ -503,7 +503,7 @@ class TestMethodSignatures:
              patch("workspace_client.get_workspace_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None):
             webhook_events.main(["execute", "--action-id", action["id"]])
-        mock_client.drive_upload.assert_called_once_with(
+        mock_client.files_upload.assert_called_once_with(
             file_path="/tmp/test.pdf", parent_id="folder-1")
 
     def test_drive_download_uses_output_path(self, with_secret):
@@ -511,7 +511,7 @@ class TestMethodSignatures:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.drive_download.return_value = {"success": True}
+        mock_client.files_download.return_value = {"success": True}
         from pending_actions import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="drive.download", provider="google_api",
@@ -524,7 +524,7 @@ class TestMethodSignatures:
              patch("workspace_client.get_workspace_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None):
             webhook_events.main(["execute", "--action-id", action["id"]])
-        mock_client.drive_download.assert_called_once_with(
+        mock_client.files_download.assert_called_once_with(
             file_id="f1", output_path="/tmp/out.pdf")
 
 

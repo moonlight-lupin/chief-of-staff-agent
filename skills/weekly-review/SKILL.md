@@ -3,7 +3,7 @@ name: weekly-review
 description: "Use when producing the Chief-of-Staff Friday weekly review across deadlines, pipeline, bookkeeping, tasks, calendar, wiki, Drive filing, and self-sign activity."
 version: 0.1.0
 author: "moonlight-lupin"
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, weekly-review, reporting, pipeline, finance, knowledge-base]
@@ -67,7 +67,7 @@ python skills/weekly-review/scripts/workspace_collect.py calendar --start 2026-0
 python skills/weekly-review/scripts/workspace_collect.py drive --query ""
 ```
 
-`WorkspaceClient` routes to Google API or Composio MCP. All operations are read-only.
+`WorkspaceClient` routes to the workspace provider selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); calendar and file methods are provider-neutral, so the same commands work on Google or Microsoft 365. All operations are read-only.
 
 ## Time Windows
 
@@ -80,28 +80,17 @@ Use `delivery.timezone` from `company.yaml`.
 
 If the user requests a different week, honor that window and state it in the heading.
 
-## Google API Command Pattern
+## Workspace Access
 
-All Google calls must use:
+Weekly Review reads two kinds of workspace data (read-only): **calendar meetings** for this week and next week, and **optional file/filing summaries**. Prefer the `workspace_collect.py` wrapper (shown above) — it routes through `WorkspaceClient`. Normalize records to the canonical `event` and `file` shapes in `shared/scripts/schemas.py`.
 
-```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} {service} {command}
-```
+Obtain the data through the first available path in this order:
 
-Calendar windows:
+1. **Native connector tools** in the agent's environment — Google Calendar / Google Drive connectors, or Microsoft 365 connectors (Outlook Calendar, OneDrive / SharePoint).
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).calendar_list(start, end)` for the two windows, and `.files_search(query)` for filing summaries. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
+3. **Pre-fetched data via `--input`** — when the agent has already gathered the data with its own tools, pass it to `skills/weekly-review/scripts/workspace_collect.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
 
-```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar list \
-  --time-min {week_start_iso} --time-max {week_end_iso}
-
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar list \
-  --time-min {next_week_start_iso} --time-max {next_week_end_iso}
-```
-
-Optional Drive queries for filing/signed-doc summaries should use `drive` commands through the same wrapper only when Drive root configuration exists. Do not fail the weekly review if Drive summaries are unavailable; state the limitation.
+Pass the two calendar windows (this-week `week_start`→`week_end`, and next-week bounds) to whichever path is used. Optional file queries use the Google Drive query dialect; the `m365` provider translates the same intent to Microsoft Graph. Do not fail the weekly review if file/filing summaries are unavailable; state the limitation.
 
 ## Aggregation Workflow
 
@@ -299,7 +288,7 @@ Task:
 5. Read pipeline.yaml for new deals, stage movements/activity, closed/lost deals, and stale proposals.
 6. Read invoices.yaml and expenses.yaml for invoices sent, payments received, overdue/outstanding AR/AP, and a P&L snapshot.
 7. Read todos.yaml for completed/opened/carry-over/overdue tasks and completion rate.
-8. Use google_api.py to pull calendar meetings for this week and next week.
+8. Pull calendar meetings for this week and next week through an approved workspace access path (connector tools, workspace_client, or pre-fetched --input).
 9. Inspect paths.wiki_path for new or updated wiki pages this week.
 10. Summarize Drive Filer, Document Preparer, Self-Sign, Deep Research, Entity Research, Travel, and Backup activity only where source records/logs/files provide evidence.
 11. Produce the Weekly Review in the required format:
@@ -340,7 +329,7 @@ Replace the schedule and delivery channel with `company.yaml` values. If your He
 
 - [ ] `company.yaml` loaded and report windows resolved in `delivery.timezone`.
 - [ ] All local YAML stores were read or explicitly reported missing.
-- [ ] Calendar data was pulled through `google_api.py` when available.
+- [ ] Calendar data was pulled through an approved workspace access path (connector tools, workspace_client, or --input) when available.
 - [ ] Deadlines, pipeline, finance, to-dos, calendar, wiki, filing, and signing sources were considered.
 - [ ] Counts and totals are source-grounded.
 - [ ] Financial totals are grouped by currency.

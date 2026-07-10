@@ -3,7 +3,7 @@ name: self-sign
 description: Detect signature blocks in PDF or DOCX documents, confirm the correct party blocks with the user, and place the user's prepared signature without external e-sign services.
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [signature, pdf, docx, documents, offline, chief-of-staff]

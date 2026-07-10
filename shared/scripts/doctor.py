@@ -488,6 +488,66 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     return CheckResult("composio", "pass" if all_pass else "warn", "; ".join(details))
 
 
+def _check_m365(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check Microsoft 365 (Graph) configuration when provider is m365."""
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = workspace.get("provider", "google_api")
+
+    if provider != "m365":
+        return CheckResult("m365", "pass", "skipped: provider is not m365")
+
+    m365 = (data or {}).get("m365", {}) if isinstance((data or {}).get("m365"), dict) else {}
+    auth_mode = str(m365.get("auth", "client_credentials") or "client_credentials")
+    details: list[str] = [f"auth: {auth_mode}"]
+    all_pass = True
+
+    # Required config fields
+    for field in ("tenant_id", "client_id"):
+        if m365.get(field):
+            details.append(f"{field}: set")
+        else:
+            details.append(f"{field}: NOT set")
+            all_pass = False
+
+    if auth_mode == "client_credentials":
+        if m365.get("user_principal"):
+            details.append(f"user_principal: {m365.get('user_principal')}")
+        else:
+            details.append("user_principal: NOT set (required for client_credentials)")
+            all_pass = False
+        secret_env = str(m365.get("client_secret_env", "M365_CLIENT_SECRET") or "M365_CLIENT_SECRET")
+        if os.getenv(secret_env):
+            details.append(f"{secret_env}: set")
+        else:
+            details.append(f"{secret_env}: NOT set")
+            all_pass = False
+    else:
+        details.append("device_code: interactive sign-in (no client secret needed)")
+
+    # msal importable?
+    if importlib.util.find_spec("msal") is not None:
+        details.append("msal: importable")
+    else:
+        details.append("msal: NOT installed (pip install msal)")
+        all_pass = False
+
+    # Optional live token + health check — must not blow up offline.
+    if all_pass:
+        try:
+            sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+            from workspace_client import get_workspace_client
+            client = get_workspace_client(data or {})
+            healthy = client.health_check()
+            details.append(f"health_check: {'pass' if healthy else 'failed'}")
+            if not healthy:
+                all_pass = False
+        except Exception as exc:
+            details.append(f"health_check: skipped — {exc}")
+
+    return CheckResult("m365", "pass" if all_pass else "warn", "; ".join(details))
+
+
 def _check_webhook_config(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     """Check webhook security configuration."""
     try:
@@ -677,7 +737,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_jurisdiction_pack, _check_config_file("drive-map.yaml"), _check_config_file("queries.yaml"),
     _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_compile,
     _check_packages, _check_audit_runs,
-    _check_workspace_provider, _check_composio,
+    _check_workspace_provider, _check_composio, _check_m365,
     _check_webhook_config, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,
 ]

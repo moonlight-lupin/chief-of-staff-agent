@@ -66,7 +66,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Drive file would be uploaded")
         return 0
 
-    result = client.drive_upload(args.file, parent_id=args.parent)
+    result = client.files_upload(args.file, parent_id=args.parent)
     print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
@@ -76,7 +76,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
     client = get_client(cfg)
-    results = client.drive_search(args.query, max_results=args.max)
+    results = client.files_search(args.query, max_results=args.max)
     print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -105,7 +105,7 @@ def cmd_draft_email(args: argparse.Namespace) -> int:
         }
         print_result(plan, args.summary, "Gmail draft would be created")
         return 0
-    result = client.gmail_create_draft(args.to, args.subject, args.body, cc=args.cc)
+    result = client.mail_create_draft(args.to, args.subject, args.body, cc=args.cc)
     print_result(result, args.summary, "Gmail draft created")
     return 0 if result.get("success") else 1
 
@@ -202,7 +202,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
         return 1
 
     # Step 1: Upload to Drive
-    upload_result = client.drive_upload(args.file, parent_id=args.parent)
+    upload_result = client.files_upload(args.file, parent_id=args.parent)
     if not upload_result.get("success"):
         combined = {
             "success": False,
@@ -241,7 +241,7 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     body_with_link = args.body
     if drive_link:
         body_with_link = f"{args.body}\n\nDrive link: {drive_link}"
-    draft_result = client.gmail_create_draft(args.to, args.subject, body_with_link, cc=args.cc)
+    draft_result = client.mail_create_draft(args.to, args.subject, body_with_link, cc=args.cc)
 
     combined = {
         "success": draft_result.get("success", False),

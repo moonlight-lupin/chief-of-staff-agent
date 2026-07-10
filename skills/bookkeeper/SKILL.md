@@ -3,7 +3,7 @@ name: bookkeeper
 description: "Use when tracking Chief-of-Staff invoices, expenses, AR/AP, overdue bills, and monthly P&L from invoices.yaml and expenses.yaml without becoming a full accounting system."
 version: 0.1.0
 author: moonlight-lupin
-license: MIT
+license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, bookkeeping, invoices, expenses, finance, pnl]

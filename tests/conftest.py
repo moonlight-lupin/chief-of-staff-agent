@@ -19,7 +19,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
 @pytest.fixture
 def tmp_project_dir():
     """Create a temporary project directory with sample YAML data files."""
-    with tempfile.TemporaryDirectory(dir="/root") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         today = date.today()
         stale_activity = (today - timedelta(days=30)).isoformat()
@@ -170,7 +170,7 @@ expenses:
 def sample_company_yaml():
     """Create a minimal company.yaml for testing."""
     import tempfile
-    with tempfile.TemporaryDirectory(dir="/root") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         config = Path(tmpdir) / "company.yaml"
         config.write_text("""\
 company:
