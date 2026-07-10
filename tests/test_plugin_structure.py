@@ -44,6 +44,47 @@ class TestPluginStructure:
         for name in ALL_SKILLS:
             assert name in content, f"Skill '{name}' not registered in __init__.py"
 
+    def test_release_versions_agree(self):
+        """plugin.yaml, pyproject.toml, and the chief_of_staff entrypoint must
+        carry the same version so a release bump can't be applied partially."""
+        import tomllib
+
+        with open(PLUGIN_ROOT / "plugin.yaml") as f:
+            plugin_version = yaml.safe_load(f)["version"]
+        with open(PLUGIN_ROOT / "pyproject.toml", "rb") as f:
+            pyproject_version = tomllib.load(f)["project"]["version"]
+
+        import sys
+        sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        try:
+            import chief_of_staff
+            entrypoint_version = chief_of_staff.VERSION
+        finally:
+            sys.path.pop(0)
+
+        assert plugin_version == pyproject_version == entrypoint_version, (
+            f"version drift: plugin.yaml={plugin_version} "
+            f"pyproject.toml={pyproject_version} chief_of_staff.py={entrypoint_version}"
+        )
+
+    def test_pyproject_covers_requirements(self):
+        """Every package pinned in requirements.txt must appear in pyproject dependencies."""
+        import tomllib
+        import re
+
+        reqs = {
+            re.split(r"[><=~\[]", line.strip())[0].lower()
+            for line in (PLUGIN_ROOT / "requirements.txt").read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+        with open(PLUGIN_ROOT / "pyproject.toml", "rb") as f:
+            deps = {
+                re.split(r"[><=~\[]", d)[0].lower()
+                for d in tomllib.load(f)["project"]["dependencies"]
+            }
+        missing = reqs - deps
+        assert not missing, f"requirements.txt packages missing from pyproject.toml: {missing}"
+
 
 class TestSkillFrontmatter:
     @pytest.mark.parametrize("skill_name", ALL_SKILLS)

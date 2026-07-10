@@ -268,3 +268,52 @@ class TestRestoreSummaryOutput:
         data = json.loads(buf.getvalue())
         assert data["success"] is True
         assert data["action"] == "gmail.untrash"
+
+
+# ─── Restore Target Resolution (blocker #3a — moved-message ids) ──────────
+
+class TestRestoreTargetResolution:
+    """Restore must prefer the executed result's persisted restore_target/id
+    over the original action target (Graph ids change when a message moves)."""
+
+    def test_restore_target_helper_prefers_restore_target(self):
+        from delete_actions import _restore_target
+        action = {"target": "orig-id",
+                  "result": {"success": True, "data": {"restore_target": "moved-id"}}}
+        assert _restore_target(action) == "moved-id"
+
+    def test_restore_target_helper_prefers_result_id(self):
+        from delete_actions import _restore_target
+        action = {"target": "orig-id",
+                  "result": {"success": True, "data": {"id": "result-id"}}}
+        assert _restore_target(action) == "result-id"
+
+    def test_restore_target_helper_falls_back_to_target(self):
+        from delete_actions import _restore_target
+        # No result (Google's ids are stable, so the original target is correct).
+        assert _restore_target({"target": "orig-id", "result": None}) == "orig-id"
+        assert _restore_target({"target": "orig-id",
+                                "result": {"success": True, "data": {}}}) == "orig-id"
+
+    def test_restore_uses_persisted_moved_id(self, temp_project, google_mock, auto_approve):
+        """End-to-end: an archive executed with a persisted moved id restores by
+        that moved id, not the original target."""
+        config, project = temp_project
+        with patch("delete_actions.load_config", return_value=config), \
+             patch("delete_actions.get_client", return_value=google_mock):
+            import delete_actions
+            from pending_actions import (create_pending_action, approve_pending_action,
+                                         mark_executing, mark_executed)
+            action = create_pending_action(config, "gmail.archive", "google_api", "orig-id",
+                                           {"reason": "old", "reversible": True,
+                                            "restore_hint": "add INBOX",
+                                            "provider_method": "gmail_archive"})
+            approve_pending_action(config, action["id"])
+            mark_executing(config, action["id"])
+            # Provider result carries the post-move id.
+            mark_executed(config, action["id"],
+                          {"success": True, "action": "gmail.archive",
+                           "data": {"id": "moved-id", "restore_target": "moved-id"}})
+            rc = delete_actions.main(["restore", "--action-id", action["id"]])
+        assert rc == 0
+        google_mock.gmail_unarchive.assert_called_once_with("moved-id")

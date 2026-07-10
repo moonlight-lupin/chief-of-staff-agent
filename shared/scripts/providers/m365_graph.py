@@ -34,11 +34,24 @@ failure ActionResult.  Read methods (mail_search, calendar_list, files_search,
 mail_list_tags) follow the Google provider's pattern: warn + return ``[]`` on
 failure.
 
+Immutable ids:
+  Every Graph request sent through :meth:`_request` carries the
+  ``Prefer: IdType="ImmutableId"`` header.  By default Graph message ids CHANGE
+  when a message moves folders (archive/trash); requesting immutable ids keeps
+  them stable across moves so the generic soft-delete restore flow (which
+  restores by the original/persisted id) still resolves after a move.  As a
+  belt-and-braces measure, :meth:`mail_archive`/:meth:`mail_trash` also return a
+  ``restore_target`` key (the post-move id) in their ActionResult data.
+
 Provider differences vs Google/Composio:
   * Drafts ARE supported (POST /messages).
   * Sending is destructive and env-gated identically to gmail.send.
-  * There is no calendar "uncancel" — Graph cannot reinstate a cancelled event;
-    calendar_uncancel raises NotImplementedError.
+  * There is no calendar "uncancel" — Graph cannot reinstate a cancelled event.
+    Because there is no restore path, ``calendar.cancel`` is NOT supported for
+    m365: the capability is False (see workspace_capabilities.py) and
+    :meth:`calendar_cancel` returns a failure ActionResult explaining to cancel
+    via Outlook or delete+recreate the event (it does not raise).
+    :meth:`calendar_uncancel` likewise raises NotImplementedError.
   * Change-notification webhooks are intentionally deferred — polling only.
 """
 from __future__ import annotations
@@ -207,7 +220,16 @@ class M365GraphClient(WorkspaceClient):
         ``raw=True``). Raises RuntimeError on non-2xx responses."""
         token = self._get_token()
         url = f"{self.base_url}{path}"
-        hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        # Prefer immutable ids on EVERY Graph request. By default Graph message
+        # ids change when a message moves folders (archive/trash), which would
+        # break the generic restore flow that restores by the original target id.
+        # Requesting IdType="ImmutableId" makes ids stable across moves so a
+        # persisted id/restore_target still resolves after archive/trash.
+        hdrs = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Prefer": 'IdType="ImmutableId"',
+        }
         if headers:
             hdrs.update(headers)
         resp = requests.request(
@@ -386,7 +408,11 @@ class M365GraphClient(WorkspaceClient):
     @guarded("mail.archive", target_arg="message_id", audit_provider="m365", audit_tool="graph_api")
     def mail_archive(self, message_id: str) -> dict[str, Any]:
         data = self._move(message_id, "archive")
-        return {"id": data.get("id", message_id), "destination": "archive"}
+        # restore_target: the post-move id. With immutable ids this equals the
+        # original id, but the generic restore flow prefers this persisted value
+        # over the original action target for correctness across moves.
+        moved_id = data.get("id", message_id)
+        return {"id": moved_id, "destination": "archive", "restore_target": moved_id}
 
     @guarded("mail.unarchive", target_arg="message_id", audit_provider="m365", audit_tool="graph_api")
     def mail_unarchive(self, message_id: str) -> dict[str, Any]:
@@ -396,7 +422,9 @@ class M365GraphClient(WorkspaceClient):
     @guarded("mail.trash", target_arg="message_id", audit_provider="m365", audit_tool="graph_api")
     def mail_trash(self, message_id: str) -> dict[str, Any]:
         data = self._move(message_id, "deleteditems")
-        return {"id": data.get("id", message_id), "destination": "deleteditems", "reversible": True}
+        moved_id = data.get("id", message_id)
+        return {"id": moved_id, "destination": "deleteditems", "reversible": True,
+                "restore_target": moved_id}
 
     @guarded("mail.untrash", target_arg="message_id", audit_provider="m365", audit_tool="graph_api")
     def mail_untrash(self, message_id: str) -> dict[str, Any]:
@@ -479,11 +507,35 @@ class M365GraphClient(WorkspaceClient):
                 payload[key] = value
         return self._request("PATCH", f"{self._user_base()}/events/{event_id}", json_body=payload)
 
-    @guarded("calendar.cancel", target_arg="event_id", audit_provider="m365", audit_tool="graph_api")
     def calendar_cancel(self, event_id: str) -> dict[str, Any]:
-        self._request("POST", f"{self._user_base()}/events/{event_id}/cancel",
-                      json_body={"comment": "Cancelled."})
-        return {"id": event_id, "status": "cancelled"}
+        """calendar.cancel is NOT supported for m365 — there is no restore path.
+
+        The generic soft-delete flow maps calendar.cancel -> calendar_uncancel
+        (its reversible promise), but Microsoft Graph cannot reinstate a
+        cancelled event, so honouring that promise is impossible. Rather than
+        perform an irreversible cancel behind a "reversible" gate, this returns
+        a failure ActionResult (it never raises). The guardrail is still applied
+        first so a clean (unapproved) environment is blocked exactly like every
+        other mutation; when the gate would allow it, we still refuse with an
+        explanation. Capability "calendar.cancel" is also False for m365
+        (workspace_capabilities.py), so the generic execute path refuses these
+        actions pre-execution via require_capability.
+        """
+        from workspace_guardrails import ActionResult, confirm_action
+
+        if not confirm_action("calendar.cancel", event_id=event_id):
+            return ActionResult(
+                success=False, action="calendar.cancel", provider=self._provider_name,
+                target=event_id, error="cancelled by guardrail",
+            ).to_dict()
+        return ActionResult(
+            success=False, action="calendar.cancel", provider=self._provider_name,
+            target=event_id,
+            error="calendar.cancel is not supported for m365: Microsoft Graph has no "
+                  "uncancel/restore path, so a cancel cannot be honoured behind the "
+                  "reversible soft-delete promise. Cancel the event via Outlook, or "
+                  "delete and recreate it.",
+        ).to_dict()
 
     def calendar_uncancel(self, event_id: str) -> dict[str, Any]:
         raise NotImplementedError("Graph has no uncancel; recreate the event")

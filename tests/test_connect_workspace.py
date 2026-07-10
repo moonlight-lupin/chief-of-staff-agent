@@ -23,7 +23,7 @@ def run_connect(*args, config_path=None):
 
 @pytest.fixture
 def tmp_config():
-    with tempfile.TemporaryDirectory(dir="/root") as d:
+    with tempfile.TemporaryDirectory() as d:
         config = Path(d) / "company.yaml"
         config.write_text("""\
 google:

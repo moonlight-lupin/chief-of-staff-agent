@@ -2,6 +2,11 @@
 # Copy to shared/config/queries.yaml and customize.
 # Fields with {client_name}, {contact_email}, etc. are template variables
 # replaced at query time by the Daily Briefing skill.
+#
+# DIALECT: these `query:` strings are written in Gmail search syntax. When the
+# configured workspace provider is Microsoft 365, they are AUTO-TRANSLATED to
+# Graph $filter/$search by shared/scripts/query_compiler.py (parse_gmail_query
+# -> compile_query(..., "m365")); no separate m365 query file is needed.
 
 queries:
   - name: "unread_priority"

@@ -253,6 +253,75 @@ class TestGuardedWrites:
             os.unlink(fpath)
 
 
+# ── Immutable ids + restore_target (blocker #3) ────────────────────────
+
+class TestImmutableIdHeader:
+    def test_request_sends_immutable_id_prefer_header(self, client):
+        """Every Graph request must carry Prefer: IdType="ImmutableId" so ids
+        stay stable across archive/trash moves (restore-flow correctness)."""
+        import providers.m365_graph as m
+
+        captured: dict = {}
+
+        class _FakeResp:
+            status_code = 200
+            content = b'{"ok": true}'
+
+            def json(self):
+                return {"ok": True}
+
+        def _fake_request(method, url, **kwargs):
+            captured["headers"] = kwargs.get("headers") or {}
+            return _FakeResp()
+
+        with patch.object(m.requests, "request", side_effect=_fake_request):
+            client._request("GET", "/users/cos@acme.com/messages")
+        assert captured["headers"].get("Prefer") == 'IdType="ImmutableId"'
+
+    def test_extra_headers_do_not_drop_prefer(self, client):
+        import providers.m365_graph as m
+
+        captured: dict = {}
+
+        class _FakeResp:
+            status_code = 200
+            content = b"{}"
+
+            def json(self):
+                return {}
+
+        def _fake_request(method, url, **kwargs):
+            captured["headers"] = kwargs.get("headers") or {}
+            return _FakeResp()
+
+        with patch.object(m.requests, "request", side_effect=_fake_request):
+            client._request("PUT", "/x", headers={"Content-Type": "application/octet-stream"})
+        assert captured["headers"].get("Prefer") == 'IdType="ImmutableId"'
+        assert captured["headers"].get("Content-Type") == "application/octet-stream"
+
+
+class TestRestoreTarget:
+    def test_archive_returns_restore_target(self, client, approve_env):
+        # Post-move id differs from the original target; restore_target carries it.
+        with patch.object(client, "_request", return_value={"id": "moved-1"}):
+            result = client.mail_archive("orig-1")
+        assert result["success"] is True
+        assert result["data"]["id"] == "moved-1"
+        assert result["data"]["restore_target"] == "moved-1"
+
+    def test_trash_returns_restore_target(self, client, approve_env):
+        with patch.object(client, "_request", return_value={"id": "moved-2"}):
+            result = client.mail_trash("orig-2")
+        assert result["data"]["restore_target"] == "moved-2"
+        assert result["data"]["reversible"] is True
+
+    def test_archive_restore_target_falls_back_to_message_id(self, client, approve_env):
+        # If Graph returns no id (e.g. immutable id equals original), fall back.
+        with patch.object(client, "_request", return_value={}):
+            result = client.mail_archive("orig-3")
+        assert result["data"]["restore_target"] == "orig-3"
+
+
 # ── msal-missing ───────────────────────────────────────────────────────
 
 class TestMsalMissing:

@@ -168,7 +168,8 @@ REST API v1.0 using `requests` directly. Auth uses `msal`.
 - **Drafts are supported** (`POST /messages`).
 - **Sending is destructive** and env-gated identically to Gmail send — set `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1` to send.
 - **Tags = Outlook categories.** The tag id IS the category `displayName` (there is no separate opaque id). Applying a tag fetches the message's current categories and appends.
-- **No calendar "uncancel"** — Graph cannot reinstate a cancelled event; recreate it instead (`calendar_uncancel` raises `NotImplementedError`).
+- **Immutable ids.** Every Graph request sends `Prefer: IdType="ImmutableId"`. Graph message ids normally CHANGE when a message moves folders (archive/trash); immutable ids keep them stable so the soft-delete restore flow (which restores by the original/persisted id) still resolves after a move. As belt-and-braces, `mail_archive`/`mail_trash` also return a `restore_target` (the post-move id) in their result, and the generic restore flow prefers that persisted value over the original action target.
+- **`calendar.cancel` is NOT supported for m365.** Graph cannot reinstate a cancelled event and the recreate-event workflow is not implemented, so cancel has no restore path and must not be offered behind the reversible soft-delete promise. The capability is `False`, `calendar_cancel` returns a failure `ActionResult` (it does not raise) explaining to cancel via Outlook or delete+recreate, and the generic execute path refuses approved m365 `calendar.cancel` actions pre-execution via `require_capability`. (`calendar_uncancel` also raises `NotImplementedError`.)
 - **Upload is simple upload only** (`PUT .../content`), limited to files **< 4 MB**; larger files need an upload session (deferred).
 - **Polling only** — Graph change-notification webhooks are deliberately deferred for this phase.
 

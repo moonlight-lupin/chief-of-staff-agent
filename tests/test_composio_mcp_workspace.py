@@ -51,7 +51,7 @@ def mcp_key():
 
 @pytest.fixture
 def tmp_project():
-    with tempfile.TemporaryDirectory(dir="/root") as d:
+    with tempfile.TemporaryDirectory() as d:
         os.environ["CHIEF_OF_STAFF_PROJECT_ROOT"] = d
         yield Path(d)
         os.environ.pop("CHIEF_OF_STAFF_PROJECT_ROOT", None)

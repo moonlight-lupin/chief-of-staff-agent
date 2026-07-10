@@ -17,7 +17,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
 
 @pytest.fixture
 def tmp_project():
-    with tempfile.TemporaryDirectory(dir="/root") as d:
+    with tempfile.TemporaryDirectory() as d:
         config = {"paths": {"project_root": d}}
         yield config, Path(d)
 

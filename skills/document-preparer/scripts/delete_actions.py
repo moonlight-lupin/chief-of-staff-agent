@@ -288,10 +288,15 @@ def cmd_execute(args: argparse.Namespace) -> int:
     method_name = meta["provider_method"]
     client = get_client(cfg)
 
-    # Soft-delete actions are destructive — set the flag
+    # Establish the approved-execution context — the explicit approval IS the
+    # confirmation. Set AUTO_APPROVE (so reversible SAFE_WRITE actions such as
+    # calendar.cancel pass the non-interactive gate) and ALLOW_DESTRUCTIVE, then
+    # restore the previous values so we don't leak state into other processes.
+    old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
+    old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
+    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
 
-    # Call the provider method
     try:
         method = getattr(client, method_name, None)
         if method is None:
@@ -309,6 +314,15 @@ def cmd_execute(args: argparse.Namespace) -> int:
         mark_failed(cfg, args.action_id, str(exc))
         print(f"Execute failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if old_auto is None:
+            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = old_auto
+        if old_destructive is None:
+            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
 
     mark_executed(cfg, args.action_id, result)
     print_result(result, args.summary, f"{meta['label']}: {action['target']}")
@@ -341,6 +355,26 @@ RESTORE_ACTIONS = {
     "gmail.trash": {"label": "Restore trashed Gmail message", "method": "gmail_untrash"},
     "calendar.cancel": {"label": "Restore cancelled calendar event", "method": "calendar_uncancel"},
 }
+
+
+def _restore_target(action: dict) -> str:
+    """Resolve the id to restore.
+
+    Some providers (m365/Graph) change an object's id when it moves folders
+    (archive/trash). The executed provider result persists the post-move id as
+    ``restore_target`` (falling back to ``id``); prefer that over the original
+    action ``target`` so restore addresses the object where it actually landed.
+    Falls back to the original target when no executed result is recorded (the
+    common case for providers whose ids are stable, e.g. Google).
+    """
+    result = action.get("result")
+    if isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, dict):
+            restore_id = data.get("restore_target") or data.get("id")
+            if restore_id:
+                return str(restore_id)
+    return action.get("target", "")
 
 
 def cmd_restore(args: argparse.Namespace) -> int:
@@ -378,8 +412,9 @@ def cmd_restore(args: argparse.Namespace) -> int:
         print(f"Provider does not implement {meta['method']}", file=sys.stderr)
         return 1
 
-    result = method(action["target"])
-    print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+    restore_target = _restore_target(action)
+    result = method(restore_target)
+    print_result(result, args.summary, f"{meta['label']}: {restore_target}")
     return 0 if result.get("success") else 1
 
 

@@ -291,7 +291,7 @@ def cmd_classify_inbox(args: argparse.Namespace) -> int:
             print_json(unsupported)
         return 1
 
-    emails = client.mail_search(query="is:inbox", max_results=args.limit)
+    emails = client.mail_search(query="in:inbox", max_results=args.limit)
     result = do_classify(cfg, emails, limit=args.limit)
 
     if args.summary:

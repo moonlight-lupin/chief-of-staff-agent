@@ -89,9 +89,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
-    # mail.send is destructive (env-gated identically to gmail.send). Note there
-    # is no "uncancel" capability key — Graph cannot reinstate a cancelled event
-    # (calendar_uncancel raises NotImplementedError), so it is simply absent.
+    # mail.send is destructive (env-gated identically to gmail.send).
+    # calendar.cancel is False: Graph cannot reinstate a cancelled event
+    # (calendar_uncancel raises NotImplementedError and the recreate-event
+    # workflow is not implemented), so cancel has no restore path and must not
+    # be offered behind the reversible soft-delete promise.
     "m365": {
         "mail.search": True,        # GET /messages ($filter/$search)
         "mail.draft": True,         # POST /messages
@@ -104,7 +106,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.list": True,      # GET /calendarView
         "calendar.create": True,    # POST /events
         "calendar.update": True,    # PATCH /events/{id}
-        "calendar.cancel": True,    # POST /events/{id}/cancel
+        "calendar.cancel": False,   # no uncancel/restore path in Graph — the
+                                    # recreate-event workflow is not implemented,
+                                    # so cancel cannot honour the reversible
+                                    # soft-delete promise (see m365_graph.calendar_cancel)
         "files.search": True,       # GET /drive/root/search — OneDrive
         "files.upload": True,       # PUT /drive/root:/{name}:/content (<4MB)
         "files.download": True,     # GET /drive/items/{id}/content
@@ -149,6 +154,10 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
+                                 "recreate-event workflow is not implemented, so cancel cannot "
+                                 "be honoured behind the reversible soft-delete promise — "
+                                 "cancel the event via Outlook, or delete and recreate it",
 }
 
 # Provider recommendations for each action/workflow.
