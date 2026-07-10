@@ -350,6 +350,55 @@ class GoogleWorkspaceClient(WorkspaceClient):
             return []
         return labels if isinstance(labels, list) else []
 
+    def gmail_label(self, message_id: str, label_id: str) -> dict[str, Any]:
+        """Apply an existing Gmail label to a message. Guardrailed + audited."""
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.label", message_id=message_id, label_id=label_id):
+            return ActionResult(success=False, action="gmail.label", provider=self._provider_name,
+                                target=message_id, error="cancelled by guardrail").to_dict()
+        cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", label_id)
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "gmail.label",
+                                   "google_api.py", target=message_id, status="failed")
+            return ActionResult(success=False, action="gmail.label", provider=self._provider_name,
+                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
+        audit_workspace_action(self.config, "google_api", "gmail.label",
+                               "google_api.py", target=message_id)
+        return ActionResult(success=True, action="gmail.label", provider=self._provider_name,
+                            target=message_id, data={"label_id": label_id}, audited=True).to_dict()
+
+    def gmail_create_label(self, label_name: str) -> dict[str, Any]:
+        """Create a new Gmail label. Guardrailed + audited.
+        Note: google_api.py may not support label creation yet.
+        If unsupported, returns error ActionResult.
+        """
+        from workspace_audit import audit_workspace_action
+        from workspace_guardrails import confirm_action, ActionResult
+        if not confirm_action("gmail.create_label", label_name=label_name):
+            return ActionResult(success=False, action="gmail.create_label", provider=self._provider_name,
+                                target=label_name, error="cancelled by guardrail").to_dict()
+        # google_api.py may not have a labels --create subcommand
+        # Try passing --create flag; if unsupported, return error
+        cmd = self._build_cmd("gmail", "labels", "--create", label_name)
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            audit_workspace_action(self.config, "google_api", "gmail.create_label",
+                                   "google_api.py", target=label_name, status="failed")
+            return ActionResult(success=False, action="gmail.create_label", provider=self._provider_name,
+                                target=label_name,
+                                error=err.strip() or out.strip() or "label creation not supported by google_api.py",
+                                audited=True).to_dict()
+        try:
+            data = json.loads(out) if out else {}
+        except json.JSONDecodeError:
+            data = {"raw": out.strip()}
+        audit_workspace_action(self.config, "google_api", "gmail.create_label",
+                               "google_api.py", target=label_name)
+        return ActionResult(success=True, action="gmail.create_label", provider=self._provider_name,
+                            target=label_name, data=data, audited=True).to_dict()
+
     def gmail_unarchive(self, message_id: str) -> dict[str, Any]:
         """Restore an archived Gmail message (add INBOX label back)."""
         from workspace_audit import audit_workspace_action

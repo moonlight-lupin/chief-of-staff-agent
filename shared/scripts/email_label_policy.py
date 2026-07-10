@@ -26,7 +26,7 @@ SYSTEM_LABELS = frozenset({
     "INBOX", "SENT", "TRASH", "SPAM", "DRAFT", "IMPORTANT",
     "STARRED", "UNREAD", "CHAT", "CATEGORY_PERSONAL",
     "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES",
-    "CATEGORY_FORUMS", "PERSONAL", "CATEGORY_NEWSLETTERS",
+    "CATEGORY_FORUMS", "CATEGORY_NEWSLETTERS",
 })
 
 # Labels that should be ignored for policy purposes.
@@ -101,7 +101,6 @@ def infer_category(label_name: str, path: list[str] | None = None) -> tuple[str 
                 # First match in priority order wins (more specific categories
                 # are checked first, so kyc_compliance beats legal_contract)
                 return cat, score
-                break
 
     return best_cat, best_score
 

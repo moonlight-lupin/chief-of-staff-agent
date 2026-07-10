@@ -88,6 +88,14 @@ class WorkspaceClient(abc.ABC):
         """List all Gmail labels. Read-only — no mutation."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_list_labels")
 
+    def gmail_label(self, message_id: str, label_id: str) -> dict[str, Any]:
+        """Apply an existing Gmail label to a message."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_label")
+
+    def gmail_create_label(self, label_name: str) -> dict[str, Any]:
+        """Create a new Gmail label."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support gmail_create_label")
+
     @abc.abstractmethod
     def health_check(self) -> bool:
         """Return True if the provider is healthy and authenticated."""
