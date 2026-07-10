@@ -258,8 +258,8 @@ class TestExecute:
         approve_pending_action(config, action["id"], approver="MH", reason="ok")
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
-        mock_client.gmail_send.return_value = {"success": True, "message_id": "msg_123"}
-        
+        mock_client.mail_send.return_value = {"success": True, "message_id": "msg_123"}
+
         import review_queue
         # review_queue delegates to webhook_events.cmd_execute which imports workspace_client
         with patch("workspace_client.get_workspace_client", return_value=mock_client):
@@ -268,7 +268,7 @@ class TestExecute:
                 rc = review_queue._main(["--config", str(config_path), "execute",
                                           "--action-id", action["id"]])
         assert rc == 0
-        mock_client.gmail_send.assert_called_once()
+        mock_client.mail_send.assert_called_once()
 
     def test_no_provider_during_list_preview(self, temp_project):
         """No provider calls during list/preview/summary."""
@@ -284,8 +284,8 @@ class TestExecute:
                         review_queue._main(["--config", str(config_path)] + cmd)
                     except SystemExit:
                         pass
-        mock_client.gmail_send.assert_not_called()
-        mock_client.gmail_label.assert_not_called()
+        mock_client.mail_send.assert_not_called()
+        mock_client.mail_tag.assert_not_called()
 
 
 # ─── Bulk Approve ───────────────────────────────────────────

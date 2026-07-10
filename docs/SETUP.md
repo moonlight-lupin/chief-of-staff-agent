@@ -114,6 +114,64 @@ python shared/scripts/connect_workspace.py --status
 python skills/daily-briefing/scripts/daily_briefing.py --dry-run --json
 ```
 
+### Option 3: Microsoft 365 (Graph API)
+
+Talks to Outlook mail, Outlook calendar, and OneDrive over the Microsoft Graph
+REST API v1.0 using `requests` directly. Auth uses `msal`.
+
+1. Register an app in **Microsoft Entra ID** (Azure AD):
+   - Azure Portal → **Microsoft Entra ID** → **App registrations** → **New registration**.
+   - Note the **Application (client) ID** and **Directory (tenant) ID**.
+2. Grant **application** permissions (for `client_credentials`):
+   - App registration → **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions**:
+     - `Mail.ReadWrite`
+     - `Calendars.ReadWrite`
+     - `Files.ReadWrite.All`
+     - `User.Read.All`
+   - Click **Grant admin consent** for your tenant (an admin must approve).
+   - (For `device_code` mode use the equivalent **Delegated** permissions instead; no admin consent secret is required.)
+3. Create a **client secret** (`client_credentials` only):
+   - App registration → **Certificates & secrets** → **New client secret**.
+   - Copy the secret **value** and export it as an env var (default `M365_CLIENT_SECRET`).
+4. Install the auth dependency:
+   ```bash
+   pip install msal
+   ```
+5. Configure `company.yaml`:
+   ```yaml
+   integrations:
+     workspace:
+       provider: m365
+
+   m365:
+     tenant_id: "<directory-tenant-guid>"
+     client_id: "<application-client-guid>"
+     client_secret_env: "M365_CLIENT_SECRET"   # env var holding the secret (default)
+     auth: "client_credentials"                # or "device_code"
+     user_principal: "cos@yourtenant.com"      # mailbox UPN — REQUIRED for client_credentials
+     token_cache_path: "~/.hermes/secrets/m365-token-cache.json"  # optional
+   ```
+   - `client_credentials` (app-only): operates on `/users/{user_principal}/...`; `user_principal` is required.
+   - `device_code`: interactive delegated sign-in; a code + URL are printed to stderr on first token request; operates on `/me/...`.
+6. Set the secret in your environment:
+   ```bash
+   export M365_CLIENT_SECRET="<the-secret-value>"
+   ```
+7. Verify:
+   ```bash
+   python shared/scripts/connect_workspace.py --provider m365 --status
+   python shared/scripts/connect_workspace.py --provider m365 --connect   # connect guidance
+   python shared/scripts/doctor.py
+   ```
+
+**Provider notes:**
+- **Drafts are supported** (`POST /messages`).
+- **Sending is destructive** and env-gated identically to Gmail send — set `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1` to send.
+- **Tags = Outlook categories.** The tag id IS the category `displayName` (there is no separate opaque id). Applying a tag fetches the message's current categories and appends.
+- **No calendar "uncancel"** — Graph cannot reinstate a cancelled event; recreate it instead (`calendar_uncancel` raises `NotImplementedError`).
+- **Upload is simple upload only** (`PUT .../content`), limited to files **< 4 MB**; larger files need an upload session (deferred).
+- **Polling only** — Graph change-notification webhooks are deliberately deferred for this phase.
+
 ## Switching Providers
 
 To switch from Google to Composio (or vice versa), just change `integrations.workspace.provider` in `company.yaml`. The Daily Briefing and all skills that use `WorkspaceClient` will automatically use the new provider.
@@ -136,10 +194,13 @@ Run `python shared/scripts/doctor.py` to check all components:
 ```
 WorkspaceClient (ABC)
 ├── GoogleWorkspaceClient  (wraps google_api.py subprocess)
-└── ComposioMCPWorkspaceClient  (routes through connect.composio.dev/mcp)
-    └── MCPClient (JSON-RPC over SSE)
-        ├── COMPOSIO_MANAGE_CONNECTIONS  (connect toolkits)
-        └── COMPOSIO_MULTI_EXECUTE_TOOL  (execute tool by slug)
+├── ComposioMCPWorkspaceClient  (routes through connect.composio.dev/mcp)
+│   └── MCPClient (JSON-RPC over SSE)
+│       ├── COMPOSIO_MANAGE_CONNECTIONS  (connect toolkits)
+│       └── COMPOSIO_MULTI_EXECUTE_TOOL  (execute tool by slug)
+└── M365GraphClient  (Microsoft Graph REST v1.0 via requests + msal)
+    ├── _get_token()  (msal ConfidentialClientApplication / device flow)
+    └── _request()    (single HTTP seam — Outlook mail, calendar, OneDrive)
 ```
 
 Skills call `get_workspace_client(config)` → get the right backend automatically.
@@ -157,6 +218,12 @@ Skills call `get_workspace_client(config)` → get the right backend automatical
 - Supports Calendar and Drive actions.
 - Recommended provider for document handoff workflows (upload + draft email).
 - Best for: managed-auth workflows that need Gmail drafts.
+
+**Microsoft 365 (Graph):**
+- Outlook mail search/draft/send/archive/trash, categories (tags), calendar, and OneDrive files.
+- Drafts supported; send is destructive and blocked by default (`CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1`).
+- No calendar uncancel (recreate the event). Simple upload only (< 4 MB). Polling only (no Graph webhooks yet).
+- Best for: Microsoft 365 / Outlook / OneDrive tenants.
 
 ## Migration from SDK mode (v0.1.8 and earlier)
 

@@ -21,6 +21,7 @@ if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
 from workspace_client import WorkspaceClient
+from workspace_guardrails import guarded
 
 
 def _find_google_api_script() -> Path:
@@ -108,11 +109,11 @@ class GoogleWorkspaceClient(WorkspaceClient):
 
     # ── Read methods (return lists, no guardrails needed) ──────────────
 
-    def gmail_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
+    def mail_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
         cmd = self._build_cmd("gmail", "search", query, "--max", str(max_results))
         rc, out, err = self._run(cmd)
         if rc != 0:
-            warnings.warn(f"gmail_search failed: {err.strip() or out.strip()}")
+            warnings.warn(f"mail_search failed: {err.strip() or out.strip()}")
             return []
         result = self._parse_json(out)
         return result if isinstance(result, list) else []
@@ -131,69 +132,65 @@ class GoogleWorkspaceClient(WorkspaceClient):
         result = self._parse_json(out)
         return result if isinstance(result, list) else []
 
-    def drive_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
+    def files_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
         cmd = self._build_cmd("drive", "search", query, "--max", str(max_results))
         rc, out, err = self._run(cmd)
         if rc != 0:
-            warnings.warn(f"drive_search failed: {err.strip() or out.strip()}")
+            warnings.warn(f"files_search failed: {err.strip() or out.strip()}")
             return []
         result = self._parse_json(out)
         return result if isinstance(result, list) else []
 
-    # ── Write methods (guardrails + audit + ActionResult) ──────────────
+    def mail_list_tags(self) -> list[dict[str, Any]]:
+        """List all Gmail labels (tags). Read-only — no mutation."""
+        cmd = self._build_cmd("gmail", "labels")
+        rc, out, err = self._run(cmd, timeout=30)
+        if rc != 0:
+            warnings.warn(f"mail_list_tags failed: {err.strip() or out.strip()}")
+            return []
+        try:
+            labels = json.loads(out) if out else []
+        except json.JSONDecodeError:
+            return []
+        return labels if isinstance(labels, list) else []
 
-    def drive_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("drive.upload", file=file_path):
-            return ActionResult(success=False, action="drive.upload", provider=self._provider_name,
-                                target=file_path, error="cancelled by guardrail").to_dict()
+    # ── Write methods (guarded: confirm + audit + ActionResult) ────────
+    # Each body performs the raw work and returns a data dict, or raises on
+    # failure; @guarded wraps it. Legacy action ids ("gmail.send", ...) are
+    # preserved for back-compat with stored queues and tests.
+
+    @guarded("drive.upload", target_arg="file_path", audit_provider="google_api")
+    def files_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
         cmd = self._build_cmd("drive", "upload", file_path)
         if parent_id:
             cmd.extend(["--parent", parent_id])
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "drive.upload",
-                                   "google_api.py", target=file_path, status="failed")
-            return ActionResult(success=False, action="drive.upload", provider=self._provider_name,
-                                target=file_path, error=err.strip() or out.strip(), audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
         try:
-            data = json.loads(out) if out else {}
+            return json.loads(out) if out else {}
         except json.JSONDecodeError:
-            data = {"raw": out.strip()}
-        audit_workspace_action(self.config, "google_api", "drive.upload",
-                               "google_api.py", target=file_path)
-        return ActionResult(success=True, action="drive.upload", provider=self._provider_name,
-                            target=file_path, data=data, audited=True).to_dict()
+            return {"raw": out.strip()}
 
-    def gmail_send(self, to: str, subject: str, body: str,
-                    cc: str | None = None) -> dict[str, Any]:
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
+    @guarded("gmail.send", target_arg="to", audit_provider="google_api",
+             block_error="cancelled by guardrail (requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)")
+    def mail_send(self, to: str, subject: str, body: str,
+                  cc: str | None = None) -> dict[str, Any]:
         # gmail.send is destructive — requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1
-        if not confirm_action("gmail.send", to=to, subject=subject):
-            return ActionResult(success=False, action="gmail.send", provider=self._provider_name,
-                                target=to, error="cancelled by guardrail (requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)").to_dict()
         cmd = self._build_cmd("gmail", "send", "--to", to, "--subject", subject, "--body", body)
         if cc:
             cmd.extend(["--cc", cc])
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.send",
-                                   "google_api.py", target=to, status="failed")
-            return ActionResult(success=False, action="gmail.send", provider=self._provider_name,
-                                target=to, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "gmail.send",
-                               "google_api.py", target=to)
-        return ActionResult(success=True, action="gmail.send", provider=self._provider_name,
-                            target=to, data={"output": out.strip()}, audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip()}
 
-    def gmail_create_draft(self, to: str, subject: str, body: str,
-                           cc: str | None = None) -> dict[str, Any]:
-        """Create a Gmail draft.
+    def mail_create_draft(self, to: str, subject: str, body: str,
+                          cc: str | None = None) -> dict[str, Any]:
+        """Create a mail draft.
 
         Note: google_api.py does not support a 'draft' subcommand.
-        Gmail drafts are only supported through the Composio MCP provider.
+        Drafts are only supported through the Composio MCP provider.
         This method returns a clear 'not supported' error for the Google provider.
         """
         from workspace_guardrails import ActionResult
@@ -204,14 +201,10 @@ class GoogleWorkspaceClient(WorkspaceClient):
             audited=False,
         ).to_dict()
 
+    @guarded("calendar.create", target_arg="title", audit_provider="google_api")
     def calendar_create(self, title: str, start: str, end: str,
                         attendees: list[str] | None = None,
                         description: str | None = None) -> dict[str, Any]:
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("calendar.create", title=title):
-            return ActionResult(success=False, action="calendar.create", provider=self._provider_name,
-                                target=title, error="cancelled by guardrail").to_dict()
         # Ensure RFC3339 format (google_api.py requires ISO 8601 with timezone)
         if "T" not in start:
             start = f"{start}T10:00:00Z"
@@ -225,260 +218,120 @@ class GoogleWorkspaceClient(WorkspaceClient):
             cmd.extend(["--description", description])
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "calendar.create",
-                                   "google_api.py", target=title, status="failed")
-            return ActionResult(success=False, action="calendar.create", provider=self._provider_name,
-                                target=title, error=err.strip() or out.strip(), audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
         try:
-            data = json.loads(out) if out else {}
+            return json.loads(out) if out else {}
         except json.JSONDecodeError:
-            data = {"raw": out.strip()}
-        audit_workspace_action(self.config, "google_api", "calendar.create",
-                               "google_api.py", target=title)
-        return ActionResult(success=True, action="calendar.create", provider=self._provider_name,
-                            target=title, data=data, audited=True).to_dict()
+            return {"raw": out.strip()}
 
+    @guarded("calendar.update", target_arg="event_id", audit_provider="google_api")
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("calendar.update", event_id=event_id):
-            return ActionResult(success=False, action="calendar.update", provider=self._provider_name,
-                                target=event_id, error="cancelled by guardrail").to_dict()
         cmd = self._build_cmd("calendar", "update", "--event-id", event_id)
         for key, value in fields.items():
             cmd.extend([f"--{key.replace('_', '-')}", str(value)])
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "calendar.update",
-                                   "google_api.py", target=event_id, status="failed")
-            return ActionResult(success=False, action="calendar.update", provider=self._provider_name,
-                                target=event_id, error=err.strip() or out.strip(), audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
         try:
-            data = json.loads(out) if out else {}
+            return json.loads(out) if out else {}
         except json.JSONDecodeError:
-            data = {"raw": out.strip()}
-        audit_workspace_action(self.config, "google_api", "calendar.update",
-                               "google_api.py", target=event_id)
-        return ActionResult(success=True, action="calendar.update", provider=self._provider_name,
-                            target=event_id, data=data, audited=True).to_dict()
+            return {"raw": out.strip()}
 
-    def drive_download(self, file_id: str, output_path: str) -> dict[str, Any]:
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("drive.download", file_id=file_id):
-            return ActionResult(success=False, action="drive.download", provider=self._provider_name,
-                                target=file_id, error="cancelled by guardrail").to_dict()
+    @guarded("drive.download", target_arg="file_id", audit_provider="google_api")
+    def files_download(self, file_id: str, output_path: str) -> dict[str, Any]:
         cmd = self._build_cmd("drive", "download", "--file-id", file_id, "--output", output_path)
         rc, out, err = self._run(cmd, timeout=120)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "drive.download",
-                                   "google_api.py", target=file_id, status="failed")
-            return ActionResult(success=False, action="drive.download", provider=self._provider_name,
-                                target=file_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "drive.download",
-                               "google_api.py", target=file_id)
-        return ActionResult(success=True, action="drive.download", provider=self._provider_name,
-                            target=file_id, data={"path": output_path}, audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"path": output_path}
 
-    def gmail_archive(self, message_id: str) -> dict[str, Any]:
-        """Archive a Gmail message (remove from INBOX). Reversible."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("gmail.archive", message_id=message_id):
-            return ActionResult(success=False, action="gmail.archive", provider=self._provider_name,
-                                target=message_id, error="cancelled by guardrail").to_dict()
+    @guarded("gmail.archive", target_arg="message_id", audit_provider="google_api")
+    def mail_archive(self, message_id: str) -> dict[str, Any]:
+        """Archive a mail message (remove from INBOX). Reversible."""
         cmd = self._build_cmd("gmail", "modify", message_id, "--remove-labels", "INBOX")
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.archive",
-                                   "google_api.py", target=message_id, status="failed")
-            return ActionResult(success=False, action="gmail.archive", provider=self._provider_name,
-                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "gmail.archive",
-                               "google_api.py", target=message_id)
-        return ActionResult(success=True, action="gmail.archive", provider=self._provider_name,
-                            target=message_id, data={"output": out.strip()},
-                            audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip()}
 
-    def gmail_trash(self, message_id: str) -> dict[str, Any]:
-        """Move a Gmail message to trash. Reversible (30-day auto-delete by Google)."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("gmail.trash", message_id=message_id):
-            return ActionResult(success=False, action="gmail.trash", provider=self._provider_name,
-                                target=message_id, error="cancelled by guardrail").to_dict()
+    @guarded("gmail.trash", target_arg="message_id", audit_provider="google_api")
+    def mail_trash(self, message_id: str) -> dict[str, Any]:
+        """Move a mail message to trash. Reversible (30-day auto-delete by Google)."""
         cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", "TRASH", "--remove-labels", "INBOX")
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.trash",
-                                   "google_api.py", target=message_id, status="failed")
-            return ActionResult(success=False, action="gmail.trash", provider=self._provider_name,
-                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "gmail.trash",
-                               "google_api.py", target=message_id)
-        return ActionResult(success=True, action="gmail.trash", provider=self._provider_name,
-                            target=message_id, data={"output": out.strip(), "reversible": True},
-                            audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip(), "reversible": True}
 
-    def drive_trash(self, file_id: str) -> dict[str, Any]:
+    @guarded("drive.trash", target_arg="file_id", audit_provider="google_api")
+    def files_trash(self, file_id: str) -> dict[str, Any]:
         """Move a Drive file to trash. Reversible (30-day auto-delete by Google)."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("drive.trash", file_id=file_id):
-            return ActionResult(success=False, action="drive.trash", provider=self._provider_name,
-                                target=file_id, error="cancelled by guardrail").to_dict()
         # drive delete defaults to trash (not --permanent)
         cmd = self._build_cmd("drive", "delete", file_id)
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "drive.trash",
-                                   "google_api.py", target=file_id, status="failed")
-            return ActionResult(success=False, action="drive.trash", provider=self._provider_name,
-                                target=file_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "drive.trash",
-                               "google_api.py", target=file_id)
-        return ActionResult(success=True, action="drive.trash", provider=self._provider_name,
-                            target=file_id, data={"output": out.strip(), "reversible": True},
-                            audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip(), "reversible": True}
 
+    @guarded("calendar.cancel", target_arg="event_id", audit_provider="google_api")
     def calendar_cancel(self, event_id: str) -> dict[str, Any]:
         """Cancel a calendar event (set status to cancelled). Reversible via update."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("calendar.cancel", event_id=event_id):
-            return ActionResult(success=False, action="calendar.cancel", provider=self._provider_name,
-                                target=event_id, error="cancelled by guardrail").to_dict()
         cmd = self._build_cmd("calendar", "update", "--event-id", event_id, "--status", "cancelled")
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "calendar.cancel",
-                                   "google_api.py", target=event_id, status="failed")
-            return ActionResult(success=False, action="calendar.cancel", provider=self._provider_name,
-                                target=event_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "calendar.cancel",
-                               "google_api.py", target=event_id)
-        return ActionResult(success=True, action="calendar.cancel", provider=self._provider_name,
-                            target=event_id, data={"output": out.strip(), "reversible": True},
-                            audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip(), "reversible": True}
 
-    def gmail_list_labels(self) -> list[dict[str, Any]]:
-        """List all Gmail labels. Read-only — no mutation."""
-        cmd = self._build_cmd("gmail", "labels")
-        rc, out, err = self._run(cmd, timeout=30)
-        if rc != 0:
-            warnings.warn(f"gmail_list_labels failed: {err.strip() or out.strip()}")
-            return []
-        try:
-            labels = json.loads(out) if out else []
-        except json.JSONDecodeError:
-            return []
-        return labels if isinstance(labels, list) else []
-
-    def gmail_label(self, message_id: str, label_id: str) -> dict[str, Any]:
-        """Apply an existing Gmail label to a message. Guardrailed + audited."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("gmail.label", message_id=message_id, label_id=label_id):
-            return ActionResult(success=False, action="gmail.label", provider=self._provider_name,
-                                target=message_id, error="cancelled by guardrail").to_dict()
-        cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", label_id)
+    @guarded("gmail.label", target_arg="message_id", audit_provider="google_api")
+    def mail_tag(self, message_id: str, tag_id: str) -> dict[str, Any]:
+        """Apply an existing tag (Gmail label) to a message. Guardrailed + audited."""
+        cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", tag_id)
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.label",
-                                   "google_api.py", target=message_id, status="failed")
-            return ActionResult(success=False, action="gmail.label", provider=self._provider_name,
-                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "gmail.label",
-                               "google_api.py", target=message_id)
-        return ActionResult(success=True, action="gmail.label", provider=self._provider_name,
-                            target=message_id, data={"label_id": label_id}, audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"label_id": tag_id}
 
-    def gmail_create_label(self, label_name: str) -> dict[str, Any]:
-        """Create a new Gmail label. Guardrailed + audited.
+    @guarded("gmail.create_label", target_arg="name", audit_provider="google_api")
+    def mail_create_tag(self, name: str) -> dict[str, Any]:
+        """Create a new tag (Gmail label). Guardrailed + audited.
         Note: google_api.py may not support label creation yet.
-        If unsupported, returns error ActionResult.
         """
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("gmail.create_label", label_name=label_name):
-            return ActionResult(success=False, action="gmail.create_label", provider=self._provider_name,
-                                target=label_name, error="cancelled by guardrail").to_dict()
-        # google_api.py may not have a labels --create subcommand
-        # Try passing --create flag; if unsupported, return error
-        cmd = self._build_cmd("gmail", "labels", "--create", label_name)
+        # google_api.py may not have a labels --create subcommand.
+        cmd = self._build_cmd("gmail", "labels", "--create", name)
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.create_label",
-                                   "google_api.py", target=label_name, status="failed")
-            return ActionResult(success=False, action="gmail.create_label", provider=self._provider_name,
-                                target=label_name,
-                                error=err.strip() or out.strip() or "label creation not supported by google_api.py",
-                                audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip() or "label creation not supported by google_api.py")
         try:
-            data = json.loads(out) if out else {}
+            return json.loads(out) if out else {}
         except json.JSONDecodeError:
-            data = {"raw": out.strip()}
-        audit_workspace_action(self.config, "google_api", "gmail.create_label",
-                               "google_api.py", target=label_name)
-        return ActionResult(success=True, action="gmail.create_label", provider=self._provider_name,
-                            target=label_name, data=data, audited=True).to_dict()
+            return {"raw": out.strip()}
 
-    def gmail_unarchive(self, message_id: str) -> dict[str, Any]:
-        """Restore an archived Gmail message (add INBOX label back)."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("gmail.unarchive", message_id=message_id):
-            return ActionResult(success=False, action="gmail.unarchive", provider=self._provider_name,
-                                target=message_id, error="cancelled by guardrail").to_dict()
+    @guarded("gmail.unarchive", target_arg="message_id", audit_provider="google_api")
+    def mail_unarchive(self, message_id: str) -> dict[str, Any]:
+        """Restore an archived mail message (add INBOX label back)."""
         cmd = self._build_cmd("gmail", "modify", message_id, "--add-labels", "INBOX")
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.unarchive",
-                                   "google_api.py", target=message_id, status="failed")
-            return ActionResult(success=False, action="gmail.unarchive", provider=self._provider_name,
-                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "gmail.unarchive",
-                               "google_api.py", target=message_id)
-        return ActionResult(success=True, action="gmail.unarchive", provider=self._provider_name,
-                            target=message_id, data={"output": out.strip()}, audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip()}
 
-    def gmail_untrash(self, message_id: str) -> dict[str, Any]:
-        """Restore a trashed Gmail message (remove TRASH label)."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("gmail.untrash", message_id=message_id):
-            return ActionResult(success=False, action="gmail.untrash", provider=self._provider_name,
-                                target=message_id, error="cancelled by guardrail").to_dict()
+    @guarded("gmail.untrash", target_arg="message_id", audit_provider="google_api")
+    def mail_untrash(self, message_id: str) -> dict[str, Any]:
+        """Restore a trashed mail message (remove TRASH label)."""
         cmd = self._build_cmd("gmail", "modify", message_id, "--remove-labels", "TRASH")
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "gmail.untrash",
-                                   "google_api.py", target=message_id, status="failed")
-            return ActionResult(success=False, action="gmail.untrash", provider=self._provider_name,
-                                target=message_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "gmail.untrash",
-                               "google_api.py", target=message_id)
-        return ActionResult(success=True, action="gmail.untrash", provider=self._provider_name,
-                            target=message_id, data={"output": out.strip()}, audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip()}
 
+    @guarded("calendar.uncancel", target_arg="event_id", audit_provider="google_api")
     def calendar_uncancel(self, event_id: str) -> dict[str, Any]:
         """Restore a cancelled calendar event (set status back to confirmed)."""
-        from workspace_audit import audit_workspace_action
-        from workspace_guardrails import confirm_action, ActionResult
-        if not confirm_action("calendar.uncancel", event_id=event_id):
-            return ActionResult(success=False, action="calendar.uncancel", provider=self._provider_name,
-                                target=event_id, error="cancelled by guardrail").to_dict()
         cmd = self._build_cmd("calendar", "update", "--event-id", event_id, "--status", "confirmed")
         rc, out, err = self._run(cmd)
         if rc != 0:
-            audit_workspace_action(self.config, "google_api", "calendar.uncancel",
-                                   "google_api.py", target=event_id, status="failed")
-            return ActionResult(success=False, action="calendar.uncancel", provider=self._provider_name,
-                                target=event_id, error=err.strip() or out.strip(), audited=True).to_dict()
-        audit_workspace_action(self.config, "google_api", "calendar.uncancel",
-                               "google_api.py", target=event_id)
-        return ActionResult(success=True, action="calendar.uncancel", provider=self._provider_name,
-                            target=event_id, data={"output": out.strip()}, audited=True).to_dict()
+            raise RuntimeError(err.strip() or out.strip())
+        return {"output": out.strip()}
 
     def health_check(self) -> bool:
         cmd = self._build_cmd("calendar", "list")

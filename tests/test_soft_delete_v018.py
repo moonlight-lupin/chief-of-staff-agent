@@ -60,7 +60,7 @@ def google_mock():
     mock = MagicMock()
     mock.provider_name = "google_api"
     mock.supports.side_effect = lambda action: True  # supports everything
-    mock.gmail_send.return_value = {
+    mock.mail_send.return_value = {
         "success": True, "action": "gmail.send", "provider": "google_api",
         "target": "a@b.com", "data": {"id": "msg123"}, "audited": True,
     }
@@ -121,7 +121,7 @@ class TestCCWiring:
             action = json.loads(buf.getvalue())
             send_email.main(["approve", "--action-id", action["id"]])
             send_email.main(["execute", "--action-id", action["id"]])
-        google_mock.gmail_send.assert_called_once_with(
+        google_mock.mail_send.assert_called_once_with(
             to="a@b.com", subject="S", body="B", cc="boss@company.com",
         )
 
@@ -136,7 +136,7 @@ class TestCCWiring:
             action = json.loads(buf.getvalue())
             send_email.main(["approve", "--action-id", action["id"]])
             send_email.main(["execute", "--action-id", action["id"]])
-        google_mock.gmail_send.assert_called_once_with(
+        google_mock.mail_send.assert_called_once_with(
             to="a@b.com", subject="S", body="B", cc=None,
         )
 
@@ -380,8 +380,9 @@ class TestNoHardDelete:
         """Provider methods should never pass --permanent to google_api.py."""
         from providers.google_workspace import GoogleWorkspaceClient
         import inspect
-        # Check that drive_trash doesn't use --permanent in actual command construction
-        source = inspect.getsource(GoogleWorkspaceClient.drive_trash)
+        # Check that files_trash (neutral rename of drive_trash) doesn't use
+        # --permanent in actual command construction.
+        source = inspect.getsource(GoogleWorkspaceClient.files_trash)
         # The comment mentions "not --permanent" but the actual cmd line must not
         cmd_line = [line.strip() for line in source.splitlines()
                     if "cmd = self._build_cmd" in line or "cmd.extend" in line]

@@ -42,9 +42,9 @@ Do **not** use this skill for scheduling or modifying meetings; use `calendar-ma
 
 Configuration comes from `shared/config/company.yaml`; use `paths.project_root`, `paths.wiki_path`, `google.delegate_email`, `google.account` or `google.service_account_path`, and `delivery.timezone`.
 
-## Google API Command Pattern
+## Workspace Access
 
-All Gmail/Calendar/Drive reads go through the shared `WorkspaceClient` layer:
+Meeting Prep is read-only. It needs recent mail with attendees, the calendar event/context, and optional related files. Prefer the `workspace_actions.py` wrapper — it routes through `WorkspaceClient`:
 
 ```bash
 python skills/meeting-prep/scripts/workspace_actions.py gather --event-id <id> --attendees a@x.com,b@y.com
@@ -53,10 +53,13 @@ python skills/meeting-prep/scripts/workspace_actions.py calendar-context --start
 python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "meeting notes" --max 5
 ```
 
-`WorkspaceClient` routes to Google API or Composio MCP. All operations are read-only.
-```
+Normalize records to the canonical `message`, `event`, and `file` shapes in `shared/scripts/schemas.py`. Obtain the data through the first available path in this order:
 
-For ad hoc attendee searches when there is no pipeline client name, use a narrow attendee email query:
+1. **Native connector tools** in the agent's environment — Gmail / Google Calendar / Google Drive connectors, or Microsoft 365 connectors (Outlook Mail / Outlook Calendar, OneDrive / SharePoint).
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).mail_search(...)`, `.calendar_list(start, end)`, `.files_search(...)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
+3. **Pre-fetched data via `--input`** — when the agent has already gathered the context with its own tools, pass it to `workspace_actions.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
+
+For ad hoc attendee searches when there is no pipeline client name, use a narrow attendee email query. The template below is the Gmail search dialect; the `m365` provider translates the same intent to Microsoft Graph, and native connectors accept natural-language equivalents:
 
 ```text
 newer_than:90d (from:{attendee_email} OR to:{attendee_email})
@@ -189,7 +192,7 @@ If a required field is missing, proceed with available fields and state the limi
 ## Verification Checklist
 
 - [ ] Meeting title, time, attendees, and Meet/location are identified.
-- [ ] Gmail searches used `google_api.py` and covered the last 90 days.
+- [ ] Mail searches used an approved workspace access path (connector tools, workspace_client, or --input) and covered the last 90 days.
 - [ ] Wiki search checked `paths.wiki_path` for contact/company mentions.
 - [ ] Pipeline, invoices, and to-dos were read from `paths.project_root`.
 - [ ] Last contact is grounded in a source or marked unknown.

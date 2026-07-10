@@ -137,9 +137,37 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
         # Skip if any unresolved template variables remain
         if _re.search(r'\{[a-z_]+\}', q):
             continue
-        result = client.gmail_search(q, max_results=int(query.get("max", 10)))
+        result = client.mail_search(q, max_results=int(query.get("max", 10)))
         items.append({"name": query.get("name"), "query": q, "result": result})
     return items
+
+
+def load_workspace_input(path: str) -> dict[str, Any]:
+    """Load and validate an agent-fetched workspace envelope from PATH or stdin.
+
+    ``path`` of ``"-"`` reads the envelope from stdin. Returns a normalized
+    payload (defaults filled). Raises FileNotFoundError / ValueError / SchemaError
+    on a missing file, malformed JSON, or a schema violation.
+    """
+    from schemas import normalize_workspace_payload  # SchemaError is a ValueError
+
+    if path == "-":
+        raw = sys.stdin.read()
+    else:
+        file_path = Path(path).expanduser()
+        if not file_path.exists():
+            raise FileNotFoundError(f"--input file not found: {file_path}")
+        raw = file_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--input is not valid JSON: {exc}")
+    return normalize_workspace_payload(payload)
+
+
+def _messages_to_gmail_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Wrap agent-provided messages into the gmail source item shape."""
+    return [{"name": "agent-input", "query": "(agent-provided)", "result": list(messages)}]
 
 
 def collect_calendar(config: Any, project_root: Path) -> list[dict[str, Any]]:
@@ -305,7 +333,7 @@ def collect_email_org(config: Any, project_root: Path) -> list[dict[str, Any]]:
     }]
 
 
-def collect(config_path: str | None) -> dict[str, Any]:
+def collect(config_path: str | None, workspace_input: dict[str, Any] | None = None) -> dict[str, Any]:
     if config_path:
         os.environ["CHIEF_OF_STAFF_CONFIG"] = config_path
     config = load_config(config_path)
@@ -323,6 +351,15 @@ def collect(config_path: str | None) -> dict[str, Any]:
         "invoices": collect_invoices,
         "email_org": collect_email_org,
     }
+    if workspace_input is not None:
+        # Fetch/compute split: the agent already fetched mail + calendar via its
+        # native connector. Feed those records into the SAME downstream gmail /
+        # calendar sources instead of constructing a workspace client. Local YAML
+        # stores (deadlines/pipeline/todos/invoices/email_org) are unaffected.
+        messages = workspace_input.get("messages", []) or []
+        events = workspace_input.get("events", []) or []
+        collectors["gmail"] = lambda _config, _root: _messages_to_gmail_items(messages)
+        collectors["calendar"] = lambda _config, _root: list(events)
     sources = {name: wrap_source(name, collectors[name], config, root) for name in SOURCE_NAMES}
     last = last_run("daily-briefing")
     previous_hashes = {}
@@ -425,6 +462,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Collect but do not record delivery or update .last_briefing")
     parser.add_argument("--json", action="store_true", help="Output normalized JSON")
     parser.add_argument("--render", action="store_true", help="Render structured briefing text")
+    parser.add_argument("--input", dest="input", help=(
+        "Path to an agent-fetched workspace JSON envelope (or '-' for stdin) "
+        "conforming to shared/scripts/schemas.py workspace payload schema. "
+        "When set, mail + calendar are read from this file instead of a workspace client."))
 
     sub = parser.add_subparsers(dest="command")
 
@@ -437,6 +478,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--since", type=int, default=24, help="Hours to look back for events (default: 24)")
     run_p.add_argument("--limit", type=int, default=50, help="Max events to include (default: 50)")
     run_p.add_argument("--dry-run", action="store_true", help="Do not record delivery")
+    run_p.add_argument("--input", dest="input", help=(
+        "Path to an agent-fetched workspace JSON envelope (or '-' for stdin). "
+        "When set, calendar events are read from this file instead of a workspace client."))
 
     # notify subcommand
     notify_p = sub.add_parser("notify", help="Send briefing notification")
@@ -446,11 +490,15 @@ def build_parser() -> argparse.ArgumentParser:
     notify_p.add_argument("--since", type=int, default=24, help="Hours to look back")
     notify_p.add_argument("--limit", type=int, default=50, help="Max events")
     notify_p.add_argument("--dry-run", action="store_true", help="Do not record or create pending action")
+    notify_p.add_argument("--input", dest="input", help=(
+        "Path to an agent-fetched workspace JSON envelope (or '-' for stdin). "
+        "When set, calendar events are read from this file instead of a workspace client."))
 
     return parser
 
 
-def _build_structured_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50) -> dict[str, Any]:
+def _build_structured_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50,
+                               workspace_input: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the structured briefing data shape for v0.2.3."""
     from datetime import datetime, timezone, timedelta
 
@@ -546,6 +594,17 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
             if a.get("state") in ("requested", "pending", "approved")
         ]
 
+    # Calendar deadlines — from agent-provided --input envelope when present.
+    calendar_deadlines: list[dict[str, Any]] = []
+    if workspace_input is not None:
+        try:
+            from briefing_sources import collect_calendar_summary_from_records
+            calendar_deadlines = collect_calendar_summary_from_records(
+                workspace_input.get("events", []) or []
+            )
+        except Exception:
+            calendar_deadlines = []
+
     # System warnings count
     sys_warnings = 0
     if sys_health.get("state_files") == "missing":
@@ -570,7 +629,7 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
             "needs_attention": needs_attention[:20],
             "pending_approvals": pa_grouped,
             "email_organisation": email_org,
-            "calendar_deadlines": [],
+            "calendar_deadlines": calendar_deadlines,
             "recent_events": recent_events,
             "suggested_next_actions": next_actions[:15],
             "system_health": sys_health,
@@ -588,7 +647,15 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Generate structured briefing and output in requested format."""
-    briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit)
+    workspace_input = None
+    if getattr(args, "input", None):
+        try:
+            workspace_input = load_workspace_input(args.input)
+        except Exception as exc:
+            print(f"daily_briefing.py --input error: {concise_error(exc)}", file=sys.stderr)
+            return 1
+    briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit,
+                                          workspace_input=workspace_input)
     from briefing_renderer import render
     if args.json:
         print(render(briefing, "json"))
@@ -604,7 +671,15 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_notify(args: argparse.Namespace) -> int:
     """Send briefing notification via CLI or email (pending action only)."""
-    briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit)
+    workspace_input = None
+    if getattr(args, "input", None):
+        try:
+            workspace_input = load_workspace_input(args.input)
+        except Exception as exc:
+            print(f"daily_briefing.py --input error: {concise_error(exc)}", file=sys.stderr)
+            return 1
+    briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit,
+                                          workspace_input=workspace_input)
     from briefing_renderer import render
 
     if args.channel == "cli":
@@ -660,7 +735,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # Legacy mode (no subcommand)
     try:
-        briefing = collect(args.config)
+        workspace_input = None
+        if getattr(args, "input", None):
+            workspace_input = load_workspace_input(args.input)
+        briefing = collect(args.config, workspace_input=workspace_input)
         if args.json or args.dry_run and not args.render:
             print(json.dumps(briefing, indent=2, ensure_ascii=False, default=str))
             return 0

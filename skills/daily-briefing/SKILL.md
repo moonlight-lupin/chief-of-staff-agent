@@ -38,8 +38,8 @@ Daily Briefing pulls from exactly these six source families:
 
 | Source | What to read | How |
 |---|---|---|
-| Gmail inbox | Unread priority threads, unread client threads, signature requests, invoice notices | Use `google_api.py` with query templates from `shared/config/queries.yaml` |
-| Calendar | Today + tomorrow events, especially Google Meet links | Use `google_api.py calendar list` |
+| Mail inbox | Unread priority threads, unread client threads, signature requests, invoice notices | Fetch via an approved workspace access path (see **Workspace Access**); normalize to the `message` shape in `shared/scripts/schemas.py`. Gmail query templates live in `shared/config/queries.yaml` |
+| Calendar | Today + tomorrow events, especially meeting join links | Fetch today + tomorrow events via an approved workspace access path; normalize to the `event` shape in `shared/scripts/schemas.py` |
 | Deadline Tracker | Overdue, due ≤7 days, due ≤30 days | Read `company.yaml` + jurisdiction pack; use `deadline-tracker`/`date_utils.py` logic |
 | Pipeline Manager | Stale deals and recent stage/activity movement | Read `{project_root}/pipeline.yaml` |
 | To-Do List | Open items, overdue items, high-priority items | Read `{project_root}/todos.yaml` |
@@ -63,18 +63,24 @@ delivery:
 
 If `shared/config/company.yaml` is missing, stop and tell the user to copy `shared/config/company.yaml.example` to `shared/config/company.yaml` and complete onboarding. Do not guess company data.
 
-## Google API Command Pattern
+## Workspace Access
 
-All Google calls must go through the external `google-workspace` skill script:
+Daily Briefing needs two kinds of workspace data: **unread priority mail** and **today + tomorrow calendar events with join links**. This skill states *what* to obtain and the *shape* to normalize to; it does not prescribe a single vendor API. Normalize every record to the canonical shapes in `shared/scripts/schemas.py`:
 
-```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} {service} {command}
-```
+- Mail → `message` records: `{id, sender, subject, date, thread_id?, snippet?, tags?, has_attachments?, link?, source?}`.
+- Calendar → `event` records: `{id, title, start, end, attendees?, organizer?, location?, conference_link?, status?, source?}`.
 
-Resolve `{account}` from `company.yaml` `google.account` when present; otherwise use the account/profile value expected by the installed `google-workspace` skill. Resolve `{delegate}` from `google.delegate_email`.
+Obtain the data through the first available path in this order:
 
-### Gmail Query Rules
+1. **Native connector tools** in the agent's environment — the Gmail / Google Calendar connectors, or Microsoft 365 connectors (Outlook Mail / Outlook Calendar). Query them with their natural-language or structured interface and map results to the canonical shapes.
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).mail_search(query, max_results=...)` for mail and `.calendar_list(start, end)` for events. The provider is selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); all providers expose the same neutral method surface.
+3. **Pre-fetched data via `--input`** — when the agent has already gathered workspace data with its own tools, hand it to `skills/daily-briefing/scripts/daily_briefing.py --input <file>` as a `schemas.py` workspace envelope (`{generated_at?, source?, messages: [...], events: [...], files: [...]}`); the compute pipeline consumes the normalized records directly.
+
+Resolve account/delegate identity from `company.yaml` (`google.account`, `google.delegate_email`) when the chosen path needs it.
+
+### Mail Query Rules
+
+The query templates in `shared/config/queries.yaml` are written in the **Gmail search dialect**. Native Gmail connectors and `google_api` accept them as-is; the `m365` provider translates the same intent to Microsoft Graph (`$search`/`$filter`); native connectors may take natural-language equivalents. Preserve the *intent* of each template regardless of provider.
 
 1. Load templates from `shared/config/queries.yaml` first. If absent, fall back to `shared/config/queries.yaml.example` and state that defaults are being used.
 2. Use only pre-built templates; do not invent broad mailbox searches for scheduled briefings.
@@ -83,27 +89,13 @@ Resolve `{account}` from `company.yaml` `google.account` when present; otherwise
 5. For client-specific unread checks, iterate active deals in `pipeline.yaml` and apply `briefing_unread_clients` per deal/contact.
 6. For signature and invoice flags, use `documents_for_signature`, `invoices_received`, and `invoices_sent_followup` when present.
 
-Example command shape:
-
-```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} gmail search \
-  --query '{rendered_query}' --max-results {max_results}
-```
-
-Return enough metadata for the briefing: thread/message ID, sender, subject, date, snippet, labels, and whether attachments exist. Do not fetch message bodies unless snippets are insufficient to determine urgency.
+Return enough metadata for the briefing: thread/message ID, sender, subject, date, snippet, tags/labels, and whether attachments exist. Do not fetch message bodies unless snippets are insufficient to determine urgency.
 
 ### Calendar Query Rules
 
-List events from local midnight today through tomorrow 23:59:59 in `delivery.timezone`:
+List events from local midnight today through tomorrow 23:59:59 in `delivery.timezone` (pass those bounds as the `start`/`end` window to whichever access path is used).
 
-```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar list \
-  --time-min {today_start_iso} --time-max {tomorrow_end_iso}
-```
-
-Normalize each event into: local start/end, title, attendees, organizer, location, Google Meet/conference link, and event ID. Include Google Meet links prominently. Skip declined events and low-signal all-day holds unless they affect availability.
+Normalize each event into: local start/end, title, attendees, organizer, location, conference/join link, and event ID. Include meeting join links prominently. Skip declined events and low-signal all-day holds unless they affect availability.
 
 ## Aggregation Workflow
 
@@ -301,8 +293,8 @@ Required skill: chief-of-staff:daily-briefing
 Task:
 1. Load the chief-of-staff daily-briefing skill.
 2. Read company.yaml for delivery.briefing_time, delivery.channel, delivery.timezone, google account/delegate, and paths.project_root.
-3. Pull Gmail unread priority/client/signature/invoice signals using google_api.py and queries.yaml templates only.
-4. Pull Google Calendar events for today and tomorrow with Meet links using google_api.py.
+3. Pull unread priority/client/signature/invoice mail signals through an approved workspace access path (native connector tools, workspace_client, or pre-fetched --input), using queries.yaml templates only.
+4. Pull calendar events for today and tomorrow with join links through an approved workspace access path.
 5. Read deadlines from company.yaml plus the jurisdiction pack and categorize overdue, ≤7 days, and ≤30 days.
 6. Read pipeline.yaml, todos.yaml, and invoices.yaml from paths.project_root.
 7. Produce the Daily Briefing in the required format, skipping empty sections.
@@ -343,8 +335,8 @@ Replace `0 20 * * *` and `--delivery telegram` with the values from `company.yam
 ## Verification Checklist
 
 - [ ] `company.yaml` was loaded and `project_root`, `delivery`, and `google` settings resolved.
-- [ ] Gmail searches used `google_api.py` and `queries.yaml` templates.
-- [ ] Calendar query covered today + tomorrow in the configured timezone and included Meet links.
+- [ ] Mail searches used an approved workspace access path (connector tools, workspace_client, or --input) and `queries.yaml` templates.
+- [ ] Calendar query covered today + tomorrow in the configured timezone and included join links.
 - [ ] Deadlines were categorized into overdue, ≤7 days, and ≤30 days.
 - [ ] `pipeline.yaml`, `todos.yaml`, and `invoices.yaml` were read from `project_root`.
 - [ ] Urgent items are source-linked and not exaggerated.

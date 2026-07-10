@@ -36,6 +36,36 @@ def get_client(config: Any):
     return get_workspace_client(config)
 
 
+def load_workspace_input(path: str) -> dict[str, Any]:
+    """Load and validate an agent-fetched workspace envelope from PATH or stdin.
+
+    ``path`` of ``"-"`` reads from stdin. Returns a normalized payload (defaults
+    filled). Raises FileNotFoundError / ValueError / SchemaError on a missing
+    file, malformed JSON, or a schema violation.
+    """
+    from schemas import normalize_workspace_payload  # SchemaError is a ValueError
+
+    if path == "-":
+        raw = sys.stdin.read()
+    else:
+        file_path = Path(path).expanduser()
+        if not file_path.exists():
+            raise FileNotFoundError(f"--input file not found: {file_path}")
+        raw = file_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--input is not valid JSON: {exc}")
+    return normalize_workspace_payload(payload)
+
+
+def _maybe_load_input(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Return a normalized envelope if --input was passed, else None."""
+    if getattr(args, "input", None):
+        return load_workspace_input(args.input)
+    return None
+
+
 def _find_event(events: list[dict[str, Any]], event_id: str) -> dict[str, Any] | None:
     """Find an event by ID from a list of calendar events."""
     for event in events:
@@ -74,17 +104,23 @@ def cmd_gather(args: argparse.Namespace) -> int:
     Uses event_id to locate the matching calendar event, extract attendees,
     and define the context window. Falls back to manual attendees if provided.
     """
-    cfg = load_config(args.config)
-    if cfg is None:
-        print("Could not load config", file=sys.stderr)
-        return 1
-    client = get_client(cfg)
-
-    # Fetch calendar events for a 7-day window to find the event
+    workspace_input = _maybe_load_input(args)
     today = date.today()
     cal_start = today.isoformat()
     cal_end = (today + timedelta(days=7)).isoformat()
-    events = client.calendar_list(cal_start, cal_end)
+
+    client = None
+    if workspace_input is not None:
+        # Fetch/compute split: agent already fetched calendar events.
+        events = workspace_input.get("events", [])
+    else:
+        cfg = load_config(args.config)
+        if cfg is None:
+            print("Could not load config", file=sys.stderr)
+            return 1
+        client = get_client(cfg)
+        # Fetch calendar events for a 7-day window to find the event
+        events = client.calendar_list(cal_start, cal_end)
 
     # Find the specific event
     event = _find_event(events, args.event_id)
@@ -117,36 +153,54 @@ def cmd_gather(args: argparse.Namespace) -> int:
         },
     }
 
-    # Gmail context per attendee
-    gmail_items = []
-    for email in attendees:
-        messages = client.gmail_search(f"from:{email}", max_results=3)
-        gmail_items.append({"attendee": email, "messages": messages})
-    result["gmail_context"] = gmail_items
+    if workspace_input is not None:
+        # Agent-provided messages/files: group all provided messages as context
+        # (the agent scoped the fetch); no per-attendee client search.
+        result["gmail_context"] = [
+            {"attendee": None, "messages": workspace_input.get("messages", [])}
+        ]
+    else:
+        # Gmail context per attendee
+        gmail_items = []
+        for email in attendees:
+            messages = client.mail_search(f"from:{email}", max_results=3)
+            gmail_items.append({"attendee": email, "messages": messages})
+        result["gmail_context"] = gmail_items
 
     # Recent related events (same window, excluding the target event)
     related = [e for e in events if e.get("id") != args.event_id]
     result["recent_related_events"] = related
 
     # Drive context: use event title or --drive-query
-    drive_query = args.drive_query or event_title
-    result["drive_files"] = client.drive_search(drive_query, max_results=5)
+    if workspace_input is not None:
+        result["drive_files"] = workspace_input.get("files", [])
+    else:
+        drive_query = args.drive_query or event_title
+        result["drive_files"] = client.files_search(drive_query, max_results=5)
 
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
 
 
 def cmd_gmail_context(args: argparse.Namespace) -> int:
+    workspace_input = _maybe_load_input(args)
+    if workspace_input is not None:
+        print(json.dumps(workspace_input.get("messages", []), indent=2, ensure_ascii=False, default=str))
+        return 0
     cfg = load_config(args.config)
     if cfg is None:
         return 1
     client = get_client(cfg)
-    results = client.gmail_search(args.query, max_results=args.max)
+    results = client.mail_search(args.query, max_results=args.max)
     print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     return 0
 
 
 def cmd_calendar_context(args: argparse.Namespace) -> int:
+    workspace_input = _maybe_load_input(args)
+    if workspace_input is not None:
+        print(json.dumps(workspace_input.get("events", []), indent=2, ensure_ascii=False, default=str))
+        return 0
     cfg = load_config(args.config)
     if cfg is None:
         return 1
@@ -157,11 +211,15 @@ def cmd_calendar_context(args: argparse.Namespace) -> int:
 
 
 def cmd_drive_context(args: argparse.Namespace) -> int:
+    workspace_input = _maybe_load_input(args)
+    if workspace_input is not None:
+        print(json.dumps(workspace_input.get("files", []), indent=2, ensure_ascii=False, default=str))
+        return 0
     cfg = load_config(args.config)
     if cfg is None:
         return 1
     client = get_client(cfg)
-    results = client.drive_search(args.query, max_results=args.max)
+    results = client.files_search(args.query, max_results=args.max)
     print(json.dumps(results, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -169,6 +227,10 @@ def cmd_drive_context(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Meeting prep context via WorkspaceClient")
     parser.add_argument("--config", help="Path to company.yaml")
+    parser.add_argument("--input", dest="input", help=(
+        "Path to an agent-fetched workspace JSON envelope (or '-' for stdin) "
+        "conforming to shared/scripts/schemas.py workspace payload schema. "
+        "When set, records are read from this file instead of a workspace client."))
     sub = parser.add_subparsers(dest="command", required=True)
 
     gather = sub.add_parser("gather", help="Gather all meeting context")

@@ -296,16 +296,19 @@ class TestProviderRestoreMethods:
     """Test that restore provider methods build correct commands."""
 
     def test_gmail_unarchive_adds_inbox(self):
+        # Renamed to the provider-neutral mail_unarchive (gmail_unarchive is a
+        # deprecated alias on the base class). inspect.getsource unwraps the
+        # @guarded decorator to reach the real body.
         from providers.google_workspace import GoogleWorkspaceClient
         import inspect
-        source = inspect.getsource(GoogleWorkspaceClient.gmail_unarchive)
+        source = inspect.getsource(GoogleWorkspaceClient.mail_unarchive)
         assert "--add-labels" in source
         assert "INBOX" in source
 
     def test_gmail_untrash_removes_trash(self):
         from providers.google_workspace import GoogleWorkspaceClient
         import inspect
-        source = inspect.getsource(GoogleWorkspaceClient.gmail_untrash)
+        source = inspect.getsource(GoogleWorkspaceClient.mail_untrash)
         assert "--remove-labels" in source
         assert "TRASH" in source
 

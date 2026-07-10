@@ -105,7 +105,7 @@ class TestClassifySuggestApproveExecute:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.gmail_label.return_value = {"success": True, "action": "gmail.label"}
+        mock_client.mail_tag.return_value = {"success": True, "action": "gmail.label"}
 
         import webhook_events
         with patch("webhook_events.load_config", return_value=config), \
@@ -139,7 +139,7 @@ class TestClassifySuggestApproveExecute:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
-        mock_client.gmail_send.return_value = {"success": True}
+        mock_client.mail_send.return_value = {"success": True}
 
         import webhook_events
         with patch("webhook_events.load_config", return_value=config), \
@@ -227,7 +227,7 @@ class TestFailedExecutionRetry:
         mock_fail = MagicMock()
         mock_fail.provider_name = "google_api"
         mock_fail.supports.side_effect = lambda a: True
-        mock_fail.gmail_label.return_value = {"success": False, "error": "label not found"}
+        mock_fail.mail_tag.return_value = {"success": False, "error": "label not found"}
 
         import webhook_events
         with patch("webhook_events.load_config", return_value=config), \
@@ -244,7 +244,7 @@ class TestFailedExecutionRetry:
         mock_ok = MagicMock()
         mock_ok.provider_name = "google_api"
         mock_ok.supports.side_effect = lambda a: True
-        mock_ok.gmail_label.return_value = {"success": True}
+        mock_ok.mail_tag.return_value = {"success": True}
 
         with patch("webhook_events.load_config", return_value=config), \
              patch("workspace_client.get_workspace_client", return_value=mock_ok), \
@@ -274,7 +274,7 @@ class TestFailedExecutionRetry:
         mock_err = MagicMock()
         mock_err.provider_name = "google_api"
         mock_err.supports.side_effect = lambda a: True
-        mock_err.gmail_send.side_effect = ConnectionError("network timeout")
+        mock_err.mail_send.side_effect = ConnectionError("network timeout")
 
         import webhook_events
         with patch("webhook_events.load_config", return_value=config), \
@@ -291,7 +291,7 @@ class TestFailedExecutionRetry:
         mock_ok = MagicMock()
         mock_ok.provider_name = "google_api"
         mock_ok.supports.side_effect = lambda a: True
-        mock_ok.gmail_send.return_value = {"success": True}
+        mock_ok.mail_send.return_value = {"success": True}
 
         with patch("webhook_events.load_config", return_value=config), \
              patch("workspace_client.get_workspace_client", return_value=mock_ok), \

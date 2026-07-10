@@ -342,10 +342,10 @@ class TestRecommendedCommands:
 # ─── Version & Docs ─────────────────────────────────────────
 
 class TestVersionAndDocs:
-    def test_version_is_030(self):
+    def test_version_is_031(self):
         import yaml
         data = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())
-        assert data.get("version") == "0.3.0"
+        assert data.get("version") == "0.3.1"
 
     def test_beta_docs_exist(self):
         assert (PLUGIN_ROOT / "docs" / "BETA_DAILY_LOOP.md").exists()

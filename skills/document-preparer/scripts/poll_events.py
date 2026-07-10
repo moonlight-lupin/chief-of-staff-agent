@@ -51,10 +51,10 @@ def poll_gmail(config: Any, max_results: int = 10) -> dict[str, Any]:
     result = {"polled": 0, "ingested": 0, "duplicates": 0, "errors": 0, "details": []}
 
     try:
-        emails = client.gmail_search(query="is:inbox", max_results=max_results)
+        emails = client.mail_search(query="is:inbox", max_results=max_results)
     except Exception as exc:
         result["errors"] = 1
-        result["details"].append(f"gmail_search failed: {exc}")
+        result["details"].append(f"mail_search failed: {exc}")
         return result
 
     for email in emails:
@@ -170,10 +170,10 @@ def poll_drive(config: Any, max_results: int = 10) -> dict[str, Any]:
     result = {"polled": 0, "ingested": 0, "duplicates": 0, "errors": 0, "details": []}
 
     try:
-        files = client.drive_search(query="", max_results=max_results)
+        files = client.files_search(query="", max_results=max_results)
     except Exception as exc:
         result["errors"] = 1
-        result["details"].append(f"drive_search failed: {exc}")
+        result["details"].append(f"files_search failed: {exc}")
         return result
 
     for file_item in files:

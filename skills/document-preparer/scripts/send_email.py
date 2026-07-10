@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Gated Gmail send — prepare, preview, approve, execute.
 
-No user-facing workflow should call gmail_send() directly.
+No user-facing workflow should call mail_send() directly.
 Everything goes through: prepare → preview → pending action → explicit confirm → send.
 
 Commands:
@@ -213,7 +213,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     # Execute the send
     try:
-        result = client.gmail_send(
+        result = client.mail_send(
             to=payload["to"],
             subject=payload["subject"],
             body=payload["body"],

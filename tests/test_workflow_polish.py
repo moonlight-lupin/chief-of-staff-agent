@@ -43,17 +43,17 @@ def mock_workspace():
     # Capability: google_api supports everything except gmail.draft
     mock.supports.side_effect = lambda action: action != "gmail.draft"
     # Read methods
-    mock.drive_search.return_value = [{"id": "f1", "name": "doc.pdf"}]
-    mock.gmail_search.return_value = [{"id": "m1", "subject": "Test"}]
+    mock.files_search.return_value = [{"id": "f1", "name": "doc.pdf"}]
+    mock.mail_search.return_value = [{"id": "m1", "subject": "Test"}]
     mock.calendar_list.return_value = []
     # Write methods return ActionResult shape
-    mock.drive_upload.return_value = {
+    mock.files_upload.return_value = {
         "success": True, "action": "drive.upload", "provider": "google_api",
         "tool_slug": "", "target": "/tmp/test.docx",
         "data": {"id": "f1", "webViewLink": "https://drive.google.com/file/d/f1/view"},
         "error": None, "audited": True,
     }
-    mock.gmail_create_draft.return_value = {
+    mock.mail_create_draft.return_value = {
         "success": True, "action": "gmail.draft", "provider": "google_api",
         "tool_slug": "", "target": "client@test.com",
         "data": {"id": "d1"},
@@ -70,13 +70,13 @@ class TestDocumentHandoff:
         mock_composio = MagicMock()
         mock_composio.provider_name = "composio:mcp"
         mock_composio.supports.side_effect = lambda action: True  # composio supports everything
-        mock_composio.drive_upload.return_value = {
+        mock_composio.files_upload.return_value = {
             "success": True, "action": "drive.upload", "provider": "composio:mcp",
             "tool_slug": "", "target": str(tmp_path / "NDA.docx"),
             "data": {"id": "f1", "webViewLink": "https://drive.google.com/file/d/f1/view"},
             "error": None, "audited": True,
         }
-        mock_composio.gmail_create_draft.return_value = {
+        mock_composio.mail_create_draft.return_value = {
             "success": True, "action": "gmail.draft", "provider": "composio:mcp",
             "tool_slug": "", "target": "client@test.com",
             "data": {"id": "d1"},
@@ -97,18 +97,18 @@ class TestDocumentHandoff:
                     "--body", "Please review the attached NDA.",
                 ])
         assert rc == 0
-        mock_composio.drive_upload.assert_called_once()
-        mock_composio.gmail_create_draft.assert_called_once()
+        mock_composio.files_upload.assert_called_once()
+        mock_composio.mail_create_draft.assert_called_once()
 
     def test_handoff_does_not_call_gmail_send(self, fake_config, auto_approve, tmp_path):
         """Handoff under composio: gmail_send never called."""
         mock_composio = MagicMock()
         mock_composio.provider_name = "composio:mcp"
         mock_composio.supports.side_effect = lambda action: True
-        mock_composio.drive_upload.return_value = {
+        mock_composio.files_upload.return_value = {
             "success": True, "data": {"webViewLink": "https://drive.google.com/file/d/f1/view"},
         }
-        mock_composio.gmail_create_draft.return_value = {
+        mock_composio.mail_create_draft.return_value = {
             "success": True, "data": {"id": "d1"},
         }
         test_file = tmp_path / "NDA.docx"
@@ -120,17 +120,17 @@ class TestDocumentHandoff:
                 "handoff", "--file", str(test_file),
                 "--to", "client@test.com", "--subject", "NDA", "--body", "Body",
             ])
-        mock_composio.gmail_send.assert_not_called()
+        mock_composio.mail_send.assert_not_called()
 
     def test_handoff_includes_drive_link_in_body(self, fake_config, auto_approve, tmp_path):
         """Under composio, handoff body includes Drive link."""
         mock_composio = MagicMock()
         mock_composio.provider_name = "composio:mcp"
         mock_composio.supports.side_effect = lambda action: True
-        mock_composio.drive_upload.return_value = {
+        mock_composio.files_upload.return_value = {
             "success": True, "data": {"webViewLink": "https://drive.google.com/file/d/f1/view"},
         }
-        mock_composio.gmail_create_draft.return_value = {"success": True, "data": {"id": "d1"}}
+        mock_composio.mail_create_draft.return_value = {"success": True, "data": {"id": "d1"}}
         test_file = tmp_path / "NDA.docx"
         test_file.write_text("dummy")
         with patch("document_actions.load_config", return_value=fake_config), \
@@ -140,7 +140,7 @@ class TestDocumentHandoff:
                 "handoff", "--file", str(test_file),
                 "--to", "client@test.com", "--subject", "NDA", "--body", "Please review.",
             ])
-        call_args = mock_composio.gmail_create_draft.call_args
+        call_args = mock_composio.mail_create_draft.call_args
         body = call_args[0][2]
         assert "https://drive.google.com/file/d/f1/view" in body
 
@@ -149,7 +149,7 @@ class TestDocumentHandoff:
         mock_composio = MagicMock()
         mock_composio.provider_name = "composio:mcp"
         mock_composio.supports.side_effect = lambda action: True
-        mock_composio.drive_upload.return_value = {
+        mock_composio.files_upload.return_value = {
             "success": False, "error": "upload failed", "audited": True,
         }
         test_file = tmp_path / "bad.docx"
@@ -162,17 +162,17 @@ class TestDocumentHandoff:
                 "--to", "c@test.com", "--subject", "S", "--body", "B",
             ])
         assert rc == 1
-        mock_composio.gmail_create_draft.assert_not_called()
+        mock_composio.mail_create_draft.assert_not_called()
 
     def test_handoff_summary_output(self, fake_config, auto_approve, tmp_path):
         """Summary mode prints human-readable output."""
         mock_composio = MagicMock()
         mock_composio.provider_name = "composio:mcp"
         mock_composio.supports.side_effect = lambda action: True
-        mock_composio.drive_upload.return_value = {
+        mock_composio.files_upload.return_value = {
             "success": True, "data": {"webViewLink": "https://drive.google.com/file/d/f1/view"},
         }
-        mock_composio.gmail_create_draft.return_value = {"success": True, "data": {"id": "d1"}}
+        mock_composio.mail_create_draft.return_value = {"success": True, "data": {"id": "d1"}}
         test_file = tmp_path / "NDA.docx"
         test_file.write_text("dummy")
         with patch("document_actions.load_config", return_value=fake_config), \
@@ -216,14 +216,14 @@ class TestHandoffProviderAwareness:
         assert data["success"] is False
         assert "gmail.draft" in data["error"]
         assert data["steps"]["drive_upload"] is None  # no side effects
-        mock_google.drive_upload.assert_not_called()  # upload was NOT called
+        mock_google.files_upload.assert_not_called()  # upload was NOT called
 
     def test_handoff_google_api_allow_partial_uploads(self, fake_config, auto_approve, tmp_path):
         """Under google_api with --allow-partial, file is uploaded but draft fails."""
         mock_google = MagicMock()
         mock_google.provider_name = "google_api"
         mock_google.supports.side_effect = lambda action: action != "gmail.draft"
-        mock_google.drive_upload.return_value = {
+        mock_google.files_upload.return_value = {
             "success": True, "action": "drive.upload", "provider": "google_api",
             "data": {"id": "f1", "webViewLink": "https://drive.google.com/file/d/f1/view"},
             "audited": True,
@@ -247,8 +247,8 @@ class TestHandoffProviderAwareness:
         assert data["success"] is False
         assert "not supported" in data["error"].lower()
         assert data["steps"]["drive_upload"] is not None  # upload DID happen
-        mock_google.drive_upload.assert_called_once()
-        mock_google.gmail_create_draft.assert_not_called()
+        mock_google.files_upload.assert_called_once()
+        mock_google.mail_create_draft.assert_not_called()
 
     def test_draft_email_google_api_returns_unsupported(self, fake_config, auto_approve):
         """draft-email under google_api returns clean unsupported error."""
@@ -269,7 +269,7 @@ class TestHandoffProviderAwareness:
         assert rc == 1
         assert data["success"] is False
         assert "not supported" in data["error"].lower()
-        mock_google.gmail_create_draft.assert_not_called()
+        mock_google.mail_create_draft.assert_not_called()
 
 
 class TestMeetingPrepEventGather:
@@ -313,7 +313,7 @@ class TestMeetingPrepEventGather:
         data = json.loads(buf.getvalue())
         assert "person@test.com" in data["event"]["attendees"]
         # Gmail should be searched for that attendee
-        mock_workspace.gmail_search.assert_called_with("from:person@test.com", max_results=3)
+        mock_workspace.mail_search.assert_called_with("from:person@test.com", max_results=3)
 
     def test_gather_uses_manual_attendees_when_passed(self, fake_config, mock_workspace):
         mock_workspace.calendar_list.return_value = [
@@ -330,7 +330,7 @@ class TestMeetingPrepEventGather:
         data = json.loads(buf.getvalue())
         assert "external@client.com" in data["event"]["attendees"]
         # Should search Gmail for the external attendee, not the internal one
-        mock_workspace.gmail_search.assert_called_with("from:external@client.com", max_results=3)
+        mock_workspace.mail_search.assert_called_with("from:external@client.com", max_results=3)
 
     def test_gather_uses_event_title_for_drive_search(self, fake_config, mock_workspace):
         mock_workspace.calendar_list.return_value = [
@@ -340,7 +340,7 @@ class TestMeetingPrepEventGather:
              patch("workspace_actions.get_client", return_value=mock_workspace):
             import workspace_actions
             workspace_actions.main(["gather", "--event-id", "evt1"])
-        mock_workspace.drive_search.assert_called_with("Investor Update Q3", max_results=5)
+        mock_workspace.files_search.assert_called_with("Investor Update Q3", max_results=5)
 
     def test_gather_event_not_found(self, fake_config, mock_workspace):
         mock_workspace.calendar_list.return_value = [

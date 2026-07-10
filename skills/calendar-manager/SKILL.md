@@ -24,7 +24,7 @@ python skills/calendar-manager/scripts/calendar_actions.py create --title "Team 
 python skills/calendar-manager/scripts/calendar_actions.py update --event-id <id> --title "New Title"
 ```
 
-`WorkspaceClient` routes to Google API or Composio MCP depending on `company.yaml` config. Write actions (create/update) use guardrails (`CHIEF_OF_STAFF_AUTO_APPROVE=1`) and return standardized `ActionResult` objects.
+`WorkspaceClient` routes to the workspace provider selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); calendar methods (`calendar_list`, `calendar_create`, `calendar_update`, `calendar_cancel`) are provider-neutral, so the same commands work on Google Calendar or Microsoft 365 (Outlook Calendar). Write actions (create/update) use guardrails (`CHIEF_OF_STAFF_AUTO_APPROVE=1`) and return standardized `ActionResult` objects.
 
 ## When to Use
 
@@ -78,39 +78,16 @@ Calendar Manager is read-only by default.
 
 If an event looks ambiguous, list matching events and ask the user to choose one. Never guess which event to edit or delete.
 
-## Google API Command Patterns
+## Workspace Access
 
-Use the `google_api.py` wrapper for all operations. The exact subcommand flags are owned by the `google-workspace` skill; these examples show the required call shape.
+Calendar Manager's intent is: list events in a window, create an event with a join link, update an event, and cancel/delete an event. Prefer the `calendar_actions.py` wrapper (shown in the Overview) — it routes through `WorkspaceClient` and applies guardrails/audit. Normalize every event you read or report to the canonical `event` shape in `shared/scripts/schemas.py` (`{id, title, start, end, attendees?, organizer?, location?, conference_link?, status?, source?}`).
 
-```bash
-# Today
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar list \
-  --time-min {start_iso} --time-max {end_iso}
+If you access the calendar directly instead of through the wrapper, use the first available path in this order:
 
-# This week / explicit range
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar list \
-  --time-min {range_start_iso} --time-max {range_end_iso}
+1. **Native connector tools** in the agent's environment — the Google Calendar connector, or the Microsoft 365 Outlook Calendar connector.
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).calendar_list(start, end)`, `.calendar_create(title, start, end, attendees=..., description=...)`, `.calendar_update(event_id, **fields)`, `.calendar_cancel(event_id)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
 
-# Create event with Google Meet link
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar create \
-  --summary {title} --start {start_iso} --end {end_iso} \
-  --attendees {comma_separated_emails} --conference google_meet
-
-# Modify event
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar update \
-  --event-id {event_id} {update_flags}
-
-# Delete event
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} calendar delete \
-  --event-id {event_id}
-```
-
-Always capture and report event IDs and Meet links returned by Google.
+Request a conference/join link on create (Google Meet on Google, Teams on Microsoft 365). Always capture and report event IDs and join links returned by the provider.
 
 ## Operations
 
@@ -120,8 +97,8 @@ Always capture and report event IDs and Meet links returned by Google.
    - `today`: local midnight to local 23:59:59 in `delivery.timezone`.
    - `week`: Monday 00:00 through Sunday 23:59:59 unless the user specifies another week.
    - `range`: parse user-provided dates and include timezone.
-2. Call `calendar list` through `google_api.py`.
-3. Normalize the result into: time, title, attendees, location/Meet link, calendar, event ID.
+2. Call `calendar list` through an approved workspace access path (`calendar_actions.py` / `calendar_list`).
+3. Normalize the result into: time, title, attendees, location/join link, calendar, event ID.
 4. Present a concise agenda. Include event IDs only when the user may edit/delete next.
 
 Completion criterion: every returned event in the requested range is shown or explicitly grouped as low-priority/declined.
@@ -141,33 +118,33 @@ Location: Google Meet link will be generated
 Calendar delegate: {delegate}
 ```
 
-4. Only after confirmation, run `calendar create ... --conference google_meet`.
-5. Report the event ID, calendar link, and Meet link.
+4. Only after confirmation, run `calendar create` with a conference link requested.
+5. Report the event ID, calendar link, and join link.
 
-Completion criterion: Google returns a created event ID and conference link, or the error is surfaced verbatim.
+Completion criterion: the provider returns a created event ID and conference link, or the error is surfaced verbatim.
 
 ### 3. Modify Event
 
 1. Identify the event by ID or by listing candidate matches.
 2. Show the current values and proposed changes.
 3. Require confirmation.
-4. Run `calendar update` through `google_api.py`.
+4. Run `calendar update` through an approved workspace access path.
 5. Report the final event details.
 
-Completion criterion: user sees before/after summary and the Google update result.
+Completion criterion: user sees before/after summary and the provider's update result.
 
 ### 4. Delete Event
 
 1. Identify the event by ID or candidate match.
 2. Require explicit confirmation: `Delete "{title}" on {date}?`.
-3. Run `calendar delete` through `google_api.py`.
+3. Run `calendar delete` through an approved workspace access path.
 4. Report deletion status.
 
-Completion criterion: deletion is confirmed by Google or failure reason is shown.
+Completion criterion: deletion is confirmed by the provider or failure reason is shown.
 
 ## Killer Feature: Pre-Meeting Cron Reminders
 
-Calendar Manager runs a daily scan, normally at 06:00 local time, for today and tomorrow. For each upcoming event with a Google Meet link and at least one attendee, it creates a one-shot Hermes cron job scheduled at:
+Calendar Manager runs a daily scan, normally at 06:00 local time, for today and tomorrow. For each upcoming event with a conference/join link (Google Meet, Teams, etc.) and at least one attendee, it creates a one-shot Hermes cron job scheduled at:
 
 ```text
 event.start - calendar.reminder_minutes
@@ -183,7 +160,7 @@ Default reminder offset is 15 minutes. If the computed fire time is in the past,
    - all-day events,
    - declined events,
    - events without attendees,
-   - events without a Google Meet/conference link,
+   - events without a conference/join link,
    - events whose reminder time is already past,
    - events that already have a matching one-shot cron job.
 4. For each remaining event, create one one-shot cron job using Hermes cron.
@@ -250,9 +227,9 @@ If the installed Hermes cron CLI uses a different flag name, run `hermes cron cr
 
 ## Verification Checklist
 
-- [ ] `company.yaml` google account/delegate and calendar settings were read.
-- [ ] All Google calls used `google_api.py --account {account} --as {delegate} calendar {command}`.
+- [ ] `company.yaml` account/delegate and calendar settings were read.
+- [ ] All calendar calls used an approved workspace access path (`calendar_actions.py`, connector tools, or `workspace_client`).
 - [ ] Writes were confirmed before create/update/delete.
-- [ ] Meet links are shown for new or listed meeting events.
+- [ ] Join links are shown for new or listed meeting events.
 - [ ] Reminder cron jobs are one-shot, deduped, and scheduled before event start.
 - [ ] Cron prompt is self-contained and includes delivery channel.

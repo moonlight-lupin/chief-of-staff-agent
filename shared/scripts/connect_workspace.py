@@ -66,12 +66,38 @@ def cmd_status(config: dict[str, Any]) -> int:
         except Exception as exc:
             result["healthy"] = False
             result["error"] = str(exc)
+    elif provider == "m365":
+        m365 = config.get("m365", {}) if isinstance(config, Mapping) else {}
+        auth_mode = str(m365.get("auth", "client_credentials") or "client_credentials")
+        secret_env = str(m365.get("client_secret_env", "M365_CLIENT_SECRET") or "M365_CLIENT_SECRET")
+        result["auth"] = auth_mode
+        result["tenant_id_set"] = bool(m365.get("tenant_id"))
+        result["client_id_set"] = bool(m365.get("client_id"))
+        result["user_principal"] = m365.get("user_principal", "")
+        result["secret_env"] = secret_env
+        result["secret_set"] = bool(os.getenv(secret_env))
+        try:
+            import importlib.util as _ilu
+            result["msal_installed"] = _ilu.find_spec("msal") is not None
+        except Exception:
+            result["msal_installed"] = False
+        tcp = m365.get("token_cache_path")
+        result["token_cache_path"] = str(tcp) if tcp else ""
+        result["token_cache_present"] = bool(tcp) and Path(str(tcp)).expanduser().exists()
+        try:
+            from workspace_client import get_workspace_client
+            client = get_workspace_client(config)
+            result["class"] = client.__class__.__name__
+            result["healthy"] = client.health_check()
+        except Exception as exc:
+            result["healthy"] = False
+            result["error"] = str(exc)
     elif provider == "composio":
         result["mcp_key_set"] = bool(os.getenv("COMPOSIO_MCP_KEY"))
         result["user_id"] = workspace.get("user_id", "")
         # Check connections
         try:
-            from providers.composio_workspace import load_session_meta, ComposioWorkspaceClient
+            from providers.composio_mcp_workspace import load_session_meta, ComposioMCPWorkspaceClient
             meta = load_session_meta(config)
             if meta:
                 result["connections"] = meta.get("connections", {})
@@ -79,7 +105,7 @@ def cmd_status(config: dict[str, Any]) -> int:
                 result["connections"] = {}
             # Try health check + refresh connection statuses
             try:
-                client = ComposioWorkspaceClient(config)
+                client = ComposioMCPWorkspaceClient(config)
                 result["healthy"] = client.health_check()
                 # Refresh actual connection state from Composio
                 refreshed = client.refresh_connection_statuses()
@@ -143,6 +169,86 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
             return 1
     except Exception as exc:
         print(f"\n❌ Auth test error: {exc}")
+        return 1
+
+
+def cmd_provider_m365(config: dict[str, Any], connect: bool) -> int:
+    """Verify or guide Microsoft 365 (Graph) provider setup."""
+    m365 = config.get("m365", {}) if isinstance(config, Mapping) else {}
+    auth_mode = str(m365.get("auth", "client_credentials") or "client_credentials")
+    secret_env = str(m365.get("client_secret_env", "M365_CLIENT_SECRET") or "M365_CLIENT_SECRET")
+
+    print("=== Microsoft 365 (Graph) Provider Setup ===\n")
+    print(f"Auth mode: {auth_mode}")
+
+    ok = True
+    for field in ("tenant_id", "client_id"):
+        if m365.get(field):
+            print(f"✅ {field}: set")
+        else:
+            print(f"❌ {field}: NOT set")
+            ok = False
+
+    if auth_mode == "client_credentials":
+        if m365.get("user_principal"):
+            print(f"✅ user_principal: {m365.get('user_principal')}")
+        else:
+            print("❌ user_principal: NOT set (required for client_credentials)")
+            ok = False
+        if os.getenv(secret_env):
+            print(f"✅ {secret_env}: set")
+        else:
+            print(f"❌ {secret_env}: NOT set")
+            ok = False
+    else:
+        print("ℹ️  device_code mode: interactive sign-in, no client secret required")
+
+    try:
+        import importlib.util as _ilu
+        if _ilu.find_spec("msal") is not None:
+            print("✅ msal: installed")
+        else:
+            print("❌ msal: NOT installed — run: pip install msal")
+            ok = False
+    except Exception:
+        print("❌ msal: NOT installed — run: pip install msal")
+        ok = False
+
+    if connect:
+        print("\nConnect guidance:")
+        if auth_mode == "client_credentials":
+            print("  client_credentials needs no interactive connect step.")
+            print("  Ensure the Entra ID app has application permissions granted")
+            print("  (Mail.ReadWrite, Calendars.ReadWrite, Files.ReadWrite.All,")
+            print("   User.Read.All) with admin consent, then verify:")
+            print("     python connect_workspace.py --provider m365 --status")
+        else:
+            print("  device_code mode signs in interactively on first token request.")
+            print("  A one-time device code + URL are printed to stderr; open the URL,")
+            print("  enter the code, and sign in. Then verify:")
+            print("     python connect_workspace.py --provider m365 --status")
+        return 0
+
+    if not ok:
+        print("\nNext steps:")
+        print("  1. Register an app in Entra ID (Azure AD) — see docs/SETUP.md Option 3")
+        print(f"  2. Set tenant_id/client_id/user_principal under m365: in company.yaml")
+        print(f"  3. Set {secret_env} in .env (client_credentials)")
+        print("  4. pip install msal")
+        print("  5. python connect_workspace.py --provider m365 --status")
+        return 1
+
+    # Live health check
+    try:
+        from workspace_client import get_workspace_client
+        client = get_workspace_client(config)
+        if client.health_check():
+            print("\n✅ Health check passed — Graph token + user lookup succeeded")
+            return 0
+        print("\n❌ Health check failed")
+        return 1
+    except Exception as exc:
+        print(f"\n❌ Health check error: {exc}")
         return 1
 
 
@@ -577,8 +683,10 @@ def _main() -> int:
     )
     parser.add_argument("--config", help="Path to company.yaml")
     parser.add_argument("--status", action="store_true", help="Print current provider status")
-    parser.add_argument("--provider", choices=["google_api", "composio"],
+    parser.add_argument("--provider", choices=["google_api", "composio", "m365"],
                         help="Verify or set up a specific provider")
+    parser.add_argument("--connect-m365", action="store_true",
+                        help="Print Microsoft 365 connect guidance")
     parser.add_argument("--print-next-steps", action="store_true",
                         help="Print next steps for the selected provider")
     parser.add_argument("--connect", metavar="TOOLKIT",
@@ -609,6 +717,9 @@ def _main() -> int:
         return cmd_capabilities(config, provider_override=args.provider)
     elif args.provider == "google_api":
         return cmd_provider_google_api(config)
+    elif args.provider == "m365":
+        connect = bool(args.connect_m365 or args.connect)
+        return cmd_provider_m365(config, connect)
     elif args.provider == "composio" and args.connect:
         return cmd_composio_connect(config, args.connect)
     elif args.provider == "composio" and args.mcp_url:

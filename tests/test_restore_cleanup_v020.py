@@ -194,7 +194,7 @@ class TestFailedActionRetryUX:
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda action: True
-        mock_client.gmail_send.side_effect = Exception("Network error")
+        mock_client.mail_send.side_effect = Exception("Network error")
         with patch("send_email.load_config", return_value=config), \
              patch("send_email.get_client", return_value=mock_client):
             import send_email

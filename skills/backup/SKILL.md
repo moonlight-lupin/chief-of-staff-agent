@@ -16,7 +16,7 @@ metadata:
 
 Backup protects the user's Hermes and Chief of Staff data by creating a timestamped `tar.gz`, uploading it to Google Drive, pruning old backup archives, and reporting the outcome. It is designed for weekly unattended execution through Hermes cron.
 
-All Drive uploads and deletes go through the external `google-workspace` skill:
+The `backup.py` script uploads and prunes archives through the file store. Today it drives the `google-workspace` skill's `google_api.py` wrapper directly (the Google/Drive dialect shown below); the same intent — upload archive, list backups, delete old archives — maps onto any workspace provider (`google_api` | `composio` | `m365`) or an equivalent native file connector when configured.
 
 ```bash
 python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
@@ -192,6 +192,6 @@ Never overwrite live config or skills blindly.
 - [ ] `company.yaml` backup config was loaded.
 - [ ] Archive was created with expected includes and excludes.
 - [ ] `.env`, `auth.json`, `state.db`, `sessions/`, and `logs/` were excluded unless explicitly configured otherwise.
-- [ ] Upload used `google_api.py --account {account} --as {delegate} drive upload`.
+- [ ] Upload used an approved workspace access path (currently `google_api.py ... drive upload`; provider-neutral in intent).
 - [ ] Pruning ran only after upload success.
 - [ ] Final report includes size, file count, upload time, and pruned count.

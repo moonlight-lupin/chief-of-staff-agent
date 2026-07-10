@@ -72,7 +72,7 @@ def mock_client():
     mock = MagicMock()
     mock.provider_name = "google_api"
     mock.supports.side_effect = lambda a: True
-    mock.gmail_list_labels.return_value = SAMPLE_LABELS
+    mock.mail_list_tags.return_value = SAMPLE_LABELS
     return mock
 
 
@@ -429,7 +429,7 @@ class TestNoGmailMutations:
         config, project = temp_project
         parsed = parse_labels(SAMPLE_LABELS)
         policy = generate_policy(parsed, provider="google_api")
-        mock_client.gmail_send.assert_not_called()
+        mock_client.mail_send.assert_not_called()
 
     def test_no_gmail_modify_called(self, temp_project, mock_client):
         from email_label_policy import parse_labels, generate_policy
@@ -448,13 +448,13 @@ class TestNoGmailMutations:
             mock_create.assert_not_called()
 
     def test_only_read_method_used(self, temp_project, mock_client):
-        """Only gmail_list_labels should be called, not any write method."""
+        """Only mail_list_tags should be called, not any write method."""
         config, project = temp_project
         with patch("email_organisation.load_config", return_value=config), \
              patch("email_organisation.get_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None):
             import email_organisation
             email_organisation.main(["inspect-labels"])
-        mock_client.gmail_list_labels.assert_called_once()
-        mock_client.gmail_send.assert_not_called()
+        mock_client.mail_list_tags.assert_called_once()
+        mock_client.mail_send.assert_not_called()
         mock_client.calendar_create.assert_not_called()

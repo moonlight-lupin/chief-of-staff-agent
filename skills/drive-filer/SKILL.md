@@ -24,7 +24,7 @@ python skills/drive-filer/scripts/drive_file.py upload --file /tmp/report.pdf --
 python skills/drive-filer/scripts/drive_file.py download --file-id <id> --output /tmp/downloaded.pdf
 ```
 
-`WorkspaceClient` routes to Google API or Composio MCP. Upload/download use guardrails and return `ActionResult` objects. Filing rules are still resolved by `drive_map.py` which uses config-driven pattern matching.
+`WorkspaceClient` routes to the workspace provider selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); the file methods (`files_search`, `files_upload`, `files_download`, `files_trash`) are provider-neutral, so the same commands file into Google Drive or Microsoft 365 (OneDrive / SharePoint). Upload/download use guardrails and return `ActionResult` objects. Filing rules are still resolved by `drive_map.py` which uses config-driven pattern matching.
 
 ## When to Use
 
@@ -157,38 +157,22 @@ Root/                              (company Drive root — ID from company.yaml)
     └── Comparisons/
 ```
 
-## Google API Command Patterns
+## Workspace Access
 
-Use the command shape below for every Drive operation:
+Drive Filer's intent is: search the file store, ensure/create folders, and upload/download files. Prefer the `drive_file.py` wrapper (shown in the Overview) — it routes through `WorkspaceClient` and applies guardrails/audit. Normalize files you read or report to the canonical `file` shape in `shared/scripts/schemas.py` (`{id, name, mime_type?, modified?, link?, parents?, source?}`).
 
-```bash
-# Search for folder/file
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive search --query {query}
+If you access the file store directly instead of through the wrapper, use the first available path in this order:
 
-# Create folder if missing
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive mkdir \
-  --name {folder_name} --parent-id {parent_id}
+1. **Native connector tools** in the agent's environment — the Google Drive connector, or the Microsoft 365 OneDrive / SharePoint connector.
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).files_search(query, max_results=...)`, `.files_upload(file_path, parent_id=...)`, `.files_download(file_id, output_path)`, `.files_trash(file_id)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
 
-# Upload file
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive upload \
-  --file {local_path} --parent-id {folder_id}
-
-# Download attachment/file when needed
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive download \
-  --file-id {file_id} --output {local_path}
-```
-
-For Gmail attachment downloads, use `google_api.py ... gmail {command}` from the google-workspace skill, then return to Drive Filer for classification and upload.
+Search queries in these examples use the Google Drive query dialect; the `m365` provider translates the same intent to Microsoft Graph, and native connectors accept natural-language/structured queries. To fetch a mail attachment before filing, obtain it through an approved mail access path (a Gmail/Outlook connector or `workspace_client` mail methods), then return to Drive Filer for classification and upload.
 
 ## Workflow A — File Email Attachment
 
 1. Identify the target email by user reference, Gmail search result, or Daily Briefing item.
 2. Confirm which attachment(s) to file if there is more than one.
-3. Download attachments through `google_api.py --account {account} --as {delegate} gmail ...`.
+3. Download attachments through an approved mail access path (a Gmail/Outlook connector or `workspace_client` mail methods).
 4. Build filing context:
    - filename,
    - email subject,
@@ -198,7 +182,7 @@ For Gmail attachment downloads, use `google_api.py ... gmail {command}` from the
 5. Apply `drive-map.yaml` rules top-to-bottom.
 6. Resolve variables like `{client}`. If required variables are missing and a fallback exists, use fallback; otherwise ask once.
 7. Ensure the Drive folder exists, creating missing subfolders under the configured root when safe.
-8. Upload the file through `google_api.py ... drive upload`.
+8. Upload the file through an approved workspace access path (`drive_file.py upload` / `files_upload`).
 9. Optionally mark the email as read only after upload succeeds and the user has allowed it.
 10. Return the Drive link, final folder, and any rule used.
 
@@ -265,13 +249,13 @@ filed_documents:
 1. **Filing without metadata.** If `{client}` or `{vendor}` is needed and unknown, ask or use an explicit fallback.
 2. **Creating duplicate folders with spelling variants.** Search existing siblings before creating `Acme`, `ACME`, or `Acme Corp`.
 3. **Marking email read before upload succeeds.** Only mark read after Drive confirms upload.
-4. **Bypassing google_api.py.** All Google operations go through the google-workspace wrapper.
+4. **Bypassing the workspace layer.** All file operations go through an approved workspace access path (`drive_file.py` / `WorkspaceClient` / connector tools), never a hard-coded vendor API.
 5. **Over-filing from Daily Briefing.** Briefing mode suggests; user confirmation triggers action.
 
 ## Verification Checklist
 
 - [ ] Loaded `company.yaml` folder IDs and `drive-map.yaml` rules.
-- [ ] Used `google_api.py --account {account} --as {delegate} drive {command}` for Drive calls.
+- [ ] Used an approved workspace access path (`drive_file.py`, connector tools, or `workspace_client`) for file-store calls.
 - [ ] Rule match, fallback, and variables were reported.
 - [ ] Duplicate check ran before upload during sync.
 - [ ] Final response includes Drive links or precise failure reasons.
