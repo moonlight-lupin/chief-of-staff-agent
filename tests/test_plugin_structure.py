@@ -34,7 +34,7 @@ class TestPluginStructure:
         with open(PLUGIN_ROOT / "plugin.yaml") as f:
             data = yaml.safe_load(f)
         assert data["name"] == "chief-of-staff"
-        assert data["version"] == "0.3.2"
+        assert data["version"] == "0.3.3"
         assert data["license"] == "Apache-2.0"
         assert data["requires_skills"] == []
         assert "google-workspace" in data.get("optional_skills", [])

@@ -10,7 +10,7 @@ It can organise information, detect stale deals, extract invoice candidates, pre
 
 ### Observe → Understand → Suggest → Approve → Execute → Audit
 
-> **Status:** v0.3.2 internal beta  
+> **Status:** v0.3.3 internal beta  
 > **Runtime:** Python 3.11+  
 > **License:** Apache License 2.0
 
@@ -98,7 +98,15 @@ python shared/scripts/chief_of_staff.py smoke-test --summary
 
 The smoke test verifies that the main subsystems can run without modifying state, business records, or wiki pages.
 
-### 3. Run your first daily brief
+### 3. Generate the readiness report
+
+```bash
+python shared/scripts/chief_of_staff.py readiness --summary
+```
+
+A generated go/no-go report that aggregates configuration, workspace read/write capability, and subsystem health into two verdicts: ready for daily read-only operation, and ready for approved execution.
+
+### 4. Run your first daily brief
 
 ```bash
 python shared/scripts/chief_of_staff.py daily --summary
@@ -111,7 +119,7 @@ python shared/scripts/chief_of_staff.py daily --json
 python shared/scripts/chief_of_staff.py daily --markdown
 ```
 
-### 4. Ask naturally in Hermes
+### 5. Ask naturally in Hermes
 
 Try:
 

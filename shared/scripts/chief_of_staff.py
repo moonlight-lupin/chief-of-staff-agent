@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chief-of-Staff top-level entrypoint (v0.3.2).
+"""Chief-of-Staff top-level entrypoint (v0.3.3).
 
 READ-ONLY orchestration layer for the daily operating loop and subsystem
 summaries. This module must NEVER approve, execute, send, write, or mutate
@@ -33,7 +33,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -657,6 +657,13 @@ def build_recommended_commands(
             "python shared/scripts/state_tools.py inspect",
         )
 
+    # Confirm go/no-go readiness for daily operation
+    add(
+        8,
+        "Confirm go/no-go readiness for daily operation",
+        "python shared/scripts/chief_of_staff.py readiness --summary",
+    )
+
     # Always leave the operator with a next daily step if list is empty/short
     if not any(c["command"].endswith("daily --summary") for c in cmds):
         add(9, "Re-run the daily operating loop", "python shared/scripts/chief_of_staff.py daily --summary")
@@ -1215,6 +1222,319 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Readiness report (v0.3.3) — generated go/no-go check
+# ---------------------------------------------------------------------------
+
+# Row status vocabulary
+_R_PASS = "PASS"
+_R_FAIL = "FAIL"
+_R_WARN = "WARN"
+_R_NOT_TESTED = "NOT TESTED"
+
+# workspace_verify verification check names (interface contract with agent A)
+_VERIFY_CHECK_NAMES = [
+    "auth",
+    "mail_read",
+    "mail_folder_scoped",
+    "mail_tags_list",
+    "calendar_read",
+    "files_read",
+    "mail_draft",
+    "mail_tag_write",
+    "files_write",
+    "mail_send",
+    "calendar_write",
+]
+
+
+def _get_workspace_verify():
+    """Late/lazy import of shared/scripts/workspace_verify.
+
+    Wrapped so (a) tests can inject a fake by monkeypatching this function or
+    inserting a module into sys.modules, and (b) readiness still runs (with the
+    workspace rows marked NOT TESTED) if the module is somehow absent.
+    """
+    try:
+        import workspace_verify  # type: ignore
+    except ImportError:
+        return None
+    except Exception:  # pragma: no cover - defensive; treat any import trouble as absent
+        return None
+    return workspace_verify
+
+
+def _core_config_row(config: Any, config_path: str | None) -> tuple[str, str]:
+    """Row 1 — reuse doctor's config check logic (do not duplicate)."""
+    wanted = {"company_yaml", "config_sections", "project_root"}
+    if doctor_mod is not None and hasattr(doctor_mod, "run_checks"):
+        try:
+            results = doctor_mod.run_checks(fix=False, config=config_path)
+            picked = [r for r in results if getattr(r, "name", "") in wanted]
+            if picked:
+                fails = [r for r in picked if getattr(r, "status", "") == "fail"]
+                warns = [r for r in picked if getattr(r, "status", "") == "warn"]
+                if fails:
+                    return _R_FAIL, "; ".join(
+                        f"{getattr(r, 'name', '?')}: {getattr(r, 'detail', '')}" for r in fails
+                    )
+                if warns:
+                    return _R_WARN, "; ".join(
+                        f"{getattr(r, 'name', '?')}: {getattr(r, 'detail', '')}" for r in warns
+                    )
+                return _R_PASS, "company.yaml loads, project_root resolves, required sections present"
+        except Exception:
+            pass  # fall through to manual fallback
+
+    # Fallback when doctor is unavailable
+    if config is None:
+        return _R_FAIL, "company.yaml missing or invalid"
+    root = _resolve_project_root(config)
+    if root is None:
+        return _R_FAIL, "project_root not resolvable"
+    return _R_PASS, f"config loaded; project_root {root}"
+
+
+def _run_verification(config: Any) -> tuple[Mapping[str, Any] | None, str]:
+    """Call workspace_verify.run_verification(read-only). Never raises."""
+    wv = _get_workspace_verify()
+    if wv is None:
+        return None, "workspace_verify module unavailable"
+    if config is None:
+        return None, "config not loaded"
+    if not hasattr(wv, "run_verification"):
+        return None, "workspace_verify.run_verification missing"
+    try:
+        report = wv.run_verification(config, include_writes=False)
+    except Exception as exc:
+        return None, f"verification error: {exc}"
+    if not isinstance(report, Mapping):
+        return None, "verification returned no report"
+    return report, ""
+
+
+def _verify_check(report: Mapping[str, Any] | None, name: str, reason: str) -> tuple[str, str]:
+    """Map one workspace_verify check to a readiness row status/detail."""
+    if report is None:
+        return _R_NOT_TESTED, reason
+    checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
+    entry = checks.get(name) if isinstance(checks.get(name), Mapping) else {}
+    status = str(entry.get("status", "not_tested")).lower()
+    detail = str(entry.get("detail", "") or "") or name
+    mapped = {"pass": _R_PASS, "fail": _R_FAIL, "not_tested": _R_NOT_TESTED}.get(status, _R_NOT_TESTED)
+    return mapped, detail
+
+
+_DEGRADED_TAGS_WORDING = "email organisation features will be degraded"
+
+
+def _mail_read_row(report: Mapping[str, Any] | None, reason: str) -> tuple[str, str]:
+    """Row 3 — mail_read, with mail_folder_scoped + mail_tags_list folded in.
+
+    mail_folder_scoped is REQUIRED (the bundled daily queries rely on
+    folder-scoped search), so its failure is a hard FAIL — same as mail_read
+    itself. mail_tags_list is OPTIONAL: its failure only degrades to WARN and the
+    detail must carry the "email organisation features will be degraded" wording.
+    """
+    status, detail = _verify_check(report, "mail_read", reason)
+    if report is None or status != _R_PASS:
+        return status, detail
+    checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
+
+    # Required sub-check: folder-scoped search. Failure => FAIL.
+    fs = checks.get("mail_folder_scoped") if isinstance(checks.get("mail_folder_scoped"), Mapping) else {}
+    if str(fs.get("status", "")).lower() != "pass":
+        fs_detail = fs.get("detail") or fs.get("status") or "not tested"
+        return _R_FAIL, f"{detail} (mail_folder_scoped: {fs_detail})"
+
+    # Optional sub-check: tags list. Failure => WARN with the degraded wording.
+    tl = checks.get("mail_tags_list") if isinstance(checks.get("mail_tags_list"), Mapping) else {}
+    if str(tl.get("status", "")).lower() != "pass":
+        tl_detail = str(tl.get("detail") or tl.get("status") or "not tested")
+        warn = f"{detail} (mail_tags_list: {tl_detail}"
+        if _DEGRADED_TAGS_WORDING not in tl_detail:
+            warn += f"; {_DEGRADED_TAGS_WORDING}"
+        warn += ")"
+        return _R_WARN, warn
+
+    return status, detail
+
+
+def _optional_writes_row(report: Mapping[str, Any] | None, reason: str) -> tuple[str, str]:
+    """Row 8 — derived from write_ready."""
+    if report is None:
+        return _R_NOT_TESTED, reason
+    write_ready = str(report.get("write_ready", "partial")).lower()
+    if write_ready == "yes":
+        return _R_PASS, "provider write checks passed"
+    if write_ready == "no":
+        return _R_FAIL, "provider write checks failed"
+    provider = str(report.get("provider", "") or "<provider>")
+    return (
+        _R_NOT_TESTED,
+        "writes not exercised — run: python shared/scripts/connect_workspace.py "
+        f"--provider {provider} --verify-writes",
+    )
+
+
+def _review_queue_row(config: Any) -> tuple[str, str]:
+    """Row 6 — pending-actions store parses; count pending/approved/stuck."""
+    try:
+        rq = collect_review_queue_panel(config)
+        safety = collect_state_safety_panel(config)
+    except Exception as exc:
+        return _R_FAIL, f"review queue unreadable: {exc}"
+    by_state = rq.get("by_state") if isinstance(rq.get("by_state"), Mapping) else {}
+    pending = int(by_state.get("requested", 0) or 0)
+    approved = int(by_state.get("approved", 0) or 0)
+    stuck = int(safety.get("stuck_executing_count", 0) or 0)
+    malformed = int(safety.get("malformed_count", 0) or 0)
+    detail = f"{pending} pending, {approved} approved, {stuck} stuck"
+    if malformed:
+        return _R_FAIL, f"{detail}, {malformed} malformed state file(s)"
+    if stuck:
+        return _R_WARN, detail
+    return _R_PASS, detail
+
+
+def _daily_loop_row(config: Any, config_path: str | None) -> tuple[str, str]:
+    """Row 7 — read-only daily collection runs without raising (dry-run).
+
+    Reuses build_daily_payload/render_daily_summary; delivers/records nothing.
+    """
+    try:
+        payload = build_daily_payload(config, config_path)
+        text = render_daily_summary(payload)
+    except Exception as exc:
+        return _R_FAIL, f"daily loop raised: {exc}"
+    if isinstance(payload, dict) and "sections" in payload and text:
+        return _R_PASS, "read-only daily collection ran without errors"
+    return _R_FAIL, "daily payload incomplete"
+
+
+def build_readiness_payload(config: Any, config_path: str | None) -> dict[str, Any]:
+    """Aggregate config, workspace capability checks, and subsystem health."""
+    s1, d1 = _core_config_row(config, config_path)
+    report, reason = _run_verification(config)
+
+    s2, d2 = _verify_check(report, "auth", reason)
+    s3, d3 = _mail_read_row(report, reason)
+    s4, d4 = _verify_check(report, "calendar_read", reason)
+    s5, d5 = _verify_check(report, "files_read", reason)
+    s6, d6 = _review_queue_row(config)
+    s7, d7 = _daily_loop_row(config, config_path)
+    s8, d8 = _optional_writes_row(report, reason)
+
+    rows = [
+        {"key": "core_config", "label": "Core configuration", "status": s1, "detail": d1},
+        {"key": "workspace_auth", "label": "Workspace authentication", "status": s2, "detail": d2},
+        {"key": "mail_read", "label": "Mail read", "status": s3, "detail": d3},
+        {"key": "calendar_read", "label": "Calendar read", "status": s4, "detail": d4},
+        {"key": "files_read", "label": "Files read", "status": s5, "detail": d5},
+        {"key": "review_queue", "label": "Review queue", "status": s6, "detail": d6},
+        {"key": "daily_loop", "label": "Daily loop", "status": s7, "detail": d7},
+        {"key": "optional_writes", "label": "Optional writes", "status": s8, "detail": d8},
+    ]
+
+    # Read-only verdict: rows 1–5 and 7 must all PASS (WARN allowed).
+    gating = [s1, s2, s3, s4, s5, s7]
+    read_ready = all(s in (_R_PASS, _R_WARN) for s in gating)
+    read_verdict = "YES" if read_ready else "NO"
+
+    if not read_ready:
+        exec_verdict = "NO"
+    elif s8 == _R_PASS:
+        exec_verdict = "YES"
+    elif s8 == _R_NOT_TESTED:
+        exec_verdict = "PARTIAL"
+    else:  # writes FAIL
+        exec_verdict = "NO"
+
+    payload: dict[str, Any] = {
+        "version": VERSION,
+        "generated_at": _now_iso(),
+        "mode": "readiness",
+        "safety": _safety_block(),
+        "rows": rows,
+        "verdicts": {
+            "read_only_ready": read_verdict,
+            "approved_execution_ready": exec_verdict,
+        },
+        "verification": dict(report) if isinstance(report, Mapping) else None,
+    }
+    if report is None:
+        payload["verification_skipped_reason"] = reason
+    if _IMPORT_ERRORS:
+        payload["import_errors"] = dict(_IMPORT_ERRORS)
+    return payload
+
+
+def render_readiness_summary(payload: Mapping[str, Any]) -> str:
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    verdicts = payload.get("verdicts") if isinstance(payload.get("verdicts"), Mapping) else {}
+    lines: list[str] = ["Chief of Staff Readiness"]
+    label_w = 26
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        label = str(row.get("label", ""))
+        status = str(row.get("status", ""))
+        detail = str(row.get("detail", ""))
+        line = f"  {label.ljust(label_w)}{status}"
+        # Surface the reason (and pointers) for anything not fully passing.
+        if detail and status != _R_PASS:
+            line += f"  — {detail}"
+        lines.append(line)
+    lines.append(
+        f"  Ready for daily read-only operation: {verdicts.get('read_only_ready', 'NO')}"
+    )
+    lines.append(
+        f"  Ready for approved execution: {verdicts.get('approved_execution_ready', 'NO')}"
+    )
+    return "\n".join(lines)
+
+
+def render_readiness_markdown(payload: Mapping[str, Any]) -> str:
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    verdicts = payload.get("verdicts") if isinstance(payload.get("verdicts"), Mapping) else {}
+    lines: list[str] = [
+        "# Chief of Staff Readiness",
+        "",
+        "| Check | Status | Detail |",
+        "| --- | --- | --- |",
+    ]
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        label = str(row.get("label", ""))
+        status = str(row.get("status", ""))
+        detail = str(row.get("detail", "")).replace("|", "\\|")
+        lines.append(f"| {label} | {status} | {detail} |")
+    lines.append("")
+    lines.append(
+        f"**Ready for daily read-only operation:** {verdicts.get('read_only_ready', 'NO')}"
+    )
+    lines.append(
+        f"**Ready for approved execution:** {verdicts.get('approved_execution_ready', 'NO')}"
+    )
+    return "\n".join(lines)
+
+
+def cmd_readiness(args: argparse.Namespace) -> int:
+    """Generated go/no-go readiness report (read-only)."""
+    config_path = getattr(args, "config", None)
+    config = _safe_load_config(config_path)
+    payload = build_readiness_payload(config, config_path)
+    if getattr(args, "json", False):
+        print(_json_dump(payload))
+    elif getattr(args, "markdown", False):
+        print(render_readiness_markdown(payload))
+    else:
+        print(render_readiness_summary(payload))
+    verdicts = payload.get("verdicts") if isinstance(payload.get("verdicts"), Mapping) else {}
+    return 0 if verdicts.get("read_only_ready") == "YES" else 1
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1222,7 +1542,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chief_of_staff.py",
         description=(
-            "Chief-of-Staff v0.3.2 — read-only daily operating loop and subsystem summaries. "
+            "Chief-of-Staff v0.3.3 — read-only daily operating loop and subsystem summaries. "
             "Never approves, executes, or mutates state."
         ),
     )
@@ -1268,6 +1588,16 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--summary", action="store_true", default=True)
     smoke.add_argument("--json", action="store_true")
     smoke.set_defaults(func=cmd_smoke_test)
+
+    readiness = sub.add_parser(
+        "readiness",
+        help="Generated go/no-go readiness report (read-only)",
+    )
+    r_out = readiness.add_mutually_exclusive_group()
+    r_out.add_argument("--summary", action="store_true", default=True, help="Human-readable table (default)")
+    r_out.add_argument("--json", action="store_true", help="Structured JSON (rows + verdicts + verification)")
+    r_out.add_argument("--markdown", action="store_true", help="Markdown formatted")
+    readiness.set_defaults(func=cmd_readiness)
 
     return parser
 
