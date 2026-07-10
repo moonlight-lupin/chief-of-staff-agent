@@ -51,26 +51,6 @@ def get_pubsub_service_account() -> str | None:
     return os.getenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT")
 
 
-def _decode_jwt_unverified(token: str) -> dict[str, Any] | None:
-    """Decode JWT payload without verifying signature (for inspection).
-
-    In production, you should verify the signature using Google's public keys.
-    For internal beta, we verify issuer/audience/email claims.
-    """
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-        # Decode payload (middle segment)
-        payload_b64 = parts[1]
-        # Add padding
-        payload_b64 += "=" * (-len(payload_b64) % 4)
-        payload_bytes = base64.urlsafe_b64decode(payload_b64)
-        return json.loads(payload_bytes)
-    except Exception:
-        return None
-
-
 def verify_pubsub_oidc(authorization_header: str | None) -> tuple[bool, str]:
     """Verify a Gmail Pub/Sub push notification OIDC JWT.
 
@@ -313,14 +293,20 @@ def validate_secret_config() -> dict[str, Any]:
     if not channel_token:
         issues.append("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN not set (Calendar/Drive endpoints disabled)")
 
+    # Gmail: native Pub/Sub (OIDC) or HMAC fallback (dev/proxy)
+    gmail_native = bool(pubsub_aud and pubsub_sa)
+    gmail_hmac = bool(secret and len(secret) >= 16)
+    if not gmail_native and not gmail_hmac:
+        issues.append("Gmail endpoint has no authentication configured (need OIDC or HMAC)")
+
     return {
         "valid": len(issues) == 0,
         "issues": issues,
         "endpoints": {
-            "gmail": "enabled" if pubsub_aud and pubsub_sa else "disabled",
+            "gmail": "native (OIDC)" if gmail_native else ("HMAC (dev/proxy)" if gmail_hmac else "disabled"),
             "calendar": "enabled" if channel_token else "disabled",
             "drive": "enabled" if channel_token else "disabled",
-            "generic": "enabled" if secret and len(secret) >= 16 else "disabled",
+            "generic": "enabled" if gmail_hmac else "disabled",
         },
         "secret_length": len(secret) if secret else 0,
         "pubsub_audience": "configured" if pubsub_aud else "missing",

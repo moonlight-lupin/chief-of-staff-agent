@@ -636,7 +636,7 @@ class TestValidateSecretConfig:
         from webhook_security import validate_secret_config
         result = validate_secret_config()
         assert result["valid"] is True
-        assert result["endpoints"]["gmail"] == "enabled"
+        assert result["endpoints"]["gmail"] == "native (OIDC)"
         assert result["endpoints"]["calendar"] == "enabled"
         assert result["endpoints"]["drive"] == "enabled"
         assert result["endpoints"]["generic"] == "enabled"
@@ -647,7 +647,7 @@ class TestValidateSecretConfig:
         assert result["valid"] is False
         assert result["endpoints"]["calendar"] == "disabled"
         assert result["endpoints"]["drive"] == "disabled"
-        assert result["endpoints"]["gmail"] == "enabled"
+        assert result["endpoints"]["gmail"] == "native (OIDC)"
 
     def test_nothing_configured(self, temp_project, monkeypatch):
         monkeypatch.delenv("CHIEF_OF_STAFF_WEBHOOK_SECRET", raising=False)
