@@ -153,12 +153,16 @@ def _provider_for_action(action_type: str) -> str:
 # ─── Storage ──────────────────────────────────────────────────
 
 
-def _get_hermes_home_fallback() -> Path:
-    """Hermes home for fallback paths (env-configurable)."""
+def _get_default_project_root_fallback() -> Path:
+    """Default project root for fallback paths (env-configurable).
+
+    Returns <hermes_home>/projects/default, NOT <hermes_home> itself,
+    so state files like .events.json go under projects/default/ not
+    polluting the Hermes home root.
+    """
     env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
-    if env:
-        return Path(env).expanduser()
-    return Path.home() / ".hermes"
+    home = Path(env).expanduser() if env else Path.home() / ".hermes"
+    return home / "projects" / "default"
 
 def _project_root(config: Any) -> Path:
     root = None
@@ -168,7 +172,7 @@ def _project_root(config: Any) -> Path:
             root = paths.get("project_root")
     if not root:
         root = os.getenv("CHIEF_OF_STAFF_PROJECT_ROOT",
-                         str(_get_hermes_home_fallback()))
+                         str(_get_default_project_root_fallback()))
     return Path(str(root)).expanduser()
 
 
