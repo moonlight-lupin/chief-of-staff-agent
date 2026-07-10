@@ -107,6 +107,54 @@ class TestMailSearch:
                 out = client.mail_search("is:unread")
         assert out == []
 
+    def _record_request(self, client):
+        """Patch _request to record (method, path, params) and return an empty
+        Graph value payload. Returns the calls list."""
+        calls: list[tuple] = []
+
+        def _fake(method, path, **kwargs):
+            calls.append((method, path, kwargs.get("params") or {}))
+            return {"value": []}
+
+        client._request = _fake
+        return calls
+
+    def test_mail_search_folder_scope_uses_mailfolders_path(self, client):
+        # in:inbox -> folder scope applied via URL path, NOT a $filter.
+        calls = self._record_request(client)
+        client.mail_search("in:inbox is:unread")
+        method, path, params = calls[-1]
+        assert method == "GET"
+        assert "/mailFolders/inbox/messages" in path
+        # folder is out-of-band: no parentFolderId leaks into $filter.
+        assert "parentFolderId" not in params.get("$filter", "")
+        assert params.get("$filter") == "isRead eq false"
+
+    def test_mail_search_no_folder_uses_plain_messages_path(self, client):
+        calls = self._record_request(client)
+        client.mail_search("is:unread")
+        method, path, params = calls[-1]
+        assert path.endswith("/messages")
+        assert "mailFolders" not in path
+        assert params.get("$filter") == "isRead eq false"
+
+    def test_mail_search_system_label_inbox_uses_mailfolders_path(self, client):
+        # label:INBOX is a Gmail SYSTEM label -> folder scope, not a category.
+        calls = self._record_request(client)
+        client.mail_search("label:INBOX")
+        _, path, params = calls[-1]
+        assert "/mailFolders/inbox/messages" in path
+        assert "categories" not in params.get("$filter", "")
+
+    def test_mail_search_non_system_label_stays_on_messages_with_category(self, client):
+        # label:Clients is a NON-system label -> Outlook category filter, no folder.
+        calls = self._record_request(client)
+        client.mail_search("label:Clients")
+        _, path, params = calls[-1]
+        assert path.endswith("/messages")
+        assert "mailFolders" not in path
+        assert params.get("$filter") == "categories/any(c:c eq 'Clients')"
+
 
 class TestCalendarList:
     def test_calendar_list_normalization_with_joinurl(self, client):

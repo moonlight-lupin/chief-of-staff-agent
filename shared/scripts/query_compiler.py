@@ -23,7 +23,11 @@ A "query model" is either:
 
 * dialect ``"gmail"`` -> a query string
   (``"is:unread from:x newer_than:2d has:attachment"``).
-* dialect ``"m365"``  -> ``{"filter": str | None, "search": str | None}``.
+* dialect ``"m365"``  -> ``{"folder": str | None, "filter": str | None,
+  "search": str | None}`` — folder scope is carried OUT-OF-BAND (the Graph
+  messages endpoint scopes folders by URL path,
+  ``/mailFolders/{well-known-or-id}/messages``, NOT by a ``$filter``), so it
+  survives the KQL fold unconditionally.
 
 The ``raw`` override wins per-dialect: if ``raw["gmail"]`` / ``raw["m365"]`` is
 present it is returned directly for that dialect.
@@ -31,9 +35,18 @@ present it is returned directly for that dialect.
 Supported Gmail operators (parser -> neutral field -> m365 output)
 ------------------------------------------------------------------
     is:unread / is:read       -> unread / read      -> isRead eq false/true
-    in:inbox / in:anywhere    -> folder             -> parentFolderId eq 'inbox'
-                                                        (anywhere = no scope)
+    in:inbox / in:anywhere    -> folder             -> out-of-band folder scope
+                                                        (well-known mailFolder name:
+                                                         inbox/sentitems/drafts/
+                                                         deleteditems/junkemail;
+                                                         anywhere/all = None)
+    label:INBOX (system) ...  -> folder/unread/text -> out-of-band folder scope
+                                                        (INBOX/SENT/DRAFT/TRASH/SPAM),
+                                                        the unread flag (UNREAD), or
+                                                        free-text $search + warning
+                                                        (STARRED/IMPORTANT)
     label:X / category:X      -> tag                -> categories/any(c:c eq 'X')
+                                                        (NON-system labels only)
     from:addr                 -> from_sender        -> from/emailAddress/address eq 'addr'
     from:@domain              -> domain             -> $search from:@domain
     from:(a OR b)             -> from_any           -> $search (from:a OR from:b)
@@ -53,9 +66,11 @@ Microsoft Graph rule (messages): ``$filter`` and ``$search`` may NOT be combined
 on ``/messages``.  If both would be produced we FOLD everything into a single
 ``$search`` KQL string (``isread:false``, ``from:x``, ``hasattachments:true``,
 ``received>=YYYY-MM-DD``, ``subject:x`` and ``category:...`` are valid KQL) and
-set ``filter=None``.  See :func:`_m365_fold_to_kql`.  The ``in:`` folder scope
-cannot be expressed in KQL, so it is dropped when folding (best-effort; the
-Graph messages endpoint scopes by URL path, not by query).
+set ``filter=None``.  See :func:`_m365_fold_to_kql`.  Folder scope is NEVER folded
+and NEVER dropped: it is resolved to a well-known mailFolder name and returned in
+the out-of-band ``folder`` key regardless of whether a fold happens, because the
+Graph messages endpoint scopes folders by URL path
+(``/mailFolders/{name}/messages``), not by ``$filter``/``$search``.
 
 Untranslatable-token policy (NO SILENT EMPTINESS)
 -------------------------------------------------
@@ -63,9 +78,12 @@ If the parser meets a token it cannot map to a neutral field (e.g. an unknown
 operator like ``weirdop:x`` or ``is:starred``), it does NOT drop it: the raw
 token is carried as free-text ``$search`` and a :class:`QueryTranslationWarning`
 is emitted naming the token.  Consequently ``compile_query(<non-empty string>,
-"m365")`` never returns ``{"filter": None, "search": None}``; if a translation
-would be empty a :class:`ValueError` is raised instead of silently returning a
-query that matches everything (or nothing).
+"m365")`` never returns an all-``None`` result.  The non-empty check now considers
+the out-of-band ``folder`` too, so a folder-only query like ``in:inbox`` is a
+valid non-empty translation (``{"folder": "inbox", "filter": None,
+"search": None}``).  Only when all three keys would be ``None`` is a
+:class:`ValueError` raised, instead of silently returning a query that matches
+everything (or nothing).
 
 Pure functions, no I/O.  ``now`` is injectable so date math is deterministic in
 tests.
@@ -360,14 +378,19 @@ def _apply_from_single(val: str, model: dict[str, Any]) -> None:
         model["from_sender"] = val
 
 
-def _carry_unknown(raw: str, model: dict[str, Any], neg: bool) -> None:
-    """Carry an untranslatable token as free text and warn (no silent drop)."""
+def _warn_untranslatable(raw: str) -> None:
+    """Emit a QueryTranslationWarning naming a token carried as best-effort text."""
     warnings.warn(
         f"query_compiler: could not translate token {raw!r}; "
         f"carrying it as free-text $search",
         QueryTranslationWarning,
-        stacklevel=2,
+        stacklevel=3,
     )
+
+
+def _carry_unknown(raw: str, model: dict[str, Any], neg: bool) -> None:
+    """Carry an untranslatable token as free text and warn (no silent drop)."""
+    _warn_untranslatable(raw)
     if neg:
         model.setdefault("negations", []).append(_kql_text(raw))
     else:
@@ -486,6 +509,103 @@ def _compile_gmail(model: dict[str, Any]) -> str:
 
 # ── Microsoft 365 (Graph) dialect ──────────────────────────────────────
 
+# Gmail ``in:`` folder-scope values (and the neutral ``folder`` field) mapped to
+# Graph well-known mailFolder names.  Graph's parentFolderId is an opaque unique
+# id, NOT a well-known name, so folder scope is applied via the URL path
+# ``/mailFolders/{name}/messages`` — never as a ``$filter``.  Identity entries
+# let a well-known name be passed through the neutral ``folder`` field directly.
+_M365_IN_FOLDER_MAP = {
+    "inbox": "inbox",
+    "sent": "sentitems",
+    "sentitems": "sentitems",
+    "drafts": "drafts",
+    "draft": "drafts",
+    "trash": "deleteditems",
+    "deleteditems": "deleteditems",
+    "spam": "junkemail",
+    "junk": "junkemail",
+    "junkemail": "junkemail",
+}
+
+# ``in:`` / ``folder`` values meaning "no folder scope" (explicit whole-mailbox).
+_M365_NO_SCOPE = {"anywhere", "all", "allmail"}
+
+# Gmail SYSTEM labels: ``label:NAME`` (and neutral ``tag``) that are NOT Outlook
+# categories but system folders.  Case-insensitive.
+_M365_SYSTEM_LABEL_FOLDER = {
+    "inbox": "inbox",
+    "sent": "sentitems",
+    "draft": "drafts",
+    "drafts": "drafts",
+    "trash": "deleteditems",
+    "spam": "junkemail",
+    "junk": "junkemail",
+}
+
+
+def _resolve_m365_folder(model: dict[str, Any]) -> str | None:
+    """Resolve out-of-band folder scope from the ``folder`` field and any
+    system-label ``tag``.
+
+    Mutates ``model`` in place (it is a private copy owned by :func:`_compile_m365`):
+      * pops ``folder`` — folder scope is carried out-of-band, never as a
+        parentFolderId ``$filter``;
+      * when ``tag`` is a Gmail system label, pops/rewrites it: system-folder
+        labels (INBOX/SENT/DRAFT/TRASH/SPAM/JUNK) become folder scope, ``UNREAD``
+        sets the unread flag, and STARRED/IMPORTANT are carried as free-text
+        ``$search`` with a :class:`QueryTranslationWarning` (no folder equivalent).
+        NON-system labels are left untouched so they compile to a category filter.
+
+    Returns the well-known Graph folder name, or ``None`` for no scope.  If an
+    explicit ``in:``/``folder`` scope and a system-label-derived folder conflict,
+    the first (the explicit ``folder``) is kept and a warning is emitted.
+    """
+    folder: str | None = None
+    folder_specified = False
+
+    raw_folder = model.pop("folder", None)
+    if raw_folder is not None:
+        key = str(raw_folder).strip().lower()
+        if key in _M365_NO_SCOPE:
+            folder_specified = True  # explicit whole-mailbox (in:anywhere)
+        elif key in _M365_IN_FOLDER_MAP:
+            folder = _M365_IN_FOLDER_MAP[key]
+            folder_specified = True
+        else:
+            # Unknown folder name -> carry the value as best-effort free text + warn.
+            _warn_untranslatable(f"in:{raw_folder}")
+            _append_text(model, str(raw_folder))
+
+    tag = model.get("tag")
+    if tag is not None:
+        key = str(tag).strip().lower()
+        if key in _M365_SYSTEM_LABEL_FOLDER:
+            model.pop("tag")
+            mapped = _M365_SYSTEM_LABEL_FOLDER[key]
+            if not folder_specified:
+                folder = mapped
+                folder_specified = True
+            elif folder != mapped:
+                warnings.warn(
+                    f"query_compiler: folder scope conflict — keeping {folder!r} "
+                    f"and ignoring system label {tag!r} (-> {mapped!r})",
+                    QueryTranslationWarning,
+                    stacklevel=2,
+                )
+        elif key == "unread":
+            # Gmail's system label UNREAD means is:unread.
+            model.pop("tag")
+            model["unread"] = True
+        elif key in ("starred", "important"):
+            # No Outlook folder/flag equivalent -> best-effort free text + warn.
+            model.pop("tag")
+            _warn_untranslatable(f"label:{tag}")
+            _append_text(model, str(tag))
+        # else: non-system label -> leave as `tag` for a category filter.
+
+    return folder
+
+
 def _m365_search_tokens(model: dict[str, Any]) -> list[str]:
     """KQL tokens for the ``$search``-eligible neutral fields."""
     tokens: list[str] = []
@@ -521,9 +641,9 @@ def _m365_filter_parts(model: dict[str, Any], now: datetime) -> list[str]:
         parts.append(
             f"from/emailAddress/address eq '{_odata_escape(model['from_sender'])}'"
         )
-    folder = model.get("folder")
-    if folder and folder.lower() not in ("anywhere", "all", "allmail"):
-        parts.append(f"parentFolderId eq '{_odata_escape(folder)}'")
+    # NB: folder scope is resolved out-of-band by _resolve_m365_folder and popped
+    # before this runs — it is NEVER emitted as a parentFolderId $filter (that id
+    # is opaque, not the well-known folder name).
     if model.get("newer_than_days") is not None:
         threshold = now - timedelta(days=int(model["newer_than_days"]))
         parts.append(f"receivedDateTime ge {_rfc3339(threshold)}")
@@ -541,8 +661,9 @@ def _m365_fold_to_kql(model: dict[str, Any], now: datetime) -> str:
     """Fold the entire model into a single Graph ``$search`` KQL string.
 
     Used when both a ``$filter`` and a ``$search`` would otherwise be produced,
-    which Graph forbids on ``/messages``.  The ``in:`` folder scope has no KQL
-    representation and is dropped here (best-effort; documented).
+    which Graph forbids on ``/messages``.  Folder scope is NOT handled here: it is
+    resolved out-of-band by :func:`_resolve_m365_folder` (and popped from ``model``)
+    before folding, so it survives the fold unconditionally via the URL path.
     """
     tokens: list[str] = []
     if model.get("unread"):
@@ -587,18 +708,26 @@ def _compile_m365(model: dict[str, Any], now: datetime) -> dict[str, str | None]
     if isinstance(raw, dict) and "m365" in raw:
         m = raw["m365"]
         if isinstance(m, dict):
-            return {"filter": m.get("filter"), "search": m.get("search")}
+            return {"folder": m.get("folder"),
+                    "filter": m.get("filter"), "search": m.get("search")}
         # A bare string raw override is treated as a $search KQL string.
-        return {"filter": None, "search": str(m)}
+        return {"folder": None, "filter": None, "search": str(m)}
+
+    # Work on a private copy: _resolve_m365_folder pops/rewrites folder + tag.
+    model = dict(model)
+    folder = _resolve_m365_folder(model)
 
     filter_parts = _m365_filter_parts(model, now)
     search_parts = _m365_search_tokens(model)
 
     # Graph forbids combining $filter + $search on /messages -> fold to KQL.
+    # Folder scope is out-of-band, so it is preserved across the fold.
     if filter_parts and search_parts:
-        return {"filter": None, "search": _m365_fold_to_kql(model, now)}
+        return {"folder": folder, "filter": None,
+                "search": _m365_fold_to_kql(model, now)}
 
     return {
+        "folder": folder,
         "filter": " and ".join(filter_parts) if filter_parts else None,
         "search": " ".join(search_parts) if search_parts else None,
     }
@@ -619,7 +748,8 @@ def compile_query(
         now: reference time for relative-date math (defaults to UTC now).
 
     Returns:
-        ``str`` for the gmail dialect; ``{"filter": .., "search": ..}`` for m365.
+        ``str`` for the gmail dialect; ``{"folder": .., "filter": .., "search": ..}``
+        for m365 (folder scope carried out-of-band; see the module docstring).
 
     Raises:
         ValueError: for an unknown dialect, or when an m365 translation of a
@@ -642,7 +772,9 @@ def compile_query(
                 return {"filter": None, "search": None}
             parsed = parse_gmail_query(model)
             result = _compile_m365(parsed, now)
-            if result.get("filter") is None and result.get("search") is None:
+            if (result.get("folder") is None
+                    and result.get("filter") is None
+                    and result.get("search") is None):
                 raise ValueError(
                     f"could not translate query to m365 (empty result): {model!r}"
                 )

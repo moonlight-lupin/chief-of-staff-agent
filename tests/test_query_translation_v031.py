@@ -75,7 +75,8 @@ class TestBundleCoverage:
             warnings.simplefilter("ignore", QueryTranslationWarning)
             out = compile_query(rendered, "m365", now=NOW)
         assert isinstance(out, dict)
-        assert out.get("filter") or out.get("search"), (
+        # Non-empty now considers folder scope too (carried out-of-band).
+        assert out.get("folder") or out.get("filter") or out.get("search"), (
             f"{tmpl['name']} translated to an EMPTY m365 query: {out}"
         )
 
@@ -95,6 +96,8 @@ class TestM365ExactTranslation:
     def test_unread_priority_top_level_or_group_folds(self):
         # in:inbox is:unread newer_than:14d ("urgent" OR ... OR "deadline")
         out = compile_query(self.q["unread_priority"], "m365", now=NOW)
+        # Folder scope is carried OUT-OF-BAND and MUST survive the KQL fold.
+        assert out["folder"] == "inbox"
         assert out["filter"] is None
         assert out["search"] == (
             "isread:false received>=2026-06-26 "
@@ -120,12 +123,13 @@ class TestM365ExactTranslation:
         assert out["search"] == "received>=2026-06-10 subject:invoice Acme"
 
     def test_recent_unread_all_filter_no_fold(self):
-        # is:unread newer_than:3d label:INBOX -> pure $filter, no $search
+        # is:unread newer_than:3d label:INBOX -> INBOX is a Gmail SYSTEM label, so
+        # it maps to out-of-band folder scope, NOT an Outlook category filter.
         out = compile_query(self.q["recent_unread"], "m365", now=NOW)
+        assert out["folder"] == "inbox"
         assert out["search"] is None
         assert out["filter"] == (
-            "isRead eq false and receivedDateTime ge 2026-07-07T12:00:00Z "
-            "and categories/any(c:c eq 'INBOX')"
+            "isRead eq false and receivedDateTime ge 2026-07-07T12:00:00Z"
         )
 
     def test_client_documents_has_attachment_and_newer(self):
@@ -170,11 +174,15 @@ class TestRuntimeLiterals:
     ])
     def test_literal_compiles_non_empty_m365(self, literal):
         out = compile_query(literal, "m365", now=NOW)
-        assert out.get("filter") or out.get("search"), literal
+        # "in:inbox" is folder-only, which is a valid non-empty translation.
+        assert out.get("folder") or out.get("filter") or out.get("search"), literal
 
-    def test_in_inbox_maps_to_folder_filter(self):
+    def test_in_inbox_maps_to_out_of_band_folder(self):
+        # Graph's parentFolderId is an opaque id, NOT the well-known name 'inbox';
+        # folder scope is carried out-of-band and applied via the URL path.
         assert compile_query("in:inbox", "m365", now=NOW) == {
-            "filter": "parentFolderId eq 'inbox'",
+            "folder": "inbox",
+            "filter": None,
             "search": None,
         }
 
@@ -218,7 +226,8 @@ class TestNoSilentEmptiness:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", QueryTranslationWarning)
                 out = compile_query(rendered, "m365", now=NOW)
-            assert not (out["filter"] is None and out["search"] is None)
+            assert not (out["folder"] is None and out["filter"] is None
+                        and out["search"] is None)
 
 
 # ── Parser-level unit checks for operators in the bundle ───────────────

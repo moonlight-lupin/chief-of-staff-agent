@@ -288,6 +288,18 @@ def cmd_execute(args: argparse.Namespace) -> int:
     method_name = meta["provider_method"]
     client = get_client(cfg)
 
+    # Capability gate — refuse an approved action the provider cannot support
+    # (e.g. m365 calendar.cancel, whose capability is False) BEFORE invoking any
+    # provider method. Mirrors webhook_events.cmd_execute exactly: the action is
+    # already in 'executing' state (mark_executing above), so mark_failed
+    # transitions it back to 'approved' with last_error recorded for retry.
+    from workspace_capabilities import require_capability
+    unsupported = require_capability(client, action_type, target=action.get("target", ""))
+    if unsupported:
+        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}")
+        print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
+        return 1
+
     # Establish the approved-execution context — the explicit approval IS the
     # confirmation. Set AUTO_APPROVE (so reversible SAFE_WRITE actions such as
     # calendar.cancel pass the non-interactive gate) and ALLOW_DESTRUCTIVE, then
@@ -324,9 +336,19 @@ def cmd_execute(args: argparse.Namespace) -> int:
         else:
             os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
 
+    # Check the provider result BEFORE marking executed — a provider failure
+    # (success=False) must transition the action to failed (back to 'approved'
+    # for retry), NOT be recorded as executed. Mirrors webhook_events.cmd_execute.
+    success = result.get("success", False) if isinstance(result, dict) else True
+    if not success:
+        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
+        mark_failed(cfg, args.action_id, error)
+        print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+        return 1
+
     mark_executed(cfg, args.action_id, result)
     print_result(result, args.summary, f"{meta['label']}: {action['target']}")
-    return 0 if result.get("success") else 1
+    return 0
 
 
 def cmd_summary(args: argparse.Namespace) -> int:

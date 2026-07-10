@@ -12,7 +12,7 @@ SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
 if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
-from query_compiler import compile_query  # noqa: E402
+from query_compiler import compile_query, QueryTranslationWarning  # noqa: E402
 
 NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -52,7 +52,8 @@ class TestGmailDialect:
 
 class TestM365Dialect:
     def test_string_model_passthrough_to_search(self):
-        assert compile_query("hello", "m365") == {"filter": None, "search": "hello"}
+        assert compile_query("hello", "m365") == {
+            "folder": None, "filter": None, "search": "hello"}
 
     def test_filter_only(self):
         r = compile_query({"unread": True, "from_sender": "a@b.com"}, "m365", now=NOW)
@@ -100,15 +101,91 @@ class TestM365Dialect:
             {"unread": True, "raw": {"m365": {"filter": "importance eq 'high'", "search": None}}},
             "m365", now=NOW,
         )
-        assert r == {"filter": "importance eq 'high'", "search": None}
+        assert r == {"folder": None, "filter": "importance eq 'high'", "search": None}
 
     def test_raw_string_override_is_search(self):
         r = compile_query({"raw": {"m365": "from:ceo"}}, "m365", now=NOW)
-        assert r == {"filter": None, "search": "from:ceo"}
+        assert r == {"folder": None, "filter": None, "search": "from:ceo"}
 
     def test_domain_goes_to_search(self):
         r = compile_query({"domain": "acme.com"}, "m365", now=NOW)
-        assert r == {"filter": None, "search": "from:acme.com"}
+        assert r == {"folder": None, "filter": None, "search": "from:acme.com"}
+
+    # ── Folder scope carried out-of-band (not a parentFolderId $filter) ──
+
+    def test_in_inbox_is_out_of_band_folder(self):
+        assert compile_query("in:inbox", "m365", now=NOW) == {
+            "folder": "inbox", "filter": None, "search": None}
+
+    def test_in_scope_well_known_folder_map(self):
+        cases = {
+            "in:sent": "sentitems",
+            "in:drafts": "drafts",
+            "in:draft": "drafts",
+            "in:trash": "deleteditems",
+            "in:spam": "junkemail",
+        }
+        for query, expected in cases.items():
+            out = compile_query(query, "m365", now=NOW)
+            assert out == {"folder": expected, "filter": None, "search": None}, query
+
+    def test_in_anywhere_is_no_scope(self):
+        # in:anywhere is an explicit whole-mailbox scope -> folder None, and with
+        # nothing else it is an empty translation (ValueError).
+        with pytest.raises(ValueError):
+            compile_query("in:anywhere", "m365", now=NOW)
+
+    def test_folder_survives_kql_fold(self):
+        # in:inbox + a filter term + a search term -> fold, but folder is kept.
+        out = compile_query("in:inbox is:unread subject:invoice", "m365", now=NOW)
+        assert out["folder"] == "inbox"
+        assert out["filter"] is None
+        assert out["search"] == "isread:false subject:invoice"
+
+    def test_dict_folder_field_maps_to_well_known(self):
+        out = compile_query({"folder": "sent", "unread": True}, "m365", now=NOW)
+        assert out["folder"] == "sentitems"
+        assert out["filter"] == "isRead eq false"
+        assert out["search"] is None
+
+    # ── System labels map to folders/flags, NOT categories ──────────────
+
+    def test_system_label_inbox_maps_to_folder_not_category(self):
+        out = compile_query("label:INBOX", "m365", now=NOW)
+        assert out == {"folder": "inbox", "filter": None, "search": None}
+
+    def test_system_label_is_case_insensitive(self):
+        out = compile_query("label:sent", "m365", now=NOW)
+        assert out == {"folder": "sentitems", "filter": None, "search": None}
+
+    def test_system_label_unread_sets_unread_flag(self):
+        out = compile_query("label:UNREAD", "m365", now=NOW)
+        assert out == {"folder": None, "filter": "isRead eq false", "search": None}
+
+    def test_system_label_starred_carried_as_search_with_warning(self):
+        with pytest.warns(QueryTranslationWarning):
+            out = compile_query("label:STARRED", "m365", now=NOW)
+        assert out["folder"] is None
+        assert out["filter"] is None
+        assert out["search"] == "STARRED"
+
+    def test_non_system_label_is_category_filter(self):
+        out = compile_query("label:Clients", "m365", now=NOW)
+        assert out == {
+            "folder": None,
+            "filter": "categories/any(c:c eq 'Clients')",
+            "search": None,
+        }
+
+    def test_dict_tag_system_label_maps_to_folder(self):
+        out = compile_query({"tag": "INBOX"}, "m365", now=NOW)
+        assert out == {"folder": "inbox", "filter": None, "search": None}
+
+    def test_folder_conflict_keeps_first_and_warns(self):
+        # in:inbox (folder inbox) + label:SENT (system -> sentitems) conflict.
+        with pytest.warns(QueryTranslationWarning):
+            out = compile_query("in:inbox label:SENT", "m365", now=NOW)
+        assert out["folder"] == "inbox"
 
 
 def test_unknown_dialect_raises():

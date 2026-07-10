@@ -340,7 +340,14 @@ class M365GraphClient(WorkspaceClient):
                 params["$filter"] = compiled["filter"]
             if compiled.get("search"):
                 params["$search"] = f'"{compiled["search"]}"'
-            data = self._request("GET", f"{self._user_base()}/messages", params=params)
+            # Folder scope is carried out-of-band: Graph scopes folders by URL
+            # path (/mailFolders/{well-known-or-id}/messages), NOT by $filter.
+            folder = compiled.get("folder")
+            if folder:
+                path = f"{self._user_base()}/mailFolders/{folder}/messages"
+            else:
+                path = f"{self._user_base()}/messages"
+            data = self._request("GET", path, params=params)
             value = data.get("value", []) if isinstance(data, Mapping) else []
             return [self._normalize_message(m) for m in value if isinstance(m, Mapping)]
         except Exception as exc:  # noqa: BLE001
