@@ -1085,9 +1085,28 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
     config = _safe_load_config(config_path)
     root = _resolve_project_root(config)
     mtimes_before: dict[str, float] = {}
+    # Watched non-hidden business files
+    _WATCHED_BUSINESS_FILES = {"pipeline.yaml", "invoices.yaml", "expenses.yaml"}
     if root is not None and root.exists():
         for path in root.rglob("*"):
-            if path.is_file() and path.name.startswith("."):
+            if not path.is_file():
+                continue
+            # Watch hidden dotfiles (state files)
+            if path.name.startswith("."):
+                try:
+                    mtimes_before[str(path)] = path.stat().st_mtime
+                except OSError:
+                    continue
+            # Watch known business files at project root
+            if path.name in _WATCHED_BUSINESS_FILES and path.parent == root:
+                try:
+                    mtimes_before[str(path)] = path.stat().st_mtime
+                except OSError:
+                    continue
+        # Watch wiki markdown files
+        wiki_path = root / "wiki"
+        if wiki_path.exists():
+            for path in wiki_path.rglob("*.md"):
                 try:
                     mtimes_before[str(path)] = path.stat().st_mtime
                 except OSError:
