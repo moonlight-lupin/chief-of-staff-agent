@@ -526,3 +526,56 @@ class TestBriefingPipeline:
         parsed = json.loads(buf.getvalue())
         pl = parsed["sections"]["pipeline"]
         assert pl.get("contract_signed_no_invoice", 0) >= 1
+
+    def test_briefing_contract_signed_with_invoice_not_flagged(self, temp_project, monkeypatch):
+        """Deal with matching deal_id in invoices.yaml should NOT be flagged."""
+        config, project, config_path = temp_project
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config_path))
+
+        _seed_pipeline(project, [
+            {"id": "deal-cs-002", "client_name": "CS With Inv", "stage": "Contract Signed",
+             "value": 10000, "currency": "SGD", "created": "2026-07-01",
+             "last_activity": "2026-07-01", "documents": [], "notes": []},
+        ])
+        # Seed invoices.yaml with deal_id matching the deal
+        import yaml
+        (project / "invoices.yaml").write_text(yaml.safe_dump({
+            "invoices": [{"id": "INV-001", "direction": "sent", "counterparty": "CS With Inv",
+                          "amount": 10000, "currency": "SGD", "issue_date": "2026-07-01",
+                          "due_date": "2026-07-15", "status": "sent", "deal_id": "deal-cs-002"}]
+        }))
+
+        import daily_briefing
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            daily_briefing.main(["run", "--json", "--dry-run"])
+
+        parsed = json.loads(buf.getvalue())
+        pl = parsed["sections"]["pipeline"]
+        assert pl.get("contract_signed_no_invoice", 0) == 0
+
+    def test_briefing_invoiced_with_paid_invoice_not_flagged(self, temp_project, monkeypatch):
+        """Invoiced deal with linked invoice marked paid should NOT be flagged."""
+        config, project, config_path = temp_project
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config_path))
+
+        _seed_pipeline(project, [
+            {"id": "deal-inv-001", "client_name": "Inv Paid Co", "stage": "Invoiced",
+             "value": 5000, "currency": "SGD", "created": "2026-07-01",
+             "last_activity": "2026-07-01", "documents": [], "notes": []},
+        ])
+        import yaml
+        (project / "invoices.yaml").write_text(yaml.safe_dump({
+            "invoices": [{"id": "INV-002", "direction": "sent", "counterparty": "Inv Paid Co",
+                          "amount": 5000, "currency": "SGD", "issue_date": "2026-07-01",
+                          "due_date": "2026-07-15", "status": "paid", "deal_id": "deal-inv-001"}]
+        }))
+
+        import daily_briefing
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            daily_briefing.main(["run", "--json", "--dry-run"])
+
+        parsed = json.loads(buf.getvalue())
+        pl = parsed["sections"]["pipeline"]
+        assert pl.get("invoiced_not_paid", 0) == 0

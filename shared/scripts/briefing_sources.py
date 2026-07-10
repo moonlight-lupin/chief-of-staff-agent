@@ -576,6 +576,19 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
             if isinstance(st, int):
                 stale_threshold = st
 
+        # Load invoices for deal_id cross-reference
+        invoices_by_deal: dict[str, dict] = {}
+        try:
+            invoices_path = root / "invoices.yaml"
+            if invoices_path.exists():
+                inv_data = _yaml.safe_load(invoices_path.read_text(encoding="utf-8"))
+                if isinstance(inv_data, dict):
+                    for inv in inv_data.get("invoices", []):
+                        if isinstance(inv, dict) and inv.get("deal_id"):
+                            invoices_by_deal[str(inv["deal_id"])] = inv
+        except Exception:
+            pass
+
         from datetime import date as _date, datetime as _dt
         today = _date.today()
         oldest_days = 0
@@ -584,6 +597,7 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
             if not isinstance(deal, dict):
                 continue
             stage = str(deal.get("stage", ""))
+            deal_id = str(deal.get("id", ""))
             # Active deals = not terminal
             if stage not in terminal_stages:
                 stats["active_deals"] = stats["active_deals"] + 1 if isinstance(stats["active_deals"], int) else 1
@@ -598,7 +612,7 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
                         stats["stale_deals"] = stats["stale_deals"] + 1 if isinstance(stats["stale_deals"], int) else 1
                         if days_inactive > oldest_days:
                             oldest_days = days_inactive
-                            stats["oldest_stale_id"] = str(deal.get("id", ""))
+                            stats["oldest_stale_id"] = deal_id
                             stats["oldest_stale_days"] = days_inactive
                             stats["oldest_stale_stage"] = stage
                 except Exception:
@@ -618,21 +632,19 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
                         except Exception:
                             pass
 
-            # Contract Signed without invoice
+            # Contract Signed without invoice — cross-reference invoices.yaml by deal_id
             if stage == "Contract Signed":
-                docs = deal.get("documents", [])
-                has_invoice = False
-                if isinstance(docs, list):
-                    for doc in docs:
-                        if isinstance(doc, dict) and "invoice" in str(doc.get("type", "")).lower():
-                            has_invoice = True
-                            break
+                has_invoice = deal_id in invoices_by_deal
                 if not has_invoice:
                     stats["contract_signed_no_invoice"] = stats["contract_signed_no_invoice"] + 1 if isinstance(stats["contract_signed_no_invoice"], int) else 1
 
-            # Invoiced but not Paid
+            # Invoiced but not Paid — check if linked invoice exists and its status
             if stage == "Invoiced":
-                stats["invoiced_not_paid"] = stats["invoiced_not_paid"] + 1 if isinstance(stats["invoiced_not_paid"], int) else 1
+                linked_inv = invoices_by_deal.get(deal_id)
+                if linked_inv and str(linked_inv.get("status", "")).lower() == "paid":
+                    pass  # Invoice marked paid, don't flag
+                else:
+                    stats["invoiced_not_paid"] = stats["invoiced_not_paid"] + 1 if isinstance(stats["invoiced_not_paid"], int) else 1
     except Exception:
         pass
 
