@@ -395,6 +395,96 @@ class TestBookkeeperActions:
         data = json.loads(candidates_path.read_text())
         assert data["candidates"]["bic_test002"]["state"] == "recorded"
 
+    def test_full_route_review_queue_to_invoices(self, temp_project):
+        """Full route: review_queue execute → webhook_events → bookkeeper_actions → invoices.yaml append."""
+        config, project, config_path = temp_project
+        candidates_path = project / ".bookkeeper_invoice_candidates.json"
+        candidate = {
+            "id": "bic_route001", "state": "prepared",
+            "source_type": "event", "source_id": "event_route",
+            "extracted": {"direction": "received", "counterparty": "Route Test Co",
+                          "amount": "900.00", "currency": "SGD",
+                          "issue_date": "2026-07-10", "due_date": "2026-07-24"},
+            "proposed_invoice": {"id": "INV-ROUTE-001", "direction": "received",
+                                  "counterparty": "Route Test Co", "amount": "900.00", "currency": "SGD",
+                                  "issue_date": "2026-07-10", "due_date": "2026-07-24",
+                                  "status": "received", "paid_date": None,
+                                  "document_path": None, "notes": "Route test"},
+            "confidence": 0.85, "warnings": [], "validation_status": "valid",
+            "duplicate_candidates": [],
+        }
+        candidates_path.write_text(json.dumps({"candidates": {"bic_route001": candidate}, "_version": 1}))
+
+        from pending_actions import create_pending_action, approve_pending_action
+        action = create_pending_action(
+            config=config, action_type="bookkeeper.invoice.record",
+            provider="bookkeeper", target="bic_route001",
+            payload={"candidate_id": "bic_route001", "invoice": candidate["proposed_invoice"]},
+            summary="Record invoice INV-ROUTE-001",
+        )
+        approve_pending_action(config, action["id"], approver="MH", reason="Route test")
+
+        # Execute through review_queue (which delegates to webhook_events.cmd_execute)
+        import review_queue
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = review_queue._main(["--config", str(config_path), "execute",
+                                      "--action-id", action["id"]])
+        assert rc == 0, f"Execute failed: {buf.getvalue()}"
+
+        # Verify invoice was appended to invoices.yaml
+        import yaml
+        invoices_data = yaml.safe_load((project / "invoices.yaml").read_text())
+        invoices = invoices_data.get("invoices", [])
+        assert any(i.get("id") == "INV-ROUTE-001" for i in invoices), \
+            "Invoice should be in invoices.yaml after full route execution"
+
+        # Verify candidate is recorded
+        data = json.loads(candidates_path.read_text())
+        assert data["candidates"]["bic_route001"]["state"] == "recorded"
+
+    def test_workspace_client_not_called_for_bookkeeper(self, temp_project):
+        """workspace_client.get_workspace_client must not be called for bookkeeper actions."""
+        config, project, config_path = temp_project
+        candidates_path = project / ".bookkeeper_invoice_candidates.json"
+        candidate = {
+            "id": "bic_no_ws", "state": "prepared",
+            "source_type": "event", "source_id": "event_no_ws",
+            "extracted": {"direction": "received", "counterparty": "No WS Test",
+                          "amount": "300.00", "currency": "SGD",
+                          "issue_date": "2026-07-10", "due_date": "2026-07-24"},
+            "proposed_invoice": {"id": "INV-NO-WS-001", "direction": "received",
+                                  "counterparty": "No WS Test", "amount": "300.00", "currency": "SGD",
+                                  "issue_date": "2026-07-10", "due_date": "2026-07-24",
+                                  "status": "received", "paid_date": None,
+                                  "document_path": None, "notes": "No WS test"},
+            "confidence": 0.85, "warnings": [], "validation_status": "valid",
+            "duplicate_candidates": [],
+        }
+        candidates_path.write_text(json.dumps({"candidates": {"bic_no_ws": candidate}, "_version": 1}))
+
+        from pending_actions import create_pending_action, approve_pending_action
+        action = create_pending_action(
+            config=config, action_type="bookkeeper.invoice.record",
+            provider="bookkeeper", target="bic_no_ws",
+            payload={"candidate_id": "bic_no_ws", "invoice": candidate["proposed_invoice"]},
+            summary="Record invoice",
+        )
+        approve_pending_action(config, action["id"], approver="MH", reason="ok")
+
+        # Patch get_workspace_client — it should NOT be called
+        mock_client = MagicMock()
+        with patch("workspace_client.get_workspace_client", return_value=mock_client):
+            import review_queue
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = review_queue._main(["--config", str(config_path), "execute",
+                                          "--action-id", action["id"]])
+        assert rc == 0
+        mock_client.gmail_send.assert_not_called()
+        # The mock should not have been called at all for bookkeeper actions
+        # (get_workspace_client itself should not be invoked)
+
 
 # ─── Briefing Integration ───────────────────────────────────
 

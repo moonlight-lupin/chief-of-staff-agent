@@ -213,6 +213,32 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print(f"❌ gmail.draft execution not supported via generic executor. Use send_email.py or Composio MCP.", file=sys.stderr)
         return 1
 
+    # ─── Internal (non-workspace) actions ─────────────────────────
+    # These do not use workspace_client. They own their own state transitions
+    # (mark_executing → mark_executed/mark_failed) internally.
+    # Route them BEFORE the workspace capability check to avoid false rejection.
+    if action_type == "bookkeeper.invoice.record":
+        from bookkeeper_actions import execute_invoice_record
+        try:
+            result = execute_invoice_record(cfg, args.action_id)
+        except Exception as exc:
+            print(f"❌ Bookkeeper execution failed: {exc}", file=sys.stderr)
+            return 1
+        success = result.get("success", False) if isinstance(result, dict) else True
+        if not success:
+            error = result.get("error", "bookkeeper execution failed") if isinstance(result, dict) else "unknown error"
+            if args.summary:
+                print(f"❌ Bookkeeper error: {error}")
+            else:
+                print_json(result if isinstance(result, dict) else {"success": False, "error": error})
+            return 1
+        if args.summary:
+            print(f"✅ Executed: {action_type} ({args.action_id})")
+        else:
+            print_json(result if isinstance(result, dict) else {"raw": str(result)})
+        return 0
+
+    # ─── Workspace (Gmail/Calendar/Drive) actions ────────────────
     # Pre-execution gate
     executing = mark_executing(cfg, args.action_id)
     if not executing:
@@ -285,9 +311,6 @@ def cmd_execute(args: argparse.Namespace) -> int:
                 )
             elif action_type == "drive.trash":
                 result = client.drive_trash(file_id=payload.get("file_id", ""))
-            elif action_type == "bookkeeper.invoice.record":
-                from bookkeeper_actions import execute_invoice_record
-                result = execute_invoice_record(cfg, args.action_id)
             else:
                 mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
                 print(f"❌ Unknown action type: {action_type}", file=sys.stderr)
