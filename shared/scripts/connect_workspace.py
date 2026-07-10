@@ -710,7 +710,9 @@ def cmd_verify(config: dict[str, Any], include_writes: bool = False,
     return 0
 
 
-def _main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the argument parser (exposed so tooling/tests can introspect the
+    real, supported flag set without invoking the CLI)."""
     parser = argparse.ArgumentParser(
         description="Workspace provider onboarding and status"
     )
@@ -746,6 +748,11 @@ def _main() -> int:
                         help="Debug: test all MCP meta-tools for a toolkit with full output")
     parser.add_argument("--capabilities", action="store_true",
                         help="Print provider capabilities (supported/unsupported actions and workflows)")
+    return parser
+
+
+def _main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     config = _load_config(args.config)

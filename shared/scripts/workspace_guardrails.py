@@ -119,6 +119,20 @@ def _is_auto_approved() -> bool:
     return os.getenv("CHIEF_OF_STAFF_AUTO_APPROVE", "").strip() in ("1", "true", "yes")
 
 
+def _log_guardrail_blocked(action: str, reason: str) -> None:
+    """Emit a ``guardrail_blocked`` runtime event naming the action and the gate
+    that refused it. Best-effort: no-ops when no run is active and never raises
+    into the caller."""
+    try:
+        from runtime_log import log_event
+        log_event(
+            "guardrail_blocked", level="warning", component="guardrails",
+            action=str(action), reason=str(reason),
+        )
+    except Exception:  # pragma: no cover - logging must never break the caller
+        pass
+
+
 def confirm_action(action: str, **details: Any) -> bool:
     """Check if an action should proceed.
 
@@ -138,6 +152,7 @@ def confirm_action(action: str, **details: Any) -> bool:
     if action in DESTRUCTIVE_ACTIONS:
         if os.getenv("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", "").strip() not in ("1", "true", "yes"):
             print(f"⚠️  Destructive action '{action}' requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1", file=sys.stderr)
+            _log_guardrail_blocked(action, "destructive_not_allowed")
             return False
         # If destructive is allowed, still print warning
         print(f"⚠️  Proceeding with destructive action: {action}", file=sys.stderr)
@@ -151,6 +166,7 @@ def confirm_action(action: str, **details: Any) -> bool:
             return True
         print(f"⚠️  Action '{action}' requires confirmation but no TTY available. "
               f"Set CHIEF_OF_STAFF_AUTO_APPROVE=1 to proceed.", file=sys.stderr)
+        _log_guardrail_blocked(action, "no_tty_not_auto_approved")
         return False
 
     # Interactive: ask user
@@ -162,9 +178,13 @@ def confirm_action(action: str, **details: Any) -> bool:
 
     try:
         response = input(prompt).strip().lower()
-        return response in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
+        _log_guardrail_blocked(action, "interrupted")
         return False
+    if response in ("y", "yes"):
+        return True
+    _log_guardrail_blocked(action, "user_declined")
+    return False
 
 
 @dataclass
@@ -261,6 +281,11 @@ def guarded(
             operation = audit_operation or action_id
 
             if not confirm_action(action_id, **{target_arg: target}):
+                # confirm_action already emitted guardrail_blocked with the
+                # specific gate reason; emitting again here would duplicate the
+                # event, so the decorator's block path stays silent. On success
+                # nothing is logged either — the provider layer (_request)
+                # covers the operational events.
                 return ActionResult(
                     success=False, action=action_id, provider=provider,
                     tool_slug=tool_slug, target=target, error=block_error,

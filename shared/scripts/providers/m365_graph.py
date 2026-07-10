@@ -166,6 +166,74 @@ DEVICE_SCOPE = [
 # are classified directly in workspace_guardrails.py WRITE/DESTRUCTIVE/SAFE sets.
 
 
+# ── Operational instrumentation helpers (v0.3.4) ──────────────────────────
+# These emit into the structured runtime log (shared/scripts/runtime_log.py).
+# They are unconditional and zero-cost-safe: log_event silently no-ops when no
+# run is active, and this wrapper swallows any import/logging error so provider
+# behaviour is never affected. Request bodies/params are NEVER passed in.
+def _log_event(event: str, **fields: Any) -> None:
+    """Best-effort structured runtime log. No-ops when runtime_log is
+    unavailable or no run is active; never raises into the caller."""
+    try:
+        from runtime_log import log_event
+        log_event(event, **fields)
+    except Exception:  # pragma: no cover - logging must never break the caller
+        pass
+
+
+def _endpoint_category(path: str) -> str:
+    """Coarse Graph endpoint bucket derived from the request path only (never
+    the query string): mail | calendar | files | categories | user | other."""
+    p = str(path or "").lower()
+    if "mastercategories" in p:
+        return "categories"
+    if "/messages" in p or "/mailfolders" in p or "/sendmail" in p:
+        return "mail"
+    if "/calendarview" in p or "/events" in p or "/calendar" in p:
+        return "calendar"
+    if "/drive" in p:
+        return "files"
+    if "/users/" in p or p.rstrip("/").endswith("/me") or "/me/" in p:
+        return "user"
+    return "other"
+
+
+def _operation_from_path(method: str, path: str) -> str:
+    """Best-effort operation label from an HTTP method + Graph path, used when a
+    caller supplies no explicit operation. Query strings are stripped so no
+    filter/search text (which can contain client names) is ever logged."""
+    raw = str(path or "")
+    if raw.startswith("http"):
+        try:
+            raw = urlparse(raw).path
+        except (ValueError, TypeError):
+            raw = ""
+    raw = raw.split("?", 1)[0]
+    seg = raw.rstrip("/").rsplit("/", 1)[-1]
+    return f"{str(method).upper()} {seg}" if seg else str(method).upper()
+
+
+def _error_class_from_status(status: int | None, code: str | None = None) -> str:
+    """Map a Graph (status, error-code) to a diagnostics-aligned error_class."""
+    if code and str(code).lower() == "erroraccessdenied":
+        return "permission_denied"
+    if status == 429:
+        return "throttled"
+    if status == 401:
+        return "auth"
+    if status == 403:
+        return "permission_denied"
+    if status == 404:
+        return "not_found"
+    if status in (503, 504):
+        # A 503/504 is a server-side OUTAGE, not client rate-limiting; mislabelling
+        # it "throttled" produces misleading rate-limit diagnoses for real outages.
+        return "provider_unavailable"
+    if status is not None and status >= 500:
+        return "network"
+    return "other"
+
+
 def _split_addrs(value: str | None) -> list[str]:
     if not value:
         return []
@@ -451,6 +519,8 @@ class M365GraphClient(WorkspaceClient):
         headers: dict[str, str] | None = None,
         raw: bool = False,
         timeout: int = 30,
+        operation: str | None = None,
+        degrade: bool = False,
     ) -> Any:
         """Perform one Graph request. Returns parsed JSON dict (or raw bytes if
         ``raw=True``). Raises RuntimeError on non-2xx responses.
@@ -465,9 +535,20 @@ class M365GraphClient(WorkspaceClient):
         """
         # nextLink is an absolute URL — do NOT re-prefix base_url.
         url = path if str(path).startswith("http") else f"{self.base_url}{path}"
+        m = str(method).upper()
+        op = operation or _operation_from_path(method, path)
+        category = _endpoint_category(path)
+        provider = self._provider_name
+        # Operating-boundary log: what we are ATTEMPTING (no bodies/params).
+        _log_event(
+            "provider_request_started", level="debug", component="m365",
+            provider=provider, operation=op, method=m, endpoint_category=category,
+        )
         token_refreshed = False
         throttle_attempts = 0
+        attempt = 0
         while True:
+            attempt += 1
             token = self._get_token()
             # Prefer immutable ids on EVERY Graph request. By default Graph
             # message ids change when a message moves folders (archive/trash),
@@ -482,26 +563,57 @@ class M365GraphClient(WorkspaceClient):
             }
             if headers:
                 hdrs.update(headers)
-            resp = self._send(
-                method, url, params=params, json=json_body, data=content,
-                headers=hdrs, timeout=timeout,
-            )
+            _start = time.monotonic()
+            # Wrap the raw transport so requests.Timeout / ConnectionError / TLS
+            # errors surface a provider_request_failed (error_class=network) event
+            # before they propagate — otherwise the analyser's network_timeout rule
+            # could never fire on the real path. Behaviour is unchanged: the
+            # exception is re-raised exactly as before (reads warn+[]; guarded
+            # writes → audited failure).
+            try:
+                resp = self._send(
+                    method, url, params=params, json=json_body, data=content,
+                    headers=hdrs, timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                duration_ms = int((time.monotonic() - _start) * 1000)
+                _log_event(
+                    "provider_request_failed",
+                    level="warning" if degrade else "error", component="m365",
+                    provider=provider, operation=op, method=m,
+                    endpoint_category=category, duration_ms=duration_ms,
+                    attempt=attempt, error_class="network",
+                    exception_type=type(exc).__name__,
+                    message=str(exc)[:200],
+                )
+                raise
+            duration_ms = int((time.monotonic() - _start) * 1000)
             status = resp.status_code
 
             # 401: refresh the token once, then retry (independent of throttle).
             if status == 401 and not token_refreshed:
                 token_refreshed = True
                 self._token = None
+                _log_event(
+                    "provider_retry", level="warning", component="m365",
+                    provider=provider, operation=op, status_code=401,
+                    attempt=attempt, wait_s=0, reason="token_refresh",
+                )
                 continue
 
             # 429 / 503 / 504: method-aware throttle backoff, honouring
             # Retry-After (never shortened).
             if status in RETRYABLE_STATUS:
-                is_idempotent = str(method).upper() in IDEMPOTENT_METHODS
+                is_idempotent = m in IDEMPOTENT_METHODS
                 # 503/504 on a non-idempotent method (POST/PATCH) is AMBIGUOUS —
                 # the write may have completed. Never auto-retry; raise with
                 # verify-first guidance (guarded writes → audited failure).
                 if status in (503, 504) and not is_idempotent:
+                    _log_event(
+                        "ambiguous_write", level="error", component="m365",
+                        provider=provider, operation=op, status_code=status,
+                        method=m,
+                    )
                     raise RuntimeError(
                         f"Graph API {status}: {AMBIGUOUS_WRITE_GUIDANCE}"
                     )
@@ -512,30 +624,72 @@ class M365GraphClient(WorkspaceClient):
                         # Valid Retry-After: honour it in full, or DEFER if it
                         # exceeds the auto-retry budget (never shorten + retry).
                         if wait > RETRY_MAX_WAIT_S:
+                            _log_event(
+                                "retry_deferred", level="warning",
+                                component="m365", provider=provider,
+                                operation=op, status_code=status,
+                                retry_after_s=wait,
+                            )
                             raise RuntimeError(
                                 f"Graph API {status}: Graph requested "
                                 f"Retry-After={wait:g}s which exceeds the "
                                 f"{RETRY_MAX_WAIT_S}s auto-retry budget; "
                                 f"deferred — retry later"
                             )
+                        reason = "retry_after_header"
                     else:
                         # Header absent/invalid: exponential 1s/2s/4s, capped.
                         wait = min(float(2 ** throttle_attempts),
                                    float(RETRY_MAX_WAIT_S))
+                        reason = "exponential_backoff"
+                    _log_event(
+                        "provider_retry", level="warning", component="m365",
+                        provider=provider, operation=op, status_code=status,
+                        attempt=attempt, wait_s=wait, reason=reason,
+                    )
                     self._sleep(wait)
                     throttle_attempts += 1
                     continue
 
             if not (200 <= status < 300):
+                _msg, _code = self._error_body(resp)
+                _log_event(
+                    "provider_request_failed",
+                    level="warning" if degrade else "error", component="m365",
+                    provider=provider, operation=op, method=m,
+                    endpoint_category=category, status_code=status,
+                    duration_ms=duration_ms, attempt=attempt,
+                    error_class=_error_class_from_status(status, _code),
+                    message=(str(_msg) if _msg else "")[:200],
+                )
                 self._raise_for_status(resp, url)
+
+            # Success (2xx). result_count only when the collection is cheaply
+            # available (a "value" list); omitted otherwise.
+            result_count = None
+            if not raw and not (status == 204 or not (resp.content or b"")):
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = None
+                if isinstance(data, Mapping) and isinstance(data.get("value"), list):
+                    result_count = len(data["value"])
+            else:
+                data = None
+            _log_event(
+                "provider_request_completed", level="debug", component="m365",
+                provider=provider, operation=op, method=m,
+                endpoint_category=category, status_code=status,
+                duration_ms=duration_ms, attempt=attempt,
+                result_count=result_count,
+            )
             if raw:
                 return resp.content
             if status == 204 or not (resp.content or b""):
                 return {}
-            try:
-                return resp.json()
-            except ValueError:
+            if data is None:
                 return {}
+            return data
 
     def _paged_values(
         self,
@@ -561,9 +715,9 @@ class M365GraphClient(WorkspaceClient):
         next_link: str | None = None
         for page in range(MAX_PAGES):
             if next_link:
-                data = self._request(method, next_link)
+                data = self._request(method, next_link, operation=context, degrade=True)
             else:
-                data = self._request(method, path, params=params)
+                data = self._request(method, path, params=params, operation=context, degrade=True)
             value = data.get("value", []) if isinstance(data, Mapping) else []
             items.extend(v for v in value if isinstance(v, Mapping))
             next_link = data.get("@odata.nextLink") if isinstance(data, Mapping) else None
@@ -587,6 +741,11 @@ class M365GraphClient(WorkspaceClient):
                         f"m365 {context}: truncated at max_results={max_items} "
                         f"cap; more results were available"
                     )
+                    _log_event(
+                        "pagination_truncated", level="warning", component="m365",
+                        provider=self._provider_name, operation=context,
+                        cap=max_items, pages_followed=page + 1,
+                    )
                 return items[:max_items]
             if not next_link:
                 return items
@@ -595,6 +754,11 @@ class M365GraphClient(WorkspaceClient):
             warnings.warn(
                 f"m365 {context}: stopped after MAX_PAGES={MAX_PAGES} pages; "
                 f"more results were available"
+            )
+            _log_event(
+                "pagination_truncated", level="warning", component="m365",
+                provider=self._provider_name, operation=context,
+                cap=MAX_PAGES, pages_followed=MAX_PAGES,
             )
         return items
 

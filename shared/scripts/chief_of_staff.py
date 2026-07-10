@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chief-of-Staff top-level entrypoint (v0.3.3).
+"""Chief-of-Staff top-level entrypoint (v0.3.4).
 
 READ-ONLY orchestration layer for the daily operating loop and subsystem
 summaries. This module must NEVER approve, execute, send, write, or mutate
@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -33,7 +35,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -74,6 +76,11 @@ review_queue_mod = _try_import("review_queue", lambda: __import__("review_queue"
 wiki_curator_mod = _try_import("wiki_curator", lambda: __import__("wiki_curator"))
 daily_briefing_mod = _try_import("daily_briefing", lambda: __import__("daily_briefing"))
 pipeline_mod = _try_import("pipeline", lambda: __import__("pipeline"))
+runtime_log = _try_import("runtime_log", lambda: __import__("runtime_log"))
+log_analyser = _try_import("log_analyser", lambda: __import__("log_analyser"))
+workspace_capabilities = _try_import(
+    "workspace_capabilities", lambda: __import__("workspace_capabilities")
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1222,7 +1229,7 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Readiness report (v0.3.3) — generated go/no-go check
+# Readiness report (v0.3.4) — generated go/no-go check
 # ---------------------------------------------------------------------------
 
 # Row status vocabulary
@@ -1449,10 +1456,18 @@ def build_readiness_payload(config: Any, config_path: str | None) -> dict[str, A
     else:  # writes FAIL
         exec_verdict = "NO"
 
+    run_id = None
+    if runtime_log is not None:
+        try:
+            run_id = runtime_log.current_run_id()
+        except Exception:
+            run_id = None
+
     payload: dict[str, Any] = {
         "version": VERSION,
         "generated_at": _now_iso(),
         "mode": "readiness",
+        "run_id": run_id,
         "safety": _safety_block(),
         "rows": rows,
         "verdicts": {
@@ -1490,7 +1505,27 @@ def render_readiness_summary(payload: Mapping[str, Any]) -> str:
     lines.append(
         f"  Ready for approved execution: {verdicts.get('approved_execution_ready', 'NO')}"
     )
+    lines.extend(_readiness_diagnose_pointer(payload, prefix="  "))
     return "\n".join(lines)
+
+
+def _readiness_has_fail(payload: Mapping[str, Any]) -> bool:
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    return any(isinstance(r, Mapping) and str(r.get("status")) == _R_FAIL for r in rows)
+
+
+def _readiness_diagnose_pointer(payload: Mapping[str, Any], prefix: str = "") -> list[str]:
+    """When any readiness row FAILed, point the operator at logs diagnose."""
+    if not _readiness_has_fail(payload):
+        return []
+    run_id = payload.get("run_id")
+    if not run_id:
+        return []
+    return [
+        f"{prefix}Run ID: {run_id}",
+        f"{prefix}Diagnose:",
+        f"{prefix}  python shared/scripts/chief_of_staff.py logs diagnose --run-id {run_id}",
+    ]
 
 
 def render_readiness_markdown(payload: Mapping[str, Any]) -> str:
@@ -1516,6 +1551,15 @@ def render_readiness_markdown(payload: Mapping[str, Any]) -> str:
     lines.append(
         f"**Ready for approved execution:** {verdicts.get('approved_execution_ready', 'NO')}"
     )
+    pointer = _readiness_diagnose_pointer(payload)
+    if pointer:
+        lines.append("")
+        lines.append(f"**Run ID:** {payload.get('run_id')}")
+        lines.append("**Diagnose:**")
+        lines.append("")
+        lines.append(
+            f"    python shared/scripts/chief_of_staff.py logs diagnose --run-id {payload.get('run_id')}"
+        )
     return "\n".join(lines)
 
 
@@ -1535,6 +1579,417 @@ def cmd_readiness(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Logs subcommand group (v0.3.4) — read-only observability + self-diagnosis
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_RUN_ID_RE = _re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{6}$")
+_RUN_ID_TS_FMT = "%Y%m%dT%H%M%SZ"
+
+# Files permitted inside a support bundle. NOTHING else is ever added.
+_BUNDLE_ALLOWED = (
+    "events.jsonl",
+    "summary.json",
+    "diagnosis.json",
+    "readiness.json",
+    "meta.json",
+    "config_shape.json",
+)
+
+# Keys whose entire subtree is excluded from config_shape.json.
+_SECRET_KEY_RE = _re.compile(r"secret|token|password", _re.IGNORECASE)
+
+
+def _runs_dir(config: Any) -> Path | None:
+    root = _resolve_project_root(config)
+    if root is None:
+        return None
+    return root / ".runs"
+
+
+def _list_run_dirs(config: Any) -> list[tuple[datetime, str, Path]]:
+    """Return (timestamp, run_id, path) for run-id-shaped dirs, newest first."""
+    runs = _runs_dir(config)
+    out: list[tuple[datetime, str, Path]] = []
+    if runs is None or not runs.is_dir():
+        return out
+    for child in runs.iterdir():
+        if not child.is_dir() or not _RUN_ID_RE.match(child.name):
+            continue
+        try:
+            ts = datetime.strptime(child.name[:16], _RUN_ID_TS_FMT).replace(tzinfo=timezone.utc)
+        except Exception:
+            try:
+                ts = datetime.fromtimestamp(child.stat().st_mtime, timezone.utc)
+            except Exception:
+                ts = datetime.now(timezone.utc)
+        out.append((ts, child.name, child))
+    out.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return out
+
+
+def _read_summary(run_dir: Path) -> dict[str, Any] | None:
+    path = run_dir / "summary.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _humanize_age(ts: datetime) -> str:
+    delta = datetime.now(timezone.utc) - ts
+    secs = int(delta.total_seconds())
+    if secs < 0:
+        secs = 0
+    if secs < 90:
+        return f"{secs}s"
+    mins = secs // 60
+    if mins < 90:
+        return f"{mins}m"
+    hours = mins // 60
+    if hours < 48:
+        return f"{hours}h"
+    return f"{hours // 24}d"
+
+
+def _resolve_run_dir(config: Any, run_id: str) -> tuple[Path | None, str | None]:
+    """Safely resolve a user-supplied run id to its directory.
+
+    The ONE shared gate for ``logs show / diagnose / bundle``. Returns
+    ``(run_dir, None)`` on success or ``(None, error_message)`` on rejection.
+    A run id is accepted only when it matches ``_RUN_ID_RE`` AND its path resolves
+    to a DIRECT child of the runs directory — this rejects ``../x``, absolute
+    paths, and slash-embedded ids (path-traversal containment). A well-formed but
+    absent run yields a plain "Run not found" message.
+    """
+    if not run_id or not _RUN_ID_RE.fullmatch(str(run_id)):
+        return None, (
+            f"Invalid run id: {run_id!r} — must match YYYYMMDDTHHMMSSZ-<6hex> "
+            "(no path separators or traversal)"
+        )
+    runs = _runs_dir(config)
+    if runs is None:
+        return None, "Run not found: project root unresolved (no runs directory)"
+    candidate = runs / run_id
+    try:
+        if candidate.resolve().parent != runs.resolve():
+            return None, f"Invalid run id: {run_id!r} — resolves outside the runs directory"
+    except Exception:
+        return None, f"Invalid run id: {run_id!r}"
+    if not candidate.is_dir():
+        return None, f"Run not found: {run_id}"
+    return candidate, None
+
+
+def _latest_failed_run(config: Any) -> tuple[str, Path] | None:
+    """Newest run whose summary outcome is failed or degraded."""
+    for _ts, run_id, path in _list_run_dirs(config):
+        summary = _read_summary(path)
+        if summary and str(summary.get("outcome")) in {"failed", "degraded"}:
+            return run_id, path
+    return None
+
+
+def cmd_logs_recent(args: argparse.Namespace) -> int:
+    config = _safe_load_config(getattr(args, "config", None))
+    limit = int(getattr(args, "limit", 20) or 20)
+    entries = _list_run_dirs(config)[:limit]
+    rows: list[dict[str, Any]] = []
+    for ts, run_id, path in entries:
+        summary = _read_summary(path)
+        if summary is None:
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "command": "",
+                    "outcome": "incomplete",
+                    "errors": 0,
+                    "warnings": 0,
+                    "age": _humanize_age(ts),
+                }
+            )
+            continue
+        counts = summary.get("counts") if isinstance(summary.get("counts"), Mapping) else {}
+        rows.append(
+            {
+                "run_id": run_id,
+                "command": str(summary.get("command", "")),
+                "outcome": str(summary.get("outcome", "?")),
+                "errors": int(counts.get("error", 0) or 0),
+                "warnings": int(counts.get("warning", 0) or 0),
+                "age": _humanize_age(ts),
+            }
+        )
+
+    if getattr(args, "json", False):
+        print(_json_dump({"mode": "logs.recent", "runs": rows}))
+        return 0
+    if not rows:
+        print("No runs recorded yet.")
+        return 0
+    print(f"{'RUN ID':<24} {'OUTCOME':<11} {'ERR':>3} {'WARN':>4} {'AGE':>5}  COMMAND")
+    for r in rows:
+        print(
+            f"{r['run_id']:<24} {r['outcome']:<11} {r['errors']:>3} {r['warnings']:>4} "
+            f"{r['age']:>5}  {r['command']}"
+        )
+    return 0
+
+
+def cmd_logs_show(args: argparse.Namespace) -> int:
+    config = _safe_load_config(getattr(args, "config", None))
+    run_id = getattr(args, "run_id", None)
+    if not run_id:
+        print("logs show requires --run-id", file=sys.stderr)
+        return 1
+    run_dir, err = _resolve_run_dir(config, run_id)
+    if run_dir is None:
+        print(err, file=sys.stderr)
+        return 1
+    events: list[dict[str, Any]] = []
+    events_path = run_dir / "events.jsonl"
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                events.append(obj)
+
+    level = getattr(args, "level", None)
+    if level:
+        threshold = {"debug": 10, "info": 20, "warning": 30, "error": 40}.get(str(level).lower(), 0)
+        rank = {"debug": 10, "info": 20, "warning": 30, "error": 40}
+        events = [e for e in events if rank.get(str(e.get("level", "info")), 20) >= threshold]
+
+    if getattr(args, "json", False):
+        print(_json_dump({"mode": "logs.show", "run_id": run_id, "events": events}))
+        return 0
+
+    print(f"Run {run_id} — {len(events)} event(s)")
+    for e in events:
+        ts = str(e.get("timestamp", ""))[:19]
+        lvl = str(e.get("level", "info")).upper()
+        comp = str(e.get("component", "") or "")
+        name = str(e.get("event", ""))
+        extras = {
+            k: v
+            for k, v in e.items()
+            if k not in {"timestamp", "level", "run_id", "command", "component", "event"}
+        }
+        extra_str = " ".join(f"{k}={v}" for k, v in extras.items())
+        head = f"  {ts} [{lvl:<7}]"
+        if comp:
+            head += f" {comp}"
+        head += f" {name}"
+        if extra_str:
+            head += f"  {extra_str}"
+        print(head)
+    return 0
+
+
+def cmd_logs_diagnose(args: argparse.Namespace) -> int:
+    config = _safe_load_config(getattr(args, "config", None))
+    if log_analyser is None:
+        print("log_analyser module unavailable", file=sys.stderr)
+        return 1
+
+    run_dir: Path | None = None
+    if getattr(args, "latest_failed", False):
+        found = _latest_failed_run(config)
+        if found is None:
+            print("No failed or degraded run found to diagnose.")
+            return 0
+        _run_id, run_dir = found
+    else:
+        run_id = getattr(args, "run_id", None)
+        if not run_id:
+            print("logs diagnose requires --run-id or --latest-failed", file=sys.stderr)
+            return 1
+        run_dir, err = _resolve_run_dir(config, run_id)
+        if run_dir is None:
+            print(err, file=sys.stderr)
+            return 1
+
+    result = log_analyser.analyse_run(run_dir)
+    if getattr(args, "json", False):
+        print(log_analyser.format_diagnosis(result, "json"))
+    elif getattr(args, "markdown", False):
+        print(log_analyser.format_diagnosis(result, "markdown"))
+    else:
+        print(log_analyser.format_diagnosis(result, "human"))
+    return 0
+
+
+def cmd_logs_prune(args: argparse.Namespace) -> int:
+    config = _safe_load_config(getattr(args, "config", None))
+    if runtime_log is None:
+        print("runtime_log module unavailable", file=sys.stderr)
+        return 1
+    result = runtime_log.prune_runs(config)
+    removed = result.get("removed", []) if isinstance(result, Mapping) else []
+    kept = result.get("kept", 0) if isinstance(result, Mapping) else 0
+    if getattr(args, "json", False):
+        print(_json_dump({"mode": "logs.prune", "removed": removed, "kept": kept}))
+        return 0
+    print(f"Pruned {len(removed)} run(s); {kept} kept.")
+    for run_id in removed:
+        print(f"  removed {run_id}")
+    return 0
+
+
+# ─── Bundle (redacted support archive) ───────────────────────────────────────
+
+
+def _config_shape(value: Any) -> Any:
+    """Replace every leaf with its type name; drop secret/token/password keys."""
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for key, val in value.items():
+            if _SECRET_KEY_RE.search(str(key)):
+                continue  # exclude the whole subtree for sensitive keys
+            out[str(key)] = _config_shape(val)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_config_shape(v) for v in value]
+    return type(value).__name__
+
+
+def _bundle_meta(config: Any) -> dict[str, Any]:
+    provider = "unknown"
+    try:
+        if isinstance(config, Mapping):
+            integrations = config.get("integrations", {})
+            workspace = integrations.get("workspace", {}) if isinstance(integrations, Mapping) else {}
+            provider = str(workspace.get("provider") or "") or ("google_api" if config.get("google") else "unknown")
+    except Exception:
+        provider = "unknown"
+    capability_report: dict[str, Any] = {}
+    if workspace_capabilities is not None and provider not in {"", "unknown"}:
+        try:
+            capability_report = dict(workspace_capabilities.get_capabilities(provider))
+        except Exception:
+            capability_report = {}
+    return {
+        "plugin_version": VERSION,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "provider": provider,
+        "capability_report": capability_report,
+    }
+
+
+def _build_readiness_json(config: Any, config_path: str | None) -> dict[str, Any]:
+    if config is None:
+        return {"available": False, "reason": "config not loaded — readiness unavailable"}
+    try:
+        return build_readiness_payload(config, config_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"available": False, "reason": f"readiness build failed: {exc}"}
+
+
+def cmd_logs_bundle(args: argparse.Namespace) -> int:
+    config_path = getattr(args, "config", None)
+    config = _safe_load_config(config_path)
+
+    run_dir: Path | None = None
+    run_id: str | None = None
+    if getattr(args, "latest_failed", False):
+        found = _latest_failed_run(config)
+        if found is None:
+            print("No failed or degraded run found to bundle.")
+            return 0
+        run_id, run_dir = found
+    else:
+        run_id = getattr(args, "run_id", None)
+        if not run_id:
+            print("logs bundle requires --run-id or --latest-failed", file=sys.stderr)
+            return 1
+        run_dir, err = _resolve_run_dir(config, run_id)
+        if run_dir is None:
+            print(err, file=sys.stderr)
+            return 1
+
+    output = Path(getattr(args, "output", None) or "cos-support.zip")
+
+    # Assemble the allowed payloads only. events/summary are copied verbatim
+    # (already redaction-safe by construction in runtime_log).
+    members: dict[str, str] = {}
+    events_path = run_dir / "events.jsonl"
+    if events_path.exists():
+        members["events.jsonl"] = events_path.read_text(encoding="utf-8")
+    else:
+        members["events.jsonl"] = ""
+    summary_path = run_dir / "summary.json"
+    if summary_path.exists():
+        members["summary.json"] = summary_path.read_text(encoding="utf-8")
+    else:
+        members["summary.json"] = "{}"
+
+    # Redact every generated payload before archiving. events.jsonl/summary.json
+    # are already redacted at write time and config_shape.json is types-only;
+    # diagnosis/readiness/meta are freshly built here and may echo config or
+    # error text, so scrub them through the public runtime_log.redact() helper.
+    if runtime_log is not None and hasattr(runtime_log, "redact"):
+        _redact = runtime_log.redact
+    else:
+        def _redact(obj: Any) -> Any:
+            return obj
+
+    if log_analyser is not None:
+        diagnosis = log_analyser.analyse_run(run_dir)
+    else:
+        diagnosis = {"error": "log_analyser unavailable"}
+    members["diagnosis.json"] = _json_dump(_redact(diagnosis))
+
+    members["readiness.json"] = _json_dump(_redact(_build_readiness_json(config, config_path)))
+    members["meta.json"] = _json_dump(_redact(_bundle_meta(config)))
+    members["config_shape.json"] = _json_dump(
+        _config_shape(config) if isinstance(config, Mapping) else {"available": False}
+    )
+
+    # Enforce the allow-list defensively — never write anything unexpected.
+    members = {name: body for name, body in members.items() if name in _BUNDLE_ALLOWED}
+
+    try:
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name in _BUNDLE_ALLOWED:
+                if name in members:
+                    zf.writestr(name, members[name])
+    except Exception as exc:
+        print(f"Failed to write bundle: {exc}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(
+            _json_dump(
+                {
+                    "mode": "logs.bundle",
+                    "run_id": run_id,
+                    "output": str(output),
+                    "contents": sorted(members.keys()),
+                }
+            )
+        )
+        return 0
+    print(f"Wrote support bundle: {output}")
+    print(f"  run: {run_id}")
+    print("  contents (redacted):")
+    for name in sorted(members.keys()):
+        print(f"    - {name}")
+    print("  Attach cos-support.zip to your bug report.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1542,7 +1997,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chief_of_staff.py",
         description=(
-            "Chief-of-Staff v0.3.3 — read-only daily operating loop and subsystem summaries. "
+            "Chief-of-Staff v0.3.4 — read-only daily operating loop and subsystem summaries. "
             "Never approves, executes, or mutates state."
         ),
     )
@@ -1550,6 +2005,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         help="Path to company.yaml (default: CHIEF_OF_STAFF_CONFIG or shared/config/company.yaml)",
     )
+    if runtime_log is not None:
+        try:
+            runtime_log.add_cli_args(parser)
+        except Exception:
+            pass
     sub = parser.add_subparsers(dest="command", required=True)
 
     daily = sub.add_parser("daily", help="Main daily operating loop (read-only)")
@@ -1599,20 +2059,139 @@ def build_parser() -> argparse.ArgumentParser:
     r_out.add_argument("--markdown", action="store_true", help="Markdown formatted")
     readiness.set_defaults(func=cmd_readiness)
 
+    # logs subcommand group (read-only observability; these do NOT create runs)
+    logs = sub.add_parser("logs", help="Operational log inspection and self-diagnosis")
+    logs_sub = logs.add_subparsers(dest="logs_command", required=True)
+
+    l_recent = logs_sub.add_parser("recent", help="List recent runs (newest first)")
+    l_recent.add_argument("--limit", type=int, default=20, help="Max runs to list (default: 20)")
+    l_recent.add_argument("--json", action="store_true")
+    l_recent.set_defaults(func=cmd_logs_recent)
+
+    l_show = logs_sub.add_parser("show", help="Pretty-print the events of one run")
+    l_show.add_argument("--run-id", dest="run_id", required=True, help="Run id to display")
+    l_show.add_argument(
+        "--level",
+        choices=["debug", "info", "warning", "error"],
+        default=None,
+        help="Only show events at or above this level",
+    )
+    l_show.add_argument("--json", action="store_true")
+    l_show.set_defaults(func=cmd_logs_show)
+
+    l_diag = logs_sub.add_parser("diagnose", help="Rule-based diagnosis of a run")
+    diag_sel = l_diag.add_mutually_exclusive_group(required=True)
+    diag_sel.add_argument("--run-id", dest="run_id", help="Run id to diagnose")
+    diag_sel.add_argument(
+        "--latest-failed",
+        dest="latest_failed",
+        action="store_true",
+        help="Diagnose the newest failed/degraded run",
+    )
+    d_out = l_diag.add_mutually_exclusive_group()
+    d_out.add_argument("--json", action="store_true")
+    d_out.add_argument("--markdown", action="store_true")
+    l_diag.set_defaults(func=cmd_logs_diagnose)
+
+    l_prune = logs_sub.add_parser("prune", help="Delete old runs per retention config")
+    l_prune.add_argument("--json", action="store_true")
+    l_prune.set_defaults(func=cmd_logs_prune)
+
+    l_bundle = logs_sub.add_parser("bundle", help="Write a redacted support zip for a run")
+    bundle_sel = l_bundle.add_mutually_exclusive_group(required=True)
+    bundle_sel.add_argument("--run-id", dest="run_id", help="Run id to bundle")
+    bundle_sel.add_argument(
+        "--latest-failed",
+        dest="latest_failed",
+        action="store_true",
+        help="Bundle the newest failed/degraded run",
+    )
+    l_bundle.add_argument(
+        "--output", default="cos-support.zip", help="Output zip path (default: cos-support.zip)"
+    )
+    l_bundle.add_argument("--json", action="store_true")
+    l_bundle.set_defaults(func=cmd_logs_bundle)
+
     return parser
+
+
+def _run_had_warnings() -> bool:
+    """Best-effort: did the active run emit any warning-level events?"""
+    if runtime_log is None:
+        return False
+    try:
+        ctx = runtime_log._CURRENT.get()  # noqa: SLF001 — internal peek, guarded
+        return bool(ctx and int(ctx.counts.get("warning", 0) or 0))
+    except Exception:
+        return False
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
-    # Propagate top-level --config already on args.
+
+    command = getattr(args, "command", None)
+
+    # The `logs` group is pure inspection and must NOT create runs (avoids
+    # recursion/noise). Dispatch it directly, outside the run lifecycle.
+    if command == "logs":
+        try:
+            return int(args.func(args))
+        except BrokenPipeError:  # pragma: no cover
+            return 0
+        except Exception as exc:
+            print(f"chief_of_staff.py error: {exc}", file=sys.stderr)
+            return 1
+
+    # Operational commands run under a runtime-log run (init/finish lifecycle).
+    started = False
+    root_env_key = getattr(runtime_log, "PROJECT_ROOT_ENV", "CHIEF_OF_STAFF_PROJECT_ROOT") if runtime_log else None
+    prev_root_env = os.environ.get(root_env_key) if root_env_key else None
+    root_env_set = False
+    if runtime_log is not None:
+        try:
+            config_for_run = _safe_load_config(getattr(args, "config", None))
+            runtime_log.init_run(
+                f"chief_of_staff {command}",
+                config_for_run,
+                level=getattr(args, "log_level", None),
+                quiet=bool(getattr(args, "quiet", False)),
+            )
+            started = True
+            # Propagate project root so subprocess children (e.g. daily_briefing,
+            # deadlines) append their events to THIS run's events.jsonl.
+            root = _resolve_project_root(config_for_run)
+            if root is not None and root_env_key:
+                os.environ[root_env_key] = str(root)
+                root_env_set = True
+        except Exception:
+            started = False
+
+    outcome = "success"
     try:
-        return int(args.func(args))
+        rc = int(args.func(args))
+        if rc != 0:
+            outcome = "failed"
+        elif _run_had_warnings():
+            outcome = "degraded"
+        return rc
     except BrokenPipeError:  # pragma: no cover
         return 0
     except Exception as exc:
+        outcome = "failed"
         print(f"chief_of_staff.py error: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if started and runtime_log is not None:
+            try:
+                runtime_log.finish_run(outcome)
+            except Exception:
+                pass
+        if root_env_set and root_env_key:
+            if prev_root_env is None:
+                os.environ.pop(root_env_key, None)
+            else:
+                os.environ[root_env_key] = prev_root_env
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -25,6 +25,11 @@ if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
 try:
+    import runtime_log  # type: ignore
+except Exception:  # pragma: no cover - operational logging is optional
+    runtime_log = None  # type: ignore
+
+try:
     from config_loader import get_project_root, load_config  # type: ignore
     from run_log import last_run, record_run  # type: ignore
 except Exception as exc:  # pragma: no cover
@@ -459,6 +464,11 @@ def record_success(config_path: str | None, briefing: dict[str, Any], rendered: 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect and render Chief-of-Staff daily briefing")
     parser.add_argument("--config", help="Path to company.yaml (or CHIEF_OF_STAFF_CONFIG)")
+    if runtime_log is not None:
+        try:
+            runtime_log.add_cli_args(parser)
+        except Exception:
+            pass
     parser.add_argument("--dry-run", action="store_true", help="Collect but do not record delivery or update .last_briefing")
     parser.add_argument("--json", action="store_true", help="Output normalized JSON")
     parser.add_argument("--render", action="store_true", help="Render structured briefing text")
@@ -723,10 +733,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
+def _dispatch(args: argparse.Namespace) -> int:
     # Subcommand dispatch
     if args.command == "run":
         return cmd_run(args)
@@ -750,6 +757,42 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"daily_briefing.py error: {exc}", file=sys.stderr)
         return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    # Runtime-log lifecycle. When invoked under chief_of_staff the run id is
+    # inherited via CHIEF_OF_STAFF_RUN_ID, so events append to the parent run.
+    started = False
+    if runtime_log is not None:
+        try:
+            runtime_log.init_run(
+                f"daily_briefing {args.command or 'legacy'}",
+                None,
+                level=getattr(args, "log_level", None),
+                quiet=bool(getattr(args, "quiet", False)),
+            )
+            started = True
+        except Exception:
+            started = False
+
+    outcome = "success"
+    try:
+        rc = _dispatch(args)
+        if rc != 0:
+            outcome = "failed"
+        return rc
+    except Exception:
+        outcome = "failed"
+        raise
+    finally:
+        if started and runtime_log is not None:
+            try:
+                runtime_log.finish_run(outcome)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -733,6 +733,38 @@ def _compile_m365(model: dict[str, Any], now: datetime) -> dict[str, str | None]
     }
 
 
+# ── Operational instrumentation (v0.3.4) ───────────────────────────────
+
+def _log_query_compiled(dialect: str, result: Any) -> None:
+    """Emit a ``query_compiled`` runtime event describing the compiled query
+    SHAPE only — never the query/filter/search text (which can contain client
+    names). runtime_log is imported lazily and guarded so this pure module stays
+    dependency-light; any failure (including a missing runtime_log) is silent.
+    """
+    try:
+        from runtime_log import log_event
+    except ImportError:
+        return
+    except Exception:  # pragma: no cover - defensive
+        return
+    if isinstance(result, dict):
+        folder = result.get("folder")
+        has_filter = bool(result.get("filter"))
+        has_search = bool(result.get("search"))
+    else:
+        folder = None
+        has_filter = False
+        has_search = bool(result)
+    try:
+        log_event(
+            "query_compiled", level="debug", component="query_compiler",
+            dialect=str(dialect), has_filter=has_filter, has_search=has_search,
+            folder=folder,
+        )
+    except Exception:  # pragma: no cover - logging must never break the caller
+        pass
+
+
 # ── Public API ─────────────────────────────────────────────────────────
 
 def compile_query(
@@ -758,18 +790,23 @@ def compile_query(
     """
     now = now or datetime.now(timezone.utc)
 
+    def _emit(res: Any) -> Any:
+        # Log the compiled shape (no text) on every successful compile.
+        _log_query_compiled(dialect, res)
+        return res
+
     if dialect == "gmail":
         if isinstance(model, str):
-            return model
+            return _emit(model)
         if isinstance(model, dict):
-            return _compile_gmail(model)
+            return _emit(_compile_gmail(model))
         raise TypeError(f"query model must be str or dict, got {type(model).__name__}")
 
     if dialect == "m365":
         if isinstance(model, str):
             if not model.strip():
                 # Empty input -> empty result (allowed; not a translation loss).
-                return {"filter": None, "search": None}
+                return _emit({"filter": None, "search": None})
             parsed = parse_gmail_query(model)
             result = _compile_m365(parsed, now)
             if (result.get("folder") is None
@@ -778,9 +815,9 @@ def compile_query(
                 raise ValueError(
                     f"could not translate query to m365 (empty result): {model!r}"
                 )
-            return result
+            return _emit(result)
         if isinstance(model, dict):
-            return _compile_m365(model, now)
+            return _emit(_compile_m365(model, now))
         raise TypeError(f"query model must be str or dict, got {type(model).__name__}")
 
     raise ValueError(f"unknown dialect: {dialect!r} (expected 'gmail' or 'm365')")
