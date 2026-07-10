@@ -465,7 +465,7 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
         from briefing_sources import (
             collect_pending_actions, collect_suggestions,
             collect_recent_events, collect_email_org_stats, collect_system_health,
-            collect_knowledge_stats,
+            collect_knowledge_stats, collect_bookkeeper_stats,
         )
     except Exception:
         # Fallback if briefing_sources not available
@@ -488,6 +488,7 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
     email_org = collect_email_org_stats(config) if config else {}
     sys_health = collect_system_health(config) if config else {}
     knowledge = collect_knowledge_stats(config) if config else {}
+    bookkeeper = collect_bookkeeper_stats(config) if config else {}
 
     # Group pending by risk
     try:
@@ -573,6 +574,7 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
             "suggested_next_actions": next_actions[:15],
             "system_health": sys_health,
             "knowledge_maintenance": knowledge,
+            "bookkeeper": bookkeeper,
         },
         "safety": {
             "external_mutations_performed": False,

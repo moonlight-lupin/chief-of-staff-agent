@@ -30,7 +30,7 @@ for _path in (_SCRIPT_DIR, _DOC_PREPARER_SCRIPTS):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from action_risk import ACTION_RISK_MAP, get_risk_explanation, get_risk_icon  # noqa: E402
+from action_risk import ACTION_RISK_MAP, get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
 from config_loader import get_project_root, load_config  # noqa: E402
 from pending_actions import (  # noqa: E402
     approve_pending_action,
@@ -43,18 +43,6 @@ from suggested_actions import dismiss_suggestion, get_suggestion, list_suggestio
 
 Risk = str
 
-_UNKNOWN_WRITE_TOKENS = (
-    "send",
-    "trash",
-    "cancel",
-    "delete",
-    "upload",
-    "create",
-    "update",
-    "archive",
-    "label",
-)
-_UNKNOWN_READ_TOKENS = ("search", "download", "get", "list", "read")
 _RISK_ORDER = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
 _STATE_ORDER = {
     "requested": 0,
@@ -68,20 +56,6 @@ _STATE_ORDER = {
     "expired": 8,
     "acted_on": 9,
 }
-
-
-def _safe_action_risk(action_type: str | None) -> Risk:
-    """Classify action risk without silently defaulting unknown writes to low."""
-    action_type = str(action_type or "").strip()
-    if action_type in ACTION_RISK_MAP:
-        return ACTION_RISK_MAP[action_type]
-
-    lowered = action_type.lower()
-    if any(token in lowered for token in _UNKNOWN_WRITE_TOKENS):
-        return "high"
-    if any(token in lowered for token in _UNKNOWN_READ_TOKENS):
-        return "low"
-    return "medium"
 
 
 def _json_dump(value: Any) -> str:
@@ -124,7 +98,7 @@ def _pending_action_to_item(action: Mapping[str, Any]) -> dict[str, Any]:
     action_id = str(action.get("id", ""))
     action_type = str(action.get("type") or action.get("action_type") or "")
     state = str(action.get("state", "unknown"))
-    risk = _safe_action_risk(action_type)
+    risk = get_action_risk(str(action.get("type") or action.get("action_type") or ""))
     summary = str(action.get("summary") or f"{action_type} to {action.get('target', '')}".strip())
     return {
         "id": action_id,
@@ -146,7 +120,7 @@ def _suggestion_to_item(suggestion: Mapping[str, Any]) -> dict[str, Any]:
     suggestion_id = str(suggestion.get("id", ""))
     action_type = str(suggestion.get("action_type") or "")
     state = str(suggestion.get("state", "unknown"))
-    risk = _safe_action_risk(action_type)
+    risk = get_action_risk(action_type)
     title = str(suggestion.get("title") or f"Suggested {action_type}")
     summary = str(suggestion.get("event_summary") or suggestion.get("summary") or title)
     return {
@@ -384,7 +358,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
             action
             for action in candidates
             if str(action.get("type") or action.get("action_type") or "") == args.action_type
-            and _safe_action_risk(str(action.get("type") or action.get("action_type") or "")) == "low"
+            and get_action_risk(str(action.get("type") or action.get("action_type") or "")) == "low"
         ]
         if not candidates:
             print("No low-risk requested pending actions matched the bulk approval filters")

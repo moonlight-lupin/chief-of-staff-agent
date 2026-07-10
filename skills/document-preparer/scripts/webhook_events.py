@@ -285,6 +285,9 @@ def cmd_execute(args: argparse.Namespace) -> int:
                 )
             elif action_type == "drive.trash":
                 result = client.drive_trash(file_id=payload.get("file_id", ""))
+            elif action_type == "bookkeeper.invoice.record":
+                from bookkeeper_actions import execute_invoice_record
+                result = execute_invoice_record(cfg, args.action_id)
             else:
                 mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
                 print(f"❌ Unknown action type: {action_type}", file=sys.stderr)

@@ -12,6 +12,8 @@ HIGH_RISK_TYPES: set[str] = {
     "gmail.trash",
     "drive.trash",
     "calendar.cancel",
+    "bookkeeper.invoice.mark_paid",
+    "bookkeeper.invoice.delete",
 }
 
 MEDIUM_RISK_TYPES: set[str] = {
@@ -19,6 +21,8 @@ MEDIUM_RISK_TYPES: set[str] = {
     "calendar.update",
     "drive.upload",
     "gmail.archive",
+    "bookkeeper.invoice.record",
+    "bookkeeper.invoice.update",
 }
 
 LOW_RISK_TYPES: set[str] = {

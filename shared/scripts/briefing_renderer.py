@@ -172,6 +172,22 @@ def render_text(briefing: dict[str, Any]) -> str:
             lines.append(f"  Memory records: {km['total_records']} total.")
         lines.append("")
 
+    # Bookkeeper
+    bk = sections.get("bookkeeper", {})
+    if bk and (bk.get("candidates_found") or bk.get("pending_record_actions")
+               or bk.get("duplicate_warnings") or bk.get("candidates_needs_review")):
+        lines.append("Bookkeeper:")
+        if bk.get("candidates_found"):
+            lines.append(f"  {bk['candidates_found']} invoice candidate(s) found.")
+        if bk.get("candidates_needs_review"):
+            lines.append(f"  {bk['candidates_needs_review']} candidate(s) need review.")
+        if bk.get("duplicate_warnings"):
+            lines.append(f"  {bk['duplicate_warnings']} possible duplicate(s).")
+        if bk.get("pending_record_actions"):
+            lines.append(f"  {bk['pending_record_actions']} pending invoice-record action(s).")
+        lines.append("  (No invoices written by this briefing.)")
+        lines.append("")
+
     # Safety footer
     if safety:
         lines.append("---")

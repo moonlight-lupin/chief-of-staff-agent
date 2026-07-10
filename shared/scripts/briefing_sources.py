@@ -389,6 +389,61 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
     return stats
 
 
+def collect_bookkeeper_stats(config: object) -> dict[str, object]:
+    """Read .bookkeeper_invoice_candidates.json and invoices.yaml for
+    daily briefing bookkeeper section.
+
+    Degrades gracefully if files don't exist.
+    """
+    try:
+        root = _project_root(config)
+    except Exception:
+        return {}
+
+    candidates_path = root / ".bookkeeper_invoice_candidates.json"
+    stats: dict[str, object] = {
+        "candidates_found": 0,
+        "candidates_needs_review": 0,
+        "duplicate_warnings": 0,
+        "pending_record_actions": 0,
+        "outstanding_ap": "0",
+        "outstanding_ar": "0",
+        "overdue_count": 0,
+    }
+
+    # Read candidate store
+    try:
+        if candidates_path.exists():
+            data = json.loads(candidates_path.read_text(encoding="utf-8"))
+            candidates = data.get("candidates", {})
+            if isinstance(candidates, dict):
+                active = [c for c in candidates.values()
+                          if isinstance(c, dict) and c.get("state") == "candidate"]
+                stats["candidates_found"] = len(active)
+                stats["candidates_needs_review"] = sum(
+                    1 for c in active if c.get("validation_status") == "needs_review"
+                )
+                stats["duplicate_warnings"] = sum(
+                    1 for c in active
+                    if any(d.get("score", 0) >= 0.85 for d in c.get("duplicate_candidates", []))
+                )
+    except Exception:
+        pass
+
+    # Read pending actions for bookkeeper.invoice.record
+    try:
+        from pending_actions import list_pending_actions
+        pending = list_pending_actions(config)
+        stats["pending_record_actions"] = sum(
+            1 for a in pending
+            if a.get("type") == "bookkeeper.invoice.record" and a.get("state") == "requested"
+        )
+    except Exception:
+        pass
+
+    return stats
+
+
 __all__ = [
     "collect_pending_actions",
     "collect_suggestions",
@@ -397,4 +452,5 @@ __all__ = [
     "collect_system_health",
     "collect_calendar_summary",
     "collect_knowledge_stats",
+    "collect_bookkeeper_stats",
 ]
