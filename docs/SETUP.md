@@ -224,6 +224,7 @@ Skills call `get_workspace_client(config)` → get the right backend automatical
 - Outlook mail search/draft/send/archive/trash, categories (tags), calendar, and OneDrive files.
 - Drafts supported; send is destructive and blocked by default (`CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1`).
 - No calendar uncancel (recreate the event). Simple upload only (< 4 MB). Polling only (no Graph webhooks yet).
+- **Request resilience:** Graph calls transparently retry on throttling (HTTP 429) and the retryable 503/504 up to 3 times, honoring the server's `Retry-After` header (falling back to 1s/2s/4s exponential backoff, capped at 30s per wait). A 401 triggers a one-time token refresh and retry. List/search results are paginated automatically via `@odata.nextLink`, bounded by your `max_results` (mail/file search) or internal caps of 500 items / 10 pages (calendar and tag listings); when a cap truncates results a warning is emitted. No configuration required — always on.
 - Best for: Microsoft 365 / Outlook / OneDrive tenants.
 
 ## Migration from SDK mode (v0.1.8 and earlier)
