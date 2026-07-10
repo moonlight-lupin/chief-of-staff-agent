@@ -84,6 +84,17 @@ def _make_jwt(iss="https://accounts.google.com", aud="https://myapp.example.com/
     return f"{header}.{payload_b64}.{sig}"
 
 
+def _mock_verify_token(claims=None, side_effect=None):
+    """Mock google.oauth2.id_token.verify_oauth2_token.
+
+    If side_effect is set, it simulates a verification failure.
+    Otherwise returns the claims dict (simulating successful verification).
+    """
+    if side_effect:
+        return patch("google.oauth2.id_token.verify_oauth2_token", side_effect=side_effect)
+    return patch("google.oauth2.id_token.verify_oauth2_token", return_value=claims or {})
+
+
 def _make_pubsub_payload(email="test@x.com", history_id="12345", message_id="msg-001"):
     inner = json.dumps({"emailAddress": email, "historyId": history_id}).encode()
     encoded = base64.urlsafe_b64encode(inner).decode().rstrip("=")
@@ -97,7 +108,11 @@ class TestPubSubOIDC:
     def test_valid_jwt(self, with_pubsub):
         from webhook_security import verify_pubsub_oidc
         jwt = _make_jwt()
-        ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
+        valid_claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
+                        "email_verified": True, "iss": "https://accounts.google.com",
+                        "aud": "https://myapp.example.com/webhooks/gmail"}
+        with _mock_verify_token(valid_claims):
+            ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
         assert ok
         assert reason == "OK"
 
@@ -115,49 +130,60 @@ class TestPubSubOIDC:
 
     def test_wrong_issuer(self, with_pubsub):
         from webhook_security import verify_pubsub_oidc
-        jwt = _make_jwt(iss="https://evil.com")
-        ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
+        # Google verifies signature OK, but issuer is wrong
+        claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
+                  "email_verified": True, "iss": "https://evil.com",
+                  "aud": "https://myapp.example.com/webhooks/gmail"}
+        with _mock_verify_token(claims):
+            ok, reason = verify_pubsub_oidc("Bearer valid.signed.token")
         assert not ok
         assert "issuer" in reason.lower()
 
     def test_wrong_audience(self, with_pubsub):
         from webhook_security import verify_pubsub_oidc
-        jwt = _make_jwt(aud="https://wrong.example.com")
-        ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
+        # Google rejects wrong audience at signature verification
+        with _mock_verify_token(side_effect=ValueError("Wrong audience")):
+            ok, reason = verify_pubsub_oidc("Bearer valid.signed.token")
         assert not ok
-        assert "audience" in reason.lower()
+        assert "JWT verification failed" in reason
 
     def test_wrong_service_account(self, with_pubsub):
         from webhook_security import verify_pubsub_oidc
-        jwt = _make_jwt(email="evil@attacker.com")
-        ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
+        claims = {"email": "evil@attacker.com", "email_verified": True,
+                  "iss": "https://accounts.google.com",
+                  "aud": "https://myapp.example.com/webhooks/gmail"}
+        with _mock_verify_token(claims):
+            ok, reason = verify_pubsub_oidc("Bearer valid.signed.token")
         assert not ok
-        assert "email" in reason.lower()
+        assert "service account" in reason.lower()
 
     def test_email_not_verified(self, with_pubsub):
         from webhook_security import verify_pubsub_oidc
-        jwt = _make_jwt(email_verified=False)
-        ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
+        claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
+                  "email_verified": False, "iss": "https://accounts.google.com",
+                  "aud": "https://myapp.example.com/webhooks/gmail"}
+        with _mock_verify_token(claims):
+            ok, reason = verify_pubsub_oidc("Bearer valid.signed.token")
         assert not ok
-        assert "email_verified" in reason
+        assert "not verified" in reason
 
-    def test_missing_audience_config(self, with_secret, monkeypatch):
+    def test_missing_audience_config(self, with_pubsub, monkeypatch):
         monkeypatch.setenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT", "pubsub@my-project.iam.gserviceaccount.com")
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", raising=False)
         from webhook_security import verify_pubsub_oidc
         jwt = _make_jwt()
         ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
         assert not ok
-        assert "AUDIENCE" in reason
+        assert "configuration incomplete" in reason.lower()
 
-    def test_missing_sa_config(self, with_secret, monkeypatch):
-        monkeypatch.setenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", "aud")
+    def test_missing_sa_config(self, with_pubsub, monkeypatch):
+        monkeypatch.setenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", "https://myapp.example.com/webhooks/gmail")
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT", raising=False)
         from webhook_security import verify_pubsub_oidc
         jwt = _make_jwt()
         ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
         assert not ok
-        assert "SERVICE_ACCOUNT" in reason
+        assert "configuration incomplete" in reason.lower()
 
 
 # ─── Channel Token Fail-Closed ───────────────────────────────
@@ -400,13 +426,24 @@ class TestExecutionFailurePaths:
         action = get_pending_action(config, action_id)
         assert action["state"] == "executed"
 
-    def test_guardrail_env_set(self, with_secret):
-        """Guardrail env vars set before provider call."""
+    def test_guardrail_env_set_during_execution(self, with_secret):
+        """Guardrail env vars set during provider call, restored after."""
         config, project = with_secret
+        os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
+        os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
         mock_client.gmail_send.return_value = {"success": True}
+
+        # Capture env vars during the provider call
+        captured = {}
+        def capture_send(**kwargs):
+            captured["auto"] = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
+            captured["destructive"] = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
+            return {"success": True}
+        mock_client.gmail_send.side_effect = capture_send
+
         action_id = self._create_and_approve(config, "gmail.send",
             {"to": "x@y.com", "subject": "test", "body": "test"}, mock_client)
 
@@ -415,8 +452,13 @@ class TestExecutionFailurePaths:
              patch("workspace_client.get_workspace_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None):
             webhook_events.main(["execute", "--action-id", action_id])
-        assert os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE") == "1"
-        assert os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE") == "1"
+
+        # During execution, env vars were set
+        assert captured["auto"] == "1"
+        assert captured["destructive"] == "1"
+        # After execution, they're restored (removed since they weren't set before)
+        assert "CHIEF_OF_STAFF_AUTO_APPROVE" not in os.environ
+        assert "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE" not in os.environ
 
 
 # ─── Method Signature Tests ──────────────────────────────────
@@ -498,6 +540,9 @@ class TestReceiverOIDC:
 
         body = json.dumps(_make_pubsub_payload()).encode()
         jwt = _make_jwt()
+        valid_claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
+                        "email_verified": True, "iss": "https://accounts.google.com",
+                        "aud": "https://myapp.example.com/webhooks/gmail"}
 
         handler = handler_class.__new__(handler_class)
         handler.path = "/webhooks/gmail"
@@ -505,7 +550,8 @@ class TestReceiverOIDC:
         handler.rfile = io.BytesIO(body)
         handler.wfile = io.BytesIO()
 
-        with patch.object(handler, "_respond") as mock_respond:
+        with _mock_verify_token(valid_claims), \
+             patch.object(handler, "_respond") as mock_respond:
             handler.do_POST()
 
         status, data = mock_respond.call_args[0]
@@ -527,7 +573,8 @@ class TestReceiverOIDC:
         handler.rfile = io.BytesIO(body)
         handler.wfile = io.BytesIO()
 
-        with patch.object(handler, "_respond") as mock_respond:
+        with _mock_verify_token(side_effect=ValueError("Wrong audience")), \
+             patch.object(handler, "_respond") as mock_respond:
             handler.do_POST()
 
         status, data = mock_respond.call_args[0]
@@ -563,6 +610,9 @@ class TestReceiverOIDC:
 
         body = json.dumps({"message": {"data": "!!!invalid!!!"}}).encode()
         jwt = _make_jwt()
+        valid_claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
+                        "email_verified": True, "iss": "https://accounts.google.com",
+                        "aud": "https://myapp.example.com/webhooks/gmail"}
 
         handler = handler_class.__new__(handler_class)
         handler.path = "/webhooks/gmail"
@@ -570,7 +620,8 @@ class TestReceiverOIDC:
         handler.rfile = io.BytesIO(body)
         handler.wfile = io.BytesIO()
 
-        with patch.object(handler, "_respond") as mock_respond:
+        with _mock_verify_token(valid_claims), \
+             patch.object(handler, "_respond") as mock_respond:
             handler.do_POST()
 
         status, data = mock_respond.call_args[0]

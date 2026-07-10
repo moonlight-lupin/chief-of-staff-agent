@@ -77,62 +77,54 @@ def verify_pubsub_oidc(authorization_header: str | None) -> tuple[bool, str]:
     Google Pub/Sub sends an OIDC token in the Authorization header:
       Authorization: Bearer <jwt>
 
-    The JWT contains claims:
-    - iss: https://accounts.google.com (issuer)
-    - aud: the configured audience (your webhook URL or service name)
-    - email: the service account email that sent the notification
-    - email_verified: true
-
-    For production, the JWT signature should be verified against Google's
-    public keys. For internal beta, we validate claims only.
+    Uses google-auth library to cryptographically verify the JWT signature
+    against Google's public keys, plus validates audience, issuer,
+    service account email, and email_verified claims.
 
     Returns (is_valid, reason).
     """
     if not authorization_header:
         return False, "Missing Authorization header"
 
-    # Extract bearer token
     if not authorization_header.startswith("Bearer "):
         return False, "Authorization header must be 'Bearer <jwt>'"
-    token = authorization_header[7:]
+    token = authorization_header.removeprefix("Bearer ").strip()
 
-    # Decode JWT payload (without signature verification for beta)
-    claims = _decode_jwt_unverified(token)
-    if not claims:
-        return False, "Invalid JWT: cannot decode payload"
+    audience = get_pubsub_audience()
+    expected_email = get_pubsub_service_account()
+
+    if not audience or not expected_email:
+        return False, "Pub/Sub OIDC configuration incomplete (set CHIEF_OF_STAFF_PUBSUB_AUDIENCE and CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT)"
+
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport.requests import Request
+    except ImportError:
+        return False, "google-auth library not installed (pip install google-auth>=2.38)"
+
+    try:
+        claims = id_token.verify_oauth2_token(
+            token,
+            Request(),
+            audience=audience,
+            clock_skew_in_seconds=30,
+        )
+    except Exception as exc:
+        return False, f"JWT verification failed: {exc}"
+
+    # Verify service account email
+    token_email = claims.get("email", "")
+    if token_email != expected_email:
+        return False, f"Unexpected service account: expected {expected_email}, got {token_email}"
+
+    # Verify email_verified
+    if claims.get("email_verified") is not True:
+        return False, "Service account email is not verified"
 
     # Verify issuer
     issuer = claims.get("iss", "")
-    if "accounts.google.com" not in issuer:
-        return False, f"Invalid issuer: {issuer}"
-
-    # Verify email_verified
-    if not claims.get("email_verified", False):
-        return False, "email_verified claim is false"
-
-    # Verify service account email
-    expected_sa = get_pubsub_service_account()
-    if expected_sa:
-        token_email = claims.get("email", "")
-        if not hmac.compare_digest(token_email, expected_sa):
-            return False, f"Service account email mismatch: expected {expected_sa}, got {token_email}"
-    else:
-        # Fail-closed: require configured service account
-        return False, "CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT not configured"
-
-    # Verify audience
-    expected_aud = get_pubsub_audience()
-    if expected_aud:
-        aud = claims.get("aud", "")
-        if isinstance(aud, list):
-            if expected_aud not in aud:
-                return False, f"Audience mismatch: {expected_aud} not in {aud}"
-        else:
-            if not hmac.compare_digest(str(aud), expected_aud):
-                return False, f"Audience mismatch: expected {expected_aud}, got {aud}"
-    else:
-        # Fail-closed: require configured audience
-        return False, "CHIEF_OF_STAFF_PUBSUB_AUDIENCE not configured"
+    if issuer not in ("accounts.google.com", "https://accounts.google.com"):
+        return False, f"Unexpected issuer: {issuer}"
 
     return True, "OK"
 

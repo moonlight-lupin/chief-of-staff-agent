@@ -231,86 +231,101 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     # Establish approved execution context — the explicit approval IS the confirmation.
     # Set env vars for guardrails, matching send_email.py and delete_actions.py behavior.
-    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-    os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
+    # Restore previous values after execution (safe for tests/workers/long-running processes).
+    old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
+    old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
 
     try:
-        if action_type == "gmail.send":
-            result = client.gmail_send(
-                to=payload.get("to", ""),
-                subject=payload.get("subject", ""),
-                body=payload.get("body", ""),
-                cc=payload.get("cc"),
-            )
-        elif action_type == "gmail.label":
-            result = client.gmail_label(
-                message_id=payload.get("message_id", ""),
-                label_id=payload.get("label_id", ""),
-            )
-        elif action_type == "gmail.archive":
-            result = client.gmail_archive(message_id=payload.get("message_id", ""))
-        elif action_type == "gmail.create_label":
-            result = client.gmail_create_label(label_name=payload.get("label", ""))
-        elif action_type == "gmail.trash":
-            result = client.gmail_trash(message_id=payload.get("message_id", ""))
-        elif action_type == "calendar.create":
-            result = client.calendar_create(
-                title=payload.get("summary", payload.get("title", "")),
-                start=payload.get("start", ""),
-                end=payload.get("end", ""),
-            )
-        elif action_type == "calendar.update":
-            result = client.calendar_update(
-                event_id=payload.get("event_id", ""),
-                summary=payload.get("summary"),
-                start=payload.get("start"),
-                end=payload.get("end"),
-            )
-        elif action_type == "calendar.cancel":
-            result = client.calendar_cancel(event_id=payload.get("event_id", ""))
-        elif action_type == "drive.upload":
-            result = client.drive_upload(
-                file_path=payload.get("file_path", payload.get("path", "")),
-                parent_id=payload.get("parent_id"),
-            )
-        elif action_type == "drive.download":
-            result = client.drive_download(
-                file_id=payload.get("file_id", ""),
-                output_path=payload.get("output_path", payload.get("path", "")),
-            )
-        elif action_type == "drive.trash":
-            result = client.drive_trash(file_id=payload.get("file_id", ""))
-        else:
-            mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
-            print(f"❌ Unknown action type: {action_type}", file=sys.stderr)
+        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
+        os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
+
+        try:
+            if action_type == "gmail.send":
+                result = client.gmail_send(
+                    to=payload.get("to", ""),
+                    subject=payload.get("subject", ""),
+                    body=payload.get("body", ""),
+                    cc=payload.get("cc"),
+                )
+            elif action_type == "gmail.label":
+                result = client.gmail_label(
+                    message_id=payload.get("message_id", ""),
+                    label_id=payload.get("label_id", ""),
+                )
+            elif action_type == "gmail.archive":
+                result = client.gmail_archive(message_id=payload.get("message_id", ""))
+            elif action_type == "gmail.create_label":
+                result = client.gmail_create_label(label_name=payload.get("label", ""))
+            elif action_type == "gmail.trash":
+                result = client.gmail_trash(message_id=payload.get("message_id", ""))
+            elif action_type == "calendar.create":
+                result = client.calendar_create(
+                    title=payload.get("summary", payload.get("title", "")),
+                    start=payload.get("start", ""),
+                    end=payload.get("end", ""),
+                )
+            elif action_type == "calendar.update":
+                result = client.calendar_update(
+                    event_id=payload.get("event_id", ""),
+                    summary=payload.get("summary"),
+                    start=payload.get("start"),
+                    end=payload.get("end"),
+                )
+            elif action_type == "calendar.cancel":
+                result = client.calendar_cancel(event_id=payload.get("event_id", ""))
+            elif action_type == "drive.upload":
+                result = client.drive_upload(
+                    file_path=payload.get("file_path", payload.get("path", "")),
+                    parent_id=payload.get("parent_id"),
+                )
+            elif action_type == "drive.download":
+                result = client.drive_download(
+                    file_id=payload.get("file_id", ""),
+                    output_path=payload.get("output_path", payload.get("path", "")),
+                )
+            elif action_type == "drive.trash":
+                result = client.drive_trash(file_id=payload.get("file_id", ""))
+            else:
+                mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
+                print(f"❌ Unknown action type: {action_type}", file=sys.stderr)
+                return 1
+        except Exception as exc:
+            mark_failed(cfg, args.action_id, str(exc))
+            if args.summary:
+                print(f"❌ Execution failed: {exc}")
+            else:
+                print_json({"success": False, "error": str(exc)})
             return 1
-    except Exception as exc:
-        mark_failed(cfg, args.action_id, str(exc))
+
+        # Check provider result BEFORE marking executed
+        success = result.get("success", False) if isinstance(result, dict) else True
+        if not success:
+            error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
+            mark_failed(cfg, args.action_id, error)
+            if args.summary:
+                print(f"❌ Provider returned error: {error}")
+            else:
+                print_json({"success": False, "error": error, "result": result})
+            return 1
+
+        mark_executed(cfg, args.action_id, result if isinstance(result, dict) else {"raw": str(result)})
+
         if args.summary:
-            print(f"❌ Execution failed: {exc}")
+            print(f"✅ Executed: {action_type} ({args.action_id})")
         else:
-            print_json({"success": False, "error": str(exc)})
-        return 1
+            print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
+                         "result": result if isinstance(result, dict) else str(result)})
+        return 0
 
-    # Check provider result BEFORE marking executed
-    success = result.get("success", False) if isinstance(result, dict) else True
-    if not success:
-        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
-        mark_failed(cfg, args.action_id, error)
-        if args.summary:
-            print(f"❌ Provider returned error: {error}")
+    finally:
+        if old_auto is None:
+            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
         else:
-            print_json({"success": False, "error": error, "result": result})
-        return 1
-
-    mark_executed(cfg, args.action_id, result if isinstance(result, dict) else {"raw": str(result)})
-
-    if args.summary:
-        print(f"✅ Executed: {action_type} ({args.action_id})")
-    else:
-        print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
-                     "result": result if isinstance(result, dict) else str(result)})
-    return 0
+            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = old_auto
+        if old_destructive is None:
+            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
 
 
 def cmd_pending(args: argparse.Namespace) -> int:
