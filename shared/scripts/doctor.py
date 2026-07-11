@@ -345,13 +345,26 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     if not esign or str(esign.get("provider", "")).lower() != "docuseal":
         return CheckResult("docuseal", "warn", "skipped: e-sign not configured for DocuSeal")
     url = str(esign.get("url") or "").rstrip("/")
-    if not url or not (os.getenv("DOCUSEAL_API_KEY") or os.getenv("DOCUSEAL_MCP_TOKEN")):
+    api_key = os.getenv("DOCUSEAL_API_KEY", "")
+    mcp_token = os.getenv("DOCUSEAL_MCP_TOKEN", "")
+    if not url or not (api_key or mcp_token):
         return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "chief-of-staff-doctor/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:  # nosec - configured URL health check
             ok = resp.status < 500
-        return CheckResult("docuseal", "pass" if ok else "warn", f"HTTP {resp.status}")
+        # If API key is available, verify it works against REST /api/templates.
+        if api_key:
+            api_req = urllib.request.Request(
+                f"{url}/api/templates?limit=1",
+                headers={"X-Auth-Token": api_key, "User-Agent": "chief-of-staff-doctor/1.0"},
+            )
+            with urllib.request.urlopen(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
+                api_ok = api_resp.status < 500
+            detail = f"HTTP {resp.status}, API key {'OK' if api_ok else 'FAIL'}"
+        else:
+            detail = f"HTTP {resp.status}, no API key (PATCH fields unavailable)"
+        return CheckResult("docuseal", "pass" if ok else "warn", detail)
     except Exception as exc:
         return CheckResult("docuseal", "warn", f"DocuSeal ping failed: {exc}")
 
