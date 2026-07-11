@@ -249,6 +249,143 @@ Notes:
   category across runs (it is not deleted); only the verification draft and
   uploaded file are cleaned up.
 
+## ESign Connector (DocuSeal)
+
+The eSign Connector skill sends documents for e-signature via a self-hosted
+DocuSeal instance. It uses **two API tokens** — no browser login or admin
+password required.
+
+### Prerequisites (all three are required)
+
+1. **Self-hosted DocuSeal instance, reachable by external signers.**
+   - Deploy DocuSeal (Docker) on a server or NAS.
+   - Expose it via a public domain or tunnel (e.g. Cloudflare Tunnel, ngrok,
+     Tailscale Funnel) so signers outside your network can access signing links.
+   - The instance URL (e.g. `https://sign.yourdomain.com`) must be reachable
+     from both the plugin's host and the signer's browser.
+
+2. **SMTP configured in DocuSeal.**
+   - DocuSeal sends signing request emails to signers. Without SMTP, no emails
+     are sent and the signing flow is broken.
+   - Configure in DocuSeal Settings → Email → SMTP.
+   - Common setup: Google Workspace SMTP relay (`smtp-relay.gmail.com:587`,
+     STARTTLS, your workspace credentials).
+
+3. **Two API tokens created in DocuSeal.**
+   - **MCP token**: Settings → MCP Server → create token.
+     Used for: `create_template`, `search_templates`, `search_documents`.
+   - **API key**: Settings → API → create access token.
+     Used for: `PATCH /api/templates/{id}` (field placement),
+     `POST /api/submissions` (send to signers), `GET /api/submissions/{id}`
+     (status), `DELETE /api/submissions/{id}` (cancel),
+     `GET /api/submissions/{id}/documents` (download signed).
+   - These are **different credentials** with different headers: MCP uses
+     `Authorization: Bearer` on `/mcp`; API key uses `X-Auth-Token` on `/api/*`.
+
+### Setup
+
+1. Install DocuSeal (if not already running):
+   ```bash
+   # Docker example — see DocuSeal docs for full setup
+   docker run -d --name docuseal \
+     -p 3000:3000 \
+     -e HOST=https://sign.yourdomain.com \
+     docuseal/docuseal
+   ```
+
+2. Create the two tokens in DocuSeal Settings (see prerequisites above).
+
+3. Add tokens to `.env` (never in company.yaml):
+   ```bash
+   DOCUSEAL_MCP_TOKEN=your_mcp_token_here
+   DOCUSEAL_API_KEY=your_api_key_here
+   ```
+
+4. Run bootstrap with `--esign-url`:
+   ```bash
+   python shared/scripts/bootstrap.py \
+     --company "Your Company Pte Ltd" \
+     --jurisdiction SG \
+     --operator you@yourdomain.com \
+     --esign-url https://sign.yourdomain.com
+   ```
+
+   Or manually edit `shared/config/company.yaml` → `esign` section:
+   ```yaml
+   esign:
+     provider: docuseal
+     url: "https://sign.yourdomain.com"
+     domain: "sign.yourdomain.com"
+     provider_email: "you@yourdomain.com"
+     provider_role: "Service Provider"
+     client_role: "Client"
+     auth_mode: auto
+     file_serving:
+       mode: existing
+       public_base_url: null
+       cleanup_after_send: true
+     defaults:
+       signing_order: random
+       cancel_before_resend: true
+     field_detection:
+       prefer: auto
+       page_indexing: zero_based
+   ```
+
+5. Verify:
+   ```bash
+   python shared/scripts/doctor.py
+   ```
+   The doctor checks DocuSeal connectivity AND verifies the API key works
+   against `GET /api/templates`. If the API key check fails, the doctor
+   reports `FAIL` — regenerate the key in DocuSeal Settings → API.
+
+### How it works
+
+```
+Document (.docx from Document Preparer or external PDF)
+  → LibreOffice headless → PDF (if .docx)
+  → PyMuPDF merge (if multi-doc, e.g. T&Cs + SOW)
+  → Serve PDF via HTTPS (file_serving config)
+  → MCP create_template(name, url)           → empty template
+  → GET /api/templates/{id}                  → extract attachment_uuid + submitter uuid
+  → Coordinate extraction (sign_detector.py or ODL+pdfplumber)
+  → Normalize to 0-1 top-down coordinates
+  → PATCH /api/templates/{id} with fields    → (API key, X-Auth-Token)
+  → Verify fields (count, uuids, unique names, submitter uuids)
+  → POST /api/submissions                     → send to signers (API key)
+  → GET /api/submissions/{id}                 → track status
+  → GET /api/submissions/{id}/documents       → download signed PDF
+  → Drive Filer files to client folder
+```
+
+### Self-hosted DocuSeal CE vs Pro
+
+| Feature | CE (free) | Pro |
+|---------|-----------|-----|
+| `POST /templates/pdf` (create template with fields in one call) | ❌ Pro-gated | ✅ |
+| MCP `create_template` (empty template) | ✅ | ✅ |
+| `PATCH /api/templates/{id}` (add fields) | ✅ (API key) | ✅ |
+| `POST /api/submissions` (send to signers) | ✅ (API key) | ✅ |
+| `POST /submissions/pdf` (one-off from PDF) | ❌ Pro-gated | ✅ |
+
+On CE free, the flow uses MCP to create the template + API key to PATCH fields
+(two tokens). On Pro, you can use a single API key for everything via
+`POST /templates/pdf` (set `auth_mode: pro_api_only` in company.yaml).
+
+### Self-Sign vs eSign Connector
+
+| User intent | Skill |
+|---|---|
+| "Sign this", "add my signature" | `self-sign` (offline, pure Python) |
+| "Send to client/vendor/director for signature" | `esign-connector` (DocuSeal) |
+| Generated doc where user signs locally only | `self-sign` |
+| Generated doc requiring remote counterparty signatures | `esign-connector` |
+
+Both skills share `self-sign/scripts/sign_detector.py` for signature location
+detection. Self-sign places a local image; esign-connector normalizes to
+DocuSeal coordinates and uploads.
+
 ## Switching Providers
 
 To switch from Google to Composio (or vice versa), just change `integrations.workspace.provider` in `company.yaml`. The Daily Briefing and all skills that use `WorkspaceClient` will automatically use the new provider.

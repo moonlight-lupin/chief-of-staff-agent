@@ -60,7 +60,7 @@ def _merge_preset(args: argparse.Namespace) -> dict[str, Any]:
         preset.setdefault("company", {})["jurisdiction"] = args.jurisdiction
     if args.operator:
         preset.setdefault("google", {})["delegate_email"] = args.operator
-        preset.setdefault("esign", {})["admin_email"] = args.operator
+        preset.setdefault("esign", {})["provider_email"] = args.operator
     if args.project_root:
         preset.setdefault("paths", {})["project_root"] = args.project_root
     if args.business_type:
@@ -191,6 +191,64 @@ def _provider_overlay(
     return overlay, required_env, notices, next_commands
 
 
+def _esign_overlay(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
+    """Build the config overlay for DocuSeal eSign Connector.
+
+    Returns ``(overlay, required_env, notices, next_commands)`` — same shape
+    as ``_provider_overlay`` but for the esign integration (not the workspace
+    provider, which is orthogonal).
+    """
+    esign_url = getattr(args, "esign_url", None)
+    if not esign_url:
+        return {}, [], [], []
+
+    esign_url = esign_url.rstrip("/")
+    from urllib.parse import urlparse
+    parsed = urlparse(esign_url)
+    domain = parsed.hostname or esign_url
+
+    overlay: dict[str, Any] = {
+        "esign": {
+            "provider": "docuseal",
+            "url": esign_url,
+            "domain": domain,
+            "auth_mode": "auto",
+            "file_serving": {
+                "mode": "existing",
+                "public_base_url": None,
+                "cleanup_after_send": True,
+            },
+            "defaults": {
+                "signing_order": "random",
+                "cancel_before_resend": True,
+            },
+            "field_detection": {
+                "prefer": "auto",
+                "page_indexing": "zero_based",
+            },
+        }
+    }
+
+    required_env = ["DOCUSEAL_MCP_TOKEN", "DOCUSEAL_API_KEY"]
+    notices = [
+        f"Configured esign.url={esign_url}",
+        "Create both tokens in DocuSeal Settings:",
+        "  - MCP token: Settings → MCP Server → create token",
+        "  - API key: Settings → API → create access token",
+        "  - Store both in .env (never in company.yaml)",
+        "Ensure SMTP is configured in DocuSeal Settings → Email → SMTP",
+        "  (signing request emails won't be sent without it)",
+        "Ensure the DocuSeal URL is reachable by external signers",
+        "  (e.g. via a tunnel or public domain pointing to the instance)",
+    ]
+    next_commands = [
+        "python shared/scripts/doctor.py",
+    ]
+    return overlay, required_env, notices, next_commands
+
+
 def _deep_update(base: dict[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in updates.items():
         if isinstance(value, Mapping) and isinstance(base.get(key), dict):
@@ -283,8 +341,11 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     copied = _copy_examples()
     preset = _merge_preset(args)
     overlay, required_env, provider_notices, provider_next = _provider_overlay(args)
+    esign_overlay, esign_required_env, esign_notices, esign_next = _esign_overlay(args)
     if overlay:
         _deep_update(preset, overlay)
+    if esign_overlay:
+        _deep_update(preset, esign_overlay)
     config_path = _write_config(preset)
     config = _load_yaml(config_path)
     root = _project_root(config, config_path)
@@ -314,6 +375,12 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         result["required_env"] = required_env
         result["provider_notices"] = provider_notices
         result["provider_next_commands"] = provider_next
+    # Surface esign onboarding metadata when --esign-url was provided.
+    if esign_overlay:
+        result["esign_configured"] = True
+        result["required_env"] = result.get("required_env", []) + esign_required_env
+        result["esign_notices"] = esign_notices
+        result["esign_next_commands"] = esign_next
     return result
 
 
@@ -347,6 +414,12 @@ def _main(argv: list[str] | None = None) -> int:
         help="Env var holding the M365 client secret (default: M365_CLIENT_SECRET)",
     )
     parser.add_argument("--composio-user-id", help="Composio user id")
+    parser.add_argument(
+        "--esign-url", default=None,
+        help="DocuSeal instance URL (e.g. https://sign.yourdomain.com). "
+             "Enables esign-connector onboarding. Requires DOCUSEAL_MCP_TOKEN "
+             "and DOCUSEAL_API_KEY in .env.",
+    )
     args = parser.parse_args(argv)
 
     err = _validate_provider_args(args)
@@ -376,6 +449,20 @@ def _main(argv: list[str] | None = None) -> int:
         if next_cmds:
             print("Suggested next commands:")
             for cmd in next_cmds:
+                print(f"  {cmd}")
+
+    # esign onboarding output
+    if result.get("esign_configured"):
+        print("\nDocuSeal eSign Connector:")
+        for note in result.get("esign_notices", []):
+            print(f"- {note}")
+        for var in result.get("required_env", []):
+            if var.startswith("DOCUSEAL"):
+                print(f"Set {var} in .env before running doctor.")
+        esign_cmds = result.get("esign_next_commands", [])
+        if esign_cmds:
+            print("Suggested next commands:")
+            for cmd in esign_cmds:
                 print(f"  {cmd}")
     return 0
 
