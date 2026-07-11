@@ -67,6 +67,12 @@ class TestPluginStructure:
             f"pyproject.toml={pyproject_version} chief_of_staff.py={entrypoint_version}"
         )
 
+        # The README status line is cosmetic but visible — keep it in lockstep.
+        readme = (PLUGIN_ROOT / "README.md").read_text()
+        assert f"v{plugin_version} internal beta" in readme, (
+            f"README.md status line does not mention v{plugin_version}"
+        )
+
     def test_pyproject_covers_requirements(self):
         """Every package pinned in requirements.txt must appear in pyproject dependencies."""
         import tomllib

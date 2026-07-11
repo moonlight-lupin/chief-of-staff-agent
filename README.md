@@ -10,7 +10,7 @@ It can organise information, detect stale deals, extract invoice candidates, pre
 
 ### Observe → Understand → Suggest → Approve → Execute → Audit
 
-> **Status:** v0.3.4 internal beta  
+> **Status:** v0.3.5 internal beta  
 > **Runtime:** Python 3.11+  
 > **License:** Apache License 2.0
 
