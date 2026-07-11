@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chief-of-Staff top-level entrypoint (v0.3.4).
+"""Chief-of-Staff top-level entrypoint (v0.3.5).
 
 READ-ONLY orchestration layer for the daily operating loop and subsystem
 summaries. This module must NEVER approve, execute, send, write, or mutate
@@ -35,7 +35,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1229,7 +1229,7 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Readiness report (v0.3.4) — generated go/no-go check
+# Readiness report (v0.3.5) — generated go/no-go check
 # ---------------------------------------------------------------------------
 
 # Row status vocabulary
@@ -1579,7 +1579,7 @@ def cmd_readiness(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Logs subcommand group (v0.3.4) — read-only observability + self-diagnosis
+# Logs subcommand group (v0.3.5) — read-only observability + self-diagnosis
 # ---------------------------------------------------------------------------
 
 import re as _re
@@ -1997,7 +1997,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chief_of_staff.py",
         description=(
-            "Chief-of-Staff v0.3.4 — read-only daily operating loop and subsystem summaries. "
+            "Chief-of-Staff v0.3.5 — read-only daily operating loop and subsystem summaries. "
             "Never approves, executes, or mutates state."
         ),
     )
