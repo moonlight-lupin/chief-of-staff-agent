@@ -7,7 +7,7 @@ license: Apache-2.0
 metadata:
   hermes:
     tags: [signature, pdf, docx, documents, offline, chief-of-staff]
-    related_skills: [document-preparer, drive-filer, daily-briefing, pipeline-manager, weekly-review]
+    related_skills: [document-preparer, drive-filer, daily-briefing, pipeline-manager, weekly-review, esign-connector]
 ---
 
 # Self-Sign
@@ -30,7 +30,7 @@ Use this skill when:
 - Document Preparer generates a document where the user's company is a signatory.
 - Pipeline Manager reaches a stage that requires the user to execute a document.
 
-Do not use this for sending documents to other parties for signature. That is a separate Phase 2 e-sign sender workflow.
+Do not use this for sending documents to other parties for signature. That is the `esign-connector` skill (DocuSeal third-party sending).
 
 ## Configuration
 

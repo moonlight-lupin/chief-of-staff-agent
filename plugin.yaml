@@ -2,14 +2,17 @@ name: chief-of-staff
 version: 0.3.4
 author: moonlight-lupin
 license: Apache-2.0
-description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, and backups."
+description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, e-signature, and backups."
 requires_skills: []
 optional_skills:
   - google-workspace
 
 # Skill profiles — determines which skills are registered.
-# Default profile registers all 17 skills including self-sign and email-organisation.
-# Enterprise profile swaps self-sign for esign-connector (DocuSeal).
+# Default profile registers all 18 skills (self-sign + esign-connector + email-organisation).
+# esign-connector requires DocuSeal config (esign section in company.yaml + tokens in .env).
+# If DocuSeal is not configured, esign-connector is inert (no error, just unused).
+# Enterprise profile is identical — both skills are always registered because
+# esign-connector depends on self-sign/scripts/sign_detector.py for coordinate detection.
 skill_profiles:
   default:
     registered:
@@ -30,6 +33,7 @@ skill_profiles:
       - backup
       - email-organisation
       - self-sign
+      - esign-connector
   enterprise:
     registered:
       - daily-briefing
@@ -48,6 +52,5 @@ skill_profiles:
       - travel-itinerary
       - backup
       - email-organisation
-      - esign-connector
-    optional:
       - self-sign
+      - esign-connector

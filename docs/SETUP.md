@@ -336,9 +336,10 @@ password required.
    ```bash
    python shared/scripts/doctor.py
    ```
-   The doctor checks DocuSeal connectivity AND verifies the API key works
-   against `GET /api/templates`. If the API key check fails, the doctor
-   reports `FAIL` — regenerate the key in DocuSeal Settings → API.
+   The doctor checks DocuSeal connectivity, verifies both tokens are present
+   (based on `auth_mode`), and validates the API key against `GET /api/templates`.
+   If the API key is invalid (HTTP 401/403), the doctor reports **fail**.
+   If a required token is missing for the configured auth mode, it reports **fail**.
 
 ### How it works
 
@@ -363,11 +364,11 @@ Document (.docx from Document Preparer or external PDF)
 
 | Feature | CE (free) | Pro |
 |---------|-----------|-----|
-| `POST /templates/pdf` (create template with fields in one call) | ❌ Pro-gated | ✅ |
+| `POST /api/templates/pdf` (create template with fields in one call) | ❌ Pro-gated | ✅ |
 | MCP `create_template` (empty template) | ✅ | ✅ |
 | `PATCH /api/templates/{id}` (add fields) | ✅ (API key) | ✅ |
 | `POST /api/submissions` (send to signers) | ✅ (API key) | ✅ |
-| `POST /submissions/pdf` (one-off from PDF) | ❌ Pro-gated | ✅ |
+| `POST /api/submissions/pdf` (one-off from PDF) | ❌ Pro-gated | ✅ |
 
 On CE free, the flow uses MCP to create the template + API key to PATCH fields
 (two tokens). On Pro, you can use a single API key for everything via

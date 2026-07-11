@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import urllib.error
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -347,24 +348,45 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     url = str(esign.get("url") or "").rstrip("/")
     api_key = os.getenv("DOCUSEAL_API_KEY", "")
     mcp_token = os.getenv("DOCUSEAL_MCP_TOKEN", "")
+    auth_mode = str(esign.get("auth_mode", "auto")).lower()
     if not url or not (api_key or mcp_token):
         return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "chief-of-staff-doctor/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:  # nosec - configured URL health check
             ok = resp.status < 500
+        detail = f"HTTP {resp.status}"
+        # Check credential completeness based on auth_mode.
+        missing_creds = []
+        if auth_mode in ("auto", "mcp_and_api"):
+            if not mcp_token:
+                missing_creds.append("DOCUSEAL_MCP_TOKEN (needed for template creation)")
+            if not api_key:
+                missing_creds.append("DOCUSEAL_API_KEY (needed for field placement + submissions)")
+        elif auth_mode == "pro_api_only":
+            if not api_key:
+                missing_creds.append("DOCUSEAL_API_KEY (required for pro_api_only mode)")
+        if missing_creds:
+            detail += ", missing: " + "; ".join(missing_creds)
+            return CheckResult("docuseal", "fail", detail)
         # If API key is available, verify it works against REST /api/templates.
         if api_key:
-            api_req = urllib.request.Request(
-                f"{url}/api/templates?limit=1",
-                headers={"X-Auth-Token": api_key, "User-Agent": "chief-of-staff-doctor/1.0"},
-            )
-            with urllib.request.urlopen(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
-                api_ok = api_resp.status < 500
-            detail = f"HTTP {resp.status}, API key {'OK' if api_ok else 'FAIL'}"
+            try:
+                api_req = urllib.request.Request(
+                    f"{url}/api/templates?limit=1",
+                    headers={"X-Auth-Token": api_key, "User-Agent": "chief-of-staff-doctor/1.0"},
+                )
+                with urllib.request.urlopen(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
+                    detail += f", API key OK"
+            except urllib.error.HTTPError as api_exc:
+                if api_exc.code in (401, 403):
+                    return CheckResult("docuseal", "fail", f"HTTP {resp.status}, API key invalid (HTTP {api_exc.code})")
+                detail += f", API key check failed (HTTP {api_exc.code})"
         else:
-            detail = f"HTTP {resp.status}, no API key (PATCH fields unavailable)"
+            detail += ", no API key (PATCH fields unavailable)"
         return CheckResult("docuseal", "pass" if ok else "warn", detail)
+    except urllib.error.HTTPError as exc:
+        return CheckResult("docuseal", "warn", f"DocuSeal HTTP {exc.code}: {exc.reason}")
     except Exception as exc:
         return CheckResult("docuseal", "warn", f"DocuSeal ping failed: {exc}")
 

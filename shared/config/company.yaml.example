@@ -166,7 +166,7 @@ backup:
 
 integrations:
   workspace:
-    provider: google_api        # google_api | composio
+    provider: google_api        # google_api | composio | m365
     mode: direct                # direct | sdk | mcp
     user_id: null
     account_aliases:
@@ -209,12 +209,12 @@ esign:
   # Role labels used in DocuSeal submissions.
   provider_role: "Service Provider"
   client_role: "Client"
-  # Auth mode: auto (MCP + API key, CE free) | pro_api_only (API key only, requires Pro).
+  # Auth mode: auto (MCP + API key, CE free) | mcp_and_api (same as auto) | pro_api_only (API key only, requires Pro).
   auth_mode: auto
   # How PDFs are served to MCP create_template (needs HTTPS URL).
   file_serving:
     # existing = customer already hosts files at a reachable HTTPS URL.
-    # local_https = spin up a temp file server with HTTPS tunnel (advanced).
+    # local_https = not yet implemented (planned for future release).
     mode: existing
     public_base_url: null    # e.g. "https://files.yourdomain.com"
     cleanup_after_send: true

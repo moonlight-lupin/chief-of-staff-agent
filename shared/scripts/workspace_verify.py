@@ -180,8 +180,8 @@ def _self_address(config: Any) -> str:
         if isinstance(google, Mapping) and google.get("delegate_email"):
             return str(google["delegate_email"])
         esign = config.get("esign") or {}
-        if isinstance(esign, Mapping) and esign.get("admin_email"):
-            return str(esign["admin_email"])
+        if isinstance(esign, Mapping) and esign.get("provider_email"):
+            return str(esign["provider_email"])
     return "operator@example.com"
 
 

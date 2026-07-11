@@ -1,7 +1,7 @@
 ---
 name: esign-connector
 description: "Send documents for e-signature via self-hosted DocuSeal. Create templates with signature fields, dispatch to submitters, track status, download signed copies, cancel submissions. Integrates with Document Preparer and Pipeline Manager."
-version: 0.2.0
+version: 0.2.1
 author: moonlight-lupin
 license: Apache-2.0
 metadata:
@@ -117,7 +117,7 @@ T&Cs pages first, SOW pages last. The signature table is on the SOW's last page.
 MCP `create_template` requires an HTTPS URL. Options:
 
 - **`file_serving.mode: existing`** (recommended) — use a URL the customer already hosts. Upload the PDF to any reachable HTTPS location.
-- **`file_serving.mode: local_https`** — start a temporary file server with an HTTPS tunnel. Clean up after template creation.
+- **`file_serving.mode: local_https`** — not yet implemented. Planned: start a temporary file server with an HTTPS tunnel, clean up after template creation.
 
 Use unguessable filenames. Set `cleanup_after_send: true`.
 
@@ -131,38 +131,42 @@ create_template(name="NDA - Client Name", url="https://files.yourdomain.com/nda_
 
 ### 5. Add Fields (API key — PATCH)
 
-After template creation, GET the template to obtain `attachment_uuid` and submitter `uuid`, then PATCH fields with coordinates.
+After template creation, GET the template to obtain `attachment_uuid` and the default submitter `uuid`, then generate a second submitter UUID for the client and PATCH fields with coordinates.
+
+**Role names must match `esign.provider_role` and `esign.client_role` from `company.yaml`.** DocuSeal matches submission roles to template submitter names — mismatched names cause submissions to fail or bind the wrong party.
 
 ```bash
-API_KEY=$(grep DOCUSEAL_API_KEY ~/.hermes/.env | cut -d= -f2)
+# Load config values
 BASE_URL=$(python3 -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['url'])")
+PROVIDER_ROLE=$(python3 -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['provider_role'])")
+CLIENT_ROLE=$(python3 -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['client_role'])")
 
-# Step A: GET template to extract UUIDs
+# Step A: GET template to extract attachment_uuid and existing submitter UUID
 TEMPLATE_JSON=$(curl -s "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
-  -H "X-Auth-Token: ${API_KEY}")
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}")
 
-# Extract attachment_uuid and submitter_uuid from the JSON
 ATTACHMENT_UUID=$(echo "$TEMPLATE_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 print(d['schema'][0]['attachment_uuid'])
 ")
-SUBMITTER_UUID=$(echo "$TEMPLATE_JSON" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d['submitters'][0]['uuid'])
-")
 
-# Step B: PATCH fields with coordinates
+# The default submitter from MCP create_template is 'First Party' — we need two submitters.
+# Generate UUIDs for both provider and client submitters.
+PROVIDER_UUID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+CLIENT_UUID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+
+# Step B: PATCH fields with coordinates — send ALL submitters and ALL fields
+# (PATCH is full replacement, NOT append — Rule #6)
 curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
-  -H "X-Auth-Token: ${API_KEY}" \
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
     \"name\": \"NDA - Client Name\",
     \"fields\": [
       {
         \"uuid\": \"$(python3 -c 'import uuid; print(uuid.uuid4())')\",
-        \"name\": \"Provider Signature\",
+        \"name\": \"${PROVIDER_ROLE} Signature\",
         \"type\": \"signature\",
         \"required\": true,
         \"submitter_uuid\": \"${PROVIDER_UUID}\",
@@ -174,7 +178,7 @@ curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
       },
       {
         \"uuid\": \"$(python3 -c 'import uuid; print(uuid.uuid4())')\",
-        \"name\": \"Client Signature\",
+        \"name\": \"${CLIENT_ROLE} Signature\",
         \"type\": \"signature\",
         \"required\": true,
         \"submitter_uuid\": \"${CLIENT_UUID}\",
@@ -186,8 +190,8 @@ curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
       }
     ],
     \"submitters\": [
-      {\"name\": \"Provider\", \"uuid\": \"${PROVIDER_UUID}\"},
-      {\"name\": \"Client\", \"uuid\": \"${CLIENT_UUID}\"}
+      {\"name\": \"${PROVIDER_ROLE}\", \"uuid\": \"${PROVIDER_UUID}\"},
+      {\"name\": \"${CLIENT_ROLE}\", \"uuid\": \"${CLIENT_UUID}\"}
     ]
   }"
 ```
@@ -196,7 +200,7 @@ curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
 
 ```bash
 curl -s "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
-  -H "X-Auth-Token: ${API_KEY}" | python3 -c "
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 fields = d.get('fields', [])
@@ -224,15 +228,15 @@ Do not send the submission until verification passes.
 
 ```bash
 curl -s -X POST "${BASE_URL}/api/submissions" \
-  -H "X-Auth-Token: ${API_KEY}" \
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
     \"template_id\": ${TEMPLATE_ID},
     \"send_email\": true,
     \"order\": \"random\",
     \"submitters\": [
-      {\"role\": \"Provider\", \"name\": \"Your Company\", \"email\": \"you@yourdomain.com\"},
-      {\"role\": \"Client\", \"name\": \"Client Name\", \"email\": \"client@example.com\"}
+      {\"role\": \"${PROVIDER_ROLE}\", \"name\": \"Your Company\", \"email\": \"you@yourdomain.com\"},
+      {\"role\": \"${CLIENT_ROLE}\", \"name\": \"Client Name\", \"email\": \"client@example.com\"}
     ]
   }"
 ```
@@ -243,7 +247,7 @@ Response includes `submission_id` and `slug` (signing link) — store in Pipelin
 
 ```bash
 curl -s "${BASE_URL}/api/submissions/${SUBMISSION_ID}" \
-  -H "X-Auth-Token: ${API_KEY}"
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}"
 ```
 
 Statuses: `pending`, `completed`, `declined`, `expired`.
@@ -252,7 +256,7 @@ Statuses: `pending`, `completed`, `declined`, `expired`.
 
 ```bash
 curl -s "${BASE_URL}/api/submissions/${SUBMISSION_ID}/documents" \
-  -H "X-Auth-Token: ${API_KEY}" | python3 -c "
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 for doc in d.get('documents', []):
@@ -269,37 +273,18 @@ After download → offer to file to Drive via Drive Filer.
 
 ```bash
 curl -s -X DELETE "${BASE_URL}/api/submissions/${SUBMISSION_ID}" \
-  -H "X-Auth-Token: ${API_KEY}"
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}"
 ```
 
 Always cancel old submissions before re-sending amended documents.
 
 ## Coordinate Extraction
 
-Signature field coordinates must be extracted per-document — the signature table position shifts as body text fills with real data. Never hardcode coordinates.
+Signature field coordinates must be extracted per-document — the signature table position shifts as body text fills with real data. Never hardcode coordinates. **Always run detection on the final merged PDF** (if merging T&Cs + SOW, merge first, then detect — page indices change after merge).
 
-### Detection routing
+### Detection
 
-| Document type | Method | Tool |
-|---|---|---|
-| Formal signature table (multi-row, role-bound) | ODL + pdfplumber | `esign-connector/scripts/docuseal_fields.py` |
-| Underscore lines or pattern labels | Reuse self-sign detector | `self-sign/scripts/sign_detector.py` |
-| Ambiguous layout | Ask user to identify blocks | User confirmation |
-
-### Normalization (shared)
-
-Both detection methods produce pixel coordinates (top-down). Convert to DocuSeal normalized coordinates:
-
-```python
-PAGE_W, PAGE_H = page.width, page.height  # from PyMuPDF
-docuseal_x = round(px_x / PAGE_W, 4)
-docuseal_y = round(px_y / PAGE_H, 4)
-docuseal_w = round(px_w / PAGE_W, 4)
-docuseal_h = round(px_h / PAGE_H, 4)
-docuseal_page = page.page_number - 1  # 0-indexed for PATCH
-```
-
-### Using sign_detector.py (underscore/pattern detection)
+Use `self-sign/scripts/sign_detector.py` for all detection. It finds signature and date locations in PDFs and DOCX by scanning for patterns, underscore runs, and party labels.
 
 ```bash
 python skills/self-sign/scripts/sign_detector.py \
@@ -309,19 +294,46 @@ python skills/self-sign/scripts/sign_detector.py \
   --config shared/config/company.yaml
 ```
 
-Returns JSON with `page`, `coordinates` (pixel bbox), `party_context`, `confidence`, `matched_party`. Normalize the coordinates as above, then build the PATCH fields payload.
+Returns JSON with `page` (1-based), `coordinates` (`[x0, y0, x1, y1]` pixel bbox), `party_context`, `confidence`, `matched_party`, `location_type`.
 
-### ODL + pdfplumber (table detection)
+### Coordinate Conversion (label bbox → DocuSeal placement)
 
-For formal signature tables (e.g., phronesis-docs templates with 5-row tables: header, signature, name, title, date):
+`sign_detector.py` returns the bbox of the **entire text line** (including the label, e.g. `Signature: ____________________`). DocuSeal needs the **blank signing area**, not the label. You must convert:
 
-1. Run `opendataloader_pdf` to find the signature table page + bbox (last Table element).
-2. Use `pdfplumber` `page.find_tables()` to get row/column boundaries.
-3. Assign fields by row position: row 1 = signature, row 2 = name, row 3 = title, row 4 = date.
-4. Left column = Provider, right column = Client.
-5. Normalize to DocuSeal coordinates.
+```python
+import fitz  # PyMuPDF
 
-See `scripts/docuseal_fields.py` for the implementation. ODL is an optional dependency — if not installed, fall back to `sign_detector.py` underscore detection.
+doc = fitz.open(pdf_path)
+page = doc[location["page"] - 1]  # detector page is 1-based
+PAGE_W, PAGE_H = page.rect.width, page.rect.height
+
+x0, y0, x1, y1 = location["coordinates"]
+
+# For underscore-line signatures: shrink to the underscore area
+# (offset right past the label text, use the line height for field height)
+# Adjust these offsets based on the document — the goal is to place
+# the field on the blank area, not on the printed label.
+PADDING = 4
+label_offset = 80  # approximate width of "Signature: " label — adjust per template
+
+field_x = x0 + label_offset
+field_y = y0 + PADDING
+field_w = max(50, (x1 - x0) - label_offset - PADDING)
+field_h = (y1 - y0) - 2 * PADDING
+
+# Normalize to DocuSeal 0-1 coordinates (0-indexed page for PATCH)
+docuseal_x = round(field_x / PAGE_W, 4)
+docuseal_y = round(field_y / PAGE_H, 4)
+docuseal_w = round(field_w / PAGE_W, 4)
+docuseal_h = round(field_h / PAGE_H, 4)
+docuseal_page = location["page"] - 1  # 1-based → 0-indexed for PATCH
+```
+
+For multi-column signature tables (provider left, client right), use PyMuPDF's `page.find_tables()` or `page.search_for("____")` to detect each underscore run separately, then normalize each to its column's coordinates.
+
+### Ambiguous Layouts
+
+If detection returns no results or the layout is unclear (e.g. external documents with non-standard formats), ask the user to identify signing blocks: "Please note how many signatures are needed and on which pages."
 
 ## Workflow — Send NDA to Client
 
@@ -330,8 +342,8 @@ See `scripts/docuseal_fields.py` for the implementation. ODL is an optional depe
 3. Serve PDF via HTTPS (`file_serving` config)
 4. MCP `create_template(name, url)` → empty template
 5. GET template → extract `attachment_uuid` + submitter `uuid`s
-6. Run coordinate extraction (sign_detector.py or ODL+pdfplumber) → pixel coordinates
-7. Normalize to DocuSeal 0-1 coordinates
+6. Run coordinate extraction (`sign_detector.py`) → pixel coordinates
+7. Convert label bbox → DocuSeal placement bbox → normalize to 0-1 coordinates
 8. PATCH `/api/templates/{id}` with fields + uuids (API key)
 9. **Verify** fields (count, uuids, unique names, submitter uuids) — do not send until pass
 10. POST `/api/submissions` → send to signers (API key)
