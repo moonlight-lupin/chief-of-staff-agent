@@ -348,7 +348,8 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     if not url or not (os.getenv("DOCUSEAL_API_KEY") or os.getenv("DOCUSEAL_MCP_TOKEN")):
         return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:  # nosec - configured URL health check
+        req = urllib.request.Request(url, headers={"User-Agent": "chief-of-staff-doctor/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec - configured URL health check
             ok = resp.status < 500
         return CheckResult("docuseal", "pass" if ok else "warn", f"HTTP {resp.status}")
     except Exception as exc:
