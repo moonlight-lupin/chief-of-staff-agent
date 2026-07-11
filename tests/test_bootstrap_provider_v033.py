@@ -44,6 +44,7 @@ def _make_args(**overrides):
         workspace_provider=None, m365_auth="client_credentials",
         tenant_id=None, client_id=None, user_principal=None,
         m365_secret_env="M365_CLIENT_SECRET", composio_user_id=None,
+        esign_url=None, allow_insecure_esign_url=False,
     )
     base.update(overrides)
     return SimpleNamespace(**base)

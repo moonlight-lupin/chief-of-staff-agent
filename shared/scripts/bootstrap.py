@@ -208,11 +208,11 @@ def _esign_overlay(
     from urllib.parse import urlparse
     parsed = urlparse(esign_url)
     if parsed.scheme not in ("https", "http"):
-        return {}, [], [], [f"Invalid esign URL: must start with https:// (got {esign_url})"]
+        return {}, [], [f"Invalid esign URL: must start with https:// (got {esign_url})"], []
     if not parsed.hostname:
-        return {}, [], [], [f"Invalid esign URL: no hostname (got {esign_url})"]
+        return {}, [], [f"Invalid esign URL: no hostname (got {esign_url})"], []
     if parsed.scheme == "http" and not getattr(args, "allow_insecure_esign_url", False):
-        return {}, [], [], [f"DocuSeal URL must be HTTPS: {esign_url} (use --allow-insecure-esign-url for local dev)"]
+        return {}, [], [f"DocuSeal URL must be HTTPS: {esign_url} (use --allow-insecure-esign-url for local dev)"], []
     domain = parsed.hostname
 
     overlay: dict[str, Any] = {
