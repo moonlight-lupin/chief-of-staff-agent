@@ -29,6 +29,15 @@ user:
   email: "alicia@acme-advisory.example"
   phone: "+65 9123 4567"
 
+# Assistant identity.
+# Giving your Chief of Staff a distinctive name provides an unambiguous trigger:
+# addressing it by name ("Ask <name> to check my email") routes the request to
+# these Chief-of-Staff skills instead of a generic email/calendar handler. In
+# Hermes, "check my email" would otherwise fall through to the generic email
+# capability. Defaults to "Chief of Staff" when unset.
+assistant:
+  name: "Chief of Staff"
+
 # Google Workspace integration.
 # Actual Google auth is performed by the external google-workspace skill via google_api.py.
 # Chief-of-Staff calls google_api.py through GoogleWorkspaceClient with --account and --as flags.

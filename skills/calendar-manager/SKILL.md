@@ -36,6 +36,8 @@ Use this skill when the user asks to:
 - Move, rename, update attendees for, or cancel an event.
 - Enable, audit, or troubleshoot pre-meeting prep reminders.
 
+Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "Ask <name> to check my email" / "<name>, what's on today?".
+
 Do not use this skill for meeting intelligence itself; Calendar Manager hands event metadata to `meeting-prep`, which produces the brief.
 
 ## Configuration

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -65,7 +66,133 @@ def _merge_preset(args: argparse.Namespace) -> dict[str, Any]:
         preset.setdefault("paths", {})["project_root"] = args.project_root
     if args.business_type:
         preset.setdefault("company", {})["business_type"] = args.business_type
+    # Assistant identity — always written (argparse defaults to "Chief of Staff").
+    # Existing unit tests build args without this attribute, so guard with getattr.
+    assistant_name = getattr(args, "assistant_name", None)
+    if assistant_name:
+        preset.setdefault("assistant", {})["name"] = assistant_name
     return preset
+
+
+# ── Identity derivation (audit #2: no more canned Acme fixture) ──────────────
+#
+# The example config ships a filled-in sample (Alicia Tan / acme-advisory.example
+# / ~/.hermes/projects/acme-advisory/). Before this fix `_write_config` copied the
+# example wholesale, so those values leaked into every bootstrapped config
+# regardless of the flags passed. We now DERIVE the operator-facing identity from
+# --company / --operator / --operator-name and OVERRIDE the sample values. Any
+# field we cannot derive is written as an explicit placeholder and announced.
+
+FREEMAIL_DOMAINS = {"gmail.com", "outlook.com", "yahoo.com", "hotmail.com"}
+USER_NAME_PLACEHOLDER = "<operator-name>"
+USER_EMAIL_PLACEHOLDER = "<operator-email>"
+WEBSITE_PLACEHOLDER = "<company-website>"
+
+
+def _slugify_company(name: str) -> str:
+    """Lowercase, spaces→hyphens, strip anything that is not alnum or hyphen,
+    then collapse repeated hyphens and trim. 'Acme, Inc.' → 'acme-inc'."""
+    s = (name or "").strip().lower().replace(" ", "-")
+    s = "".join(ch for ch in s if ch.isalnum() or ch == "-")
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s
+
+
+def _name_from_email(email: str) -> str:
+    """Title-case the email local-part, treating . _ - as word separators.
+    'alicia@x.com' → 'Alicia'; 'mary.jane@x.com' → 'Mary Jane'."""
+    local = email.split("@", 1)[0]
+    cleaned = re.sub(r"[._-]+", " ", local).strip()
+    return cleaned.title() if cleaned else local
+
+
+def _placeholder_notice(field: str, reason: str) -> str:
+    return f"{field}: placeholder — edit company.yaml ({reason})"
+
+
+def _identity_overlay(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], list[str]]:
+    """Derive company/user/paths identity from the flags and return
+    ``(overlay, notices)``. The overlay is deep-merged over the example so the
+    canned Acme values never survive. ``notices`` announces any placeholder."""
+    from config_loader import get_default_project_root
+
+    overlay: dict[str, Any] = {}
+    notices: list[str] = []
+    company: dict[str, Any] = {}
+    user: dict[str, Any] = {}
+
+    # paths.project_root: explicit flag > company slug > generic default.
+    # wiki_path/staging follow the root so they never keep the Acme sample path.
+    explicit_root = getattr(args, "project_root", None)
+    company_name = getattr(args, "company", None)
+    if explicit_root:
+        root = str(Path(explicit_root).expanduser())
+    elif company_name and _slugify_company(company_name):
+        root = str(get_default_project_root(_slugify_company(company_name)))
+    else:
+        root = str(get_default_project_root("chief-of-staff"))
+    overlay["paths"] = {
+        "project_root": root,
+        "wiki_path": str(Path(root) / "wiki"),
+        "staging": str(Path(root) / "staging"),
+    }
+
+    # user block + company.website from --operator (and optional --operator-name).
+    operator = getattr(args, "operator", None)
+    operator_name = getattr(args, "operator_name", None)
+    if operator:
+        user["email"] = operator
+        user["name"] = operator_name if operator_name else _name_from_email(operator)
+        domain = operator.split("@", 1)[1].lower() if "@" in operator else ""
+        if domain and domain not in FREEMAIL_DOMAINS:
+            company["website"] = f"https://{domain}"
+        else:
+            company["website"] = WEBSITE_PLACEHOLDER
+            reason = (
+                f"freemail domain {domain}" if domain in FREEMAIL_DOMAINS
+                else "operator email had no domain"
+            )
+            notices.append(_placeholder_notice("company.website", reason))
+    else:
+        user["name"] = USER_NAME_PLACEHOLDER
+        user["email"] = USER_EMAIL_PLACEHOLDER
+        company["website"] = WEBSITE_PLACEHOLDER
+        notices.append(_placeholder_notice("user.name/user.email", "no --operator given"))
+        notices.append(_placeholder_notice("company.website", "no --operator given"))
+
+    if company:
+        overlay["company"] = company
+    if user:
+        overlay["user"] = user
+    return overlay, notices
+
+
+def _next_steps(provider: str | None) -> list[str]:
+    """Provider-gated 'Next steps' (audit #3). Only the selected workspace
+    provider's credential guidance is shown; the cron/test steps are neutral."""
+    provider = provider or "google_api"
+    if provider == "google_api":
+        cred = "Set up Google service account/OAuth credentials in company.yaml."
+    elif provider == "composio":
+        cred = (
+            "Connect your Composio workspace: "
+            "python shared/scripts/connect_workspace.py --provider composio --connect gmail"
+        )
+    elif provider == "m365":
+        cred = (
+            "Set your M365 client-secret env var and grant Entra admin consent "
+            "(see docs/SETUP.md Option 3)."
+        )
+    else:
+        cred = "Configure your workspace provider credentials in company.yaml."
+    return [
+        cred,
+        "Run: python shared/scripts/install_cron.py --config shared/config/company.yaml --dry-run",
+        "Then run: python shared/scripts/install_cron.py --config shared/config/company.yaml --install",
+        "Test briefing by loading the chief-of-staff:daily-briefing skill.",
+    ]
 
 
 WORKSPACE_PROVIDERS = ("google_api", "composio", "m365")
@@ -346,6 +473,9 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     initial = run_checks(fix=True, config=None)
     copied = _copy_examples()
     preset = _merge_preset(args)
+    identity_overlay, identity_notices = _identity_overlay(args)
+    if identity_overlay:
+        _deep_update(preset, identity_overlay)
     overlay, required_env, provider_notices, provider_next = _provider_overlay(args)
     esign_overlay, esign_required_env, esign_notices, esign_next = _esign_overlay(args)
     if overlay:
@@ -358,6 +488,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     stores = _init_stores(root)
     wiki = _init_wiki(config, root)
     final = run_checks(fix=True, config=str(config_path))
+    provider = getattr(args, "workspace_provider", None)
     result: dict[str, Any] = {
         "config": str(config_path),
         "project_root": str(root),
@@ -366,16 +497,12 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         "initialized_wiki": wiki,
         "doctor_initial": [r.__dict__ for r in initial],
         "doctor_final": [r.__dict__ for r in final],
-        "next_steps": [
-            "Set up Google service account/OAuth credentials in company.yaml.",
-            "Run: python shared/scripts/install_cron.py --config shared/config/company.yaml --dry-run",
-            "Then run: python shared/scripts/install_cron.py --config shared/config/company.yaml --install",
-            "Test briefing by loading the chief-of-staff:daily-briefing skill.",
-        ],
+        "next_steps": _next_steps(provider),
+        "identity_notices": identity_notices,
+        "assistant_name": getattr(args, "assistant_name", None) or "Chief of Staff",
     }
     # Only surface provider metadata when a non-default provider is chosen, so a
     # default (google) invocation's JSON/text output stays byte-compatible.
-    provider = getattr(args, "workspace_provider", None)
     if provider and provider != "google_api":
         result["workspace_provider"] = provider
         result["required_env"] = required_env
@@ -395,6 +522,16 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--company", help="Company name")
     parser.add_argument("--jurisdiction", help="Jurisdiction code, e.g. SG")
     parser.add_argument("--operator", help="Operator/delegate email")
+    parser.add_argument(
+        "--operator-name",
+        help="Operator's display name (default: derived from the operator email local-part)",
+    )
+    parser.add_argument(
+        "--assistant-name", default="Chief of Staff",
+        help="Name for this assistant, written to assistant.name in company.yaml "
+             "(default: 'Chief of Staff'). Address it by name so requests route to "
+             "these skills instead of generic handlers.",
+    )
     parser.add_argument("--project-root", help="Project root directory")
     parser.add_argument("--business-type", help="Business type for wiki seed")
     parser.add_argument("--config", help="Preset YAML to merge non-interactively")
@@ -446,6 +583,19 @@ def _main(argv: list[str] | None = None) -> int:
         print("Next steps:")
         for step in result["next_steps"]:
             print(f"- {step}")
+        # Announce any field left as a placeholder (audit #2).
+        placeholders = result.get("identity_notices", [])
+        if placeholders:
+            print("Placeholders to complete:")
+            for note in placeholders:
+                print(f"- {note}")
+        # Assistant naming guidance (feature 2c).
+        aname = result.get("assistant_name") or "Chief of Staff"
+        print(
+            f"\nYour Chief of Staff is named '{aname}'. Address it by name "
+            f"(\"Ask {aname} to check my email\") so requests route to these "
+            f"skills instead of generic handlers."
+        )
 
     # Provider-specific guidance: placeholders written, required env vars, and
     # the suggested next commands (doctor + connect_workspace verify).

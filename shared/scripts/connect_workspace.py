@@ -24,23 +24,58 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 
+def _read_yaml_config(path: str) -> dict[str, Any]:
+    """Load a YAML config file into a plain dict (no validation)."""
+    try:
+        import yaml
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception as exc:
+        print(f"Error loading config: {exc}", file=sys.stderr)
+        return {}
+
+
 def _load_config(config_path: str | None) -> dict[str, Any]:
+    """Resolve the workspace config through the standard discovery chain.
+
+    Priority: explicit ``--config`` > ``CHIEF_OF_STAFF_CONFIG`` > plugin-root
+    ``shared/config/company.yaml`` > ``{}``. This mirrors ``config_loader``'s
+    discovery so that a fully-configured ``company.yaml`` is auto-loaded even
+    when neither ``--config`` nor ``CHIEF_OF_STAFF_CONFIG`` is supplied (the
+    documented commands omit both). Also auto-loads the plugin-root ``.env`` so
+    documented secrets are visible. When falling back to a discovered config
+    (i.e. no explicit ``--config``), the resolved path is logged to stderr.
+    """
+    # Auto-load plugin-root .env (shell env always wins; values never logged).
+    _default_config_path = None
+    try:
+        from config_loader import load_dotenv_file, _default_config_path as _dcp
+        load_dotenv_file()
+        _default_config_path = _dcp
+    except Exception:
+        pass
+
+    # 1. Explicit --config always wins (behaviour unchanged; no discovery log).
     if config_path:
+        return _read_yaml_config(config_path)
+
+    # 2/3. Discover via CHIEF_OF_STAFF_CONFIG, else plugin-root company.yaml.
+    discovered: Path | None = None
+    if _default_config_path is not None:
         try:
-            import yaml
-            with open(config_path) as f:
-                return yaml.safe_load(f) or {}
-        except Exception as exc:
-            print(f"Error loading config: {exc}", file=sys.stderr)
-            return {}
-    env_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
-    if env_path and Path(env_path).exists():
-        try:
-            import yaml
-            with open(env_path) as f:
-                return yaml.safe_load(f) or {}
+            candidate = Path(_default_config_path())
+            if candidate.exists():
+                discovered = candidate
         except Exception:
-            pass
+            discovered = None
+    else:  # Fallback if config_loader is unavailable for any reason.
+        env_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
+        if env_path and Path(env_path).exists():
+            discovered = Path(env_path)
+
+    if discovered is not None:
+        print(f"connect_workspace: loaded config from {discovered}", file=sys.stderr)
+        return _read_yaml_config(str(discovered))
     return {}
 
 

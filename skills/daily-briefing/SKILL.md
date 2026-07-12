@@ -30,6 +30,8 @@ Use this skill when the user asks:
 
 Also use it for the scheduled daily cron job at `delivery.briefing_time` from `company.yaml`.
 
+Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "Ask <name> to check my email" / "<name>, what's on today?".
+
 Do **not** use this skill for deep analysis of one source. If the user asks only for deadlines, pipeline, invoices, calendar, or tasks, load the dedicated source skill instead.
 
 ## Required Sources

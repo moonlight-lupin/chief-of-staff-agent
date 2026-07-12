@@ -1,5 +1,39 @@
 # Chief of Staff Plugin — Setup Guide
 
+## Fastest path
+
+```bash
+# 1. Clone into the Hermes plugins directory
+mkdir -p ~/.hermes/plugins && cd ~/.hermes/plugins
+git clone https://github.com/moonlight-lupin/chief-of-staff-agent.git chief-of-staff
+cd chief-of-staff
+
+# 2. Install dependencies
+python -m pip install -r requirements.txt
+
+# 3. Try it first — a sample-data daily brief, zero credentials
+python shared/scripts/chief_of_staff.py demo
+
+# 4. Bootstrap: pick a workspace provider and name your assistant
+python shared/scripts/bootstrap.py \
+  --company "Your Company" --jurisdiction SG \
+  --operator you@yourcompany.com \
+  --workspace-provider m365 \
+  --assistant-name "Ada"
+
+# 5. Set secrets in .env (auto-loaded from the plugin root) or the shell env
+echo 'M365_CLIENT_SECRET=...' >> .env      # shell env wins if both are set
+
+# 6. Connect and verify the workspace (no --config needed — auto-discovered)
+python shared/scripts/connect_workspace.py --connect-m365
+python shared/scripts/connect_workspace.py --verify
+
+# 7. Readiness go/no-go
+python shared/scripts/chief_of_staff.py readiness --summary
+```
+
+The detailed, provider-by-provider reference follows below.
+
 ## Quick Start
 
 ### Option 1: Google Service Account (advanced, self-hosted)
@@ -52,7 +86,8 @@ pip install requests
 
 2. Get your Composio MCP key from [connect.composio.dev](https://connect.composio.dev)
 
-3. Set it in `.env`:
+3. Set it in `.env` in the plugin root (auto-loaded on every run; a value already
+   exported in your shell takes precedence):
 ```
 COMPOSIO_MCP_KEY=your_key_here
 ```
@@ -137,30 +172,33 @@ REST API v1.0 using `requests` directly. Auth uses `msal`.
    ```bash
    pip install msal
    ```
-5. Configure `company.yaml`:
-   ```yaml
-   integrations:
-     workspace:
-       provider: m365
-
-   m365:
-     tenant_id: "<directory-tenant-guid>"
-     client_id: "<application-client-guid>"
-     client_secret_env: "M365_CLIENT_SECRET"   # env var holding the secret (default)
-     auth: "client_credentials"                # or "device_code"
-     user_principal: "cos@yourtenant.com"      # mailbox UPN — REQUIRED for client_credentials
-     token_cache_path: "~/.hermes/secrets/m365-token-cache.json"  # optional
-   ```
-   - `client_credentials` (app-only): operates on `/users/{user_principal}/...`; `user_principal` is required.
-   - `device_code`: interactive delegated sign-in; a code + URL are printed to stderr on first token request; operates on `/me/...`.
-6. Set the secret in your environment:
+5. Configure `company.yaml` by running bootstrap (writes the `integrations.workspace`
+   and `m365` blocks for you — no hand-editing of YAML):
    ```bash
+   python shared/scripts/bootstrap.py \
+     --company "Your Company" --jurisdiction SG \
+     --operator you@yourcompany.com \
+     --workspace-provider m365 \
+     --m365-auth client_credentials \
+     --tenant-id "<directory-tenant-guid>" \
+     --client-id "<application-client-guid>" \
+     --user-principal "cos@yourtenant.com"
+   ```
+   - `--m365-auth client_credentials` (app-only): operates on `/users/{user_principal}/...`; `--user-principal` is required.
+   - `--m365-auth device_code`: interactive delegated sign-in; a code + URL are printed to stderr on first token request; operates on `/me/...` (omit `--user-principal`).
+   - Bootstrap never writes the secret to `company.yaml`; it only records the env-var
+     name (default `M365_CLIENT_SECRET`, override with `--m365-secret-env`).
+6. Set the secret. Put it in `.env` in the plugin root (auto-loaded on every run) or
+   export it in your shell — **the shell environment wins if both are set**:
+   ```bash
+   echo 'M365_CLIENT_SECRET=<the-secret-value>' >> .env   # auto-loaded
+   # or, for the current shell only:
    export M365_CLIENT_SECRET="<the-secret-value>"
    ```
-7. Verify:
+7. Connect and verify (no `--config` needed — `company.yaml` is auto-discovered):
    ```bash
    python shared/scripts/connect_workspace.py --provider m365 --status
-   python shared/scripts/connect_workspace.py --provider m365 --connect   # connect guidance
+   python shared/scripts/connect_workspace.py --connect-m365   # connect guidance
    python shared/scripts/doctor.py
    ```
 
@@ -295,7 +333,8 @@ password required.
 
 2. Create the two tokens in DocuSeal Settings (see prerequisites above).
 
-3. Add tokens to `.env` (never in company.yaml):
+3. Add tokens to `.env` in the plugin root (never in company.yaml). The `.env` is
+   auto-loaded on every run; a value already exported in your shell takes precedence:
    ```bash
    DOCUSEAL_MCP_TOKEN=your_mcp_token_here
    DOCUSEAL_API_KEY=your_api_key_here

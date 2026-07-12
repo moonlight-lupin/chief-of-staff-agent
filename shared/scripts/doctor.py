@@ -28,7 +28,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for doctor.py") from exc
 
-from config_loader import get_project_root, load_config
+from config_loader import get_project_root, load_config, load_dotenv_file
 from state_store import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -780,6 +780,9 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
 
 
 def run_checks(fix: bool = False, config: str | None = None) -> list[CheckResult]:
+    # Auto-load plugin-root .env so the env-secret checks (composio/m365) see
+    # secrets documented for .env. Shell env always wins; values never logged.
+    load_dotenv_file()
     config_path = _config_path(config)
     data, _ = _parse_config(config_path)
     return [check(fix, data, config_path) for check in CHECKS]

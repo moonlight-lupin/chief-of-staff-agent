@@ -148,7 +148,14 @@ def company_context_primer(context: dict) -> Optional[str]:
                 parts.append(f"AR outstanding: {ccy} {total:,.0f}")
 
     if parts:
-        return f"[CoS Context] {' | '.join(parts)}"
+        strip = f"[CoS Context] {' | '.join(parts)}"
+        # If the operator has configured a distinctive assistant name, lead with
+        # an identity line so the agent answers as the named Chief of Staff.
+        assistant = config.get("assistant", {})
+        aname = assistant.get("name") if isinstance(assistant, dict) else None
+        if aname:
+            strip = f"You are {aname}, the operator's Chief of Staff. {strip}"
+        return strip
     return None
 
 

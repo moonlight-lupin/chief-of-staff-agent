@@ -26,6 +26,8 @@ Use this skill when:
 - Calendar Manager invokes a self-contained cron prompt with event title, attendees, and Meet link.
 - A meeting starts soon and the operator needs a concise context packet.
 
+Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "Ask <name> to check my email" / "<name>, what's on today?".
+
 Do **not** use this skill for scheduling or modifying meetings; use `calendar-manager`. Do **not** use it for general entity due diligence unless the meeting context specifically requires it; use `entity-research` directly.
 
 ## Inputs

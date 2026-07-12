@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-07-12T07:30:00Z",
+  "source": "agent",
+  "messages": [
+    {
+      "id": "msg-001",
+      "sender": "procurement@acme.example",
+      "subject": "URGENT: Countersigned NDA needed before Friday cutoff",
+      "date": "2026-07-12T06:55:00Z",
+      "thread_id": "thr-acme-nda",
+      "snippet": "Legal has approved. We need your countersignature returned before the Friday procurement cutoff or the deal slips a quarter.",
+      "tags": ["urgent", "deal-001"],
+      "has_attachments": true
+    },
+    {
+      "id": "msg-002",
+      "sender": "jane@beta.example",
+      "subject": "Intro call follow-up — proposal timing",
+      "date": "2026-07-11T15:20:00Z",
+      "thread_id": "thr-beta-intro",
+      "snippet": "Thanks for the walkthrough. When can we expect the proposal? Aiming to decide this month.",
+      "tags": ["deal-002"],
+      "has_attachments": false
+    },
+    {
+      "id": "msg-003",
+      "sender": "billing@cloudhost.example",
+      "subject": "Invoice INV-9931 receipt — SGD 240.00",
+      "date": "2026-07-11T02:10:00Z",
+      "snippet": "Your monthly hosting subscription payment was received. No action required.",
+      "tags": ["expense", "receipt"],
+      "has_attachments": true
+    },
+    {
+      "id": "msg-004",
+      "sender": "alex@gamma.example",
+      "subject": "SOW signed — kickoff scheduling",
+      "date": "2026-07-10T22:05:00Z",
+      "thread_id": "thr-gamma-sow",
+      "snippet": "Countersigned SOW attached. Let's lock a kickoff for next week.",
+      "tags": ["deal-003"],
+      "has_attachments": true
+    }
+  ],
+  "events": [
+    {
+      "id": "evt-001",
+      "title": "Acme Corp — procurement sync (NDA)",
+      "start": "2026-07-12T10:00:00Z",
+      "end": "2026-07-12T10:30:00Z",
+      "organizer": "john@acme.example",
+      "attendees": ["john@acme.example", "operator@sample.example"],
+      "location": "Video call",
+      "conference_link": "https://meet.example.com/acme-procurement-sync",
+      "status": "confirmed"
+    },
+    {
+      "id": "evt-002",
+      "title": "Beta Ltd — proposal scoping",
+      "start": "2026-07-12T13:30:00Z",
+      "end": "2026-07-12T14:15:00Z",
+      "organizer": "jane@beta.example",
+      "attendees": ["jane@beta.example", "operator@sample.example"],
+      "location": "Zoom",
+      "conference_link": "https://zoom.example.com/j/8841207734",
+      "status": "confirmed"
+    },
+    {
+      "id": "evt-003",
+      "title": "Gamma Inc — project kickoff (SOW signed)",
+      "start": "2026-07-13T09:00:00Z",
+      "end": "2026-07-13T10:00:00Z",
+      "organizer": "alex@gamma.example",
+      "attendees": ["alex@gamma.example", "operator@sample.example"],
+      "location": "Google Meet",
+      "conference_link": "https://meet.example.com/gamma-kickoff",
+      "status": "confirmed"
+    }
+  ],
+  "files": []
+}

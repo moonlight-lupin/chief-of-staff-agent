@@ -10,7 +10,7 @@ It can organise information, detect stale deals, extract invoice candidates, pre
 
 ### Observe → Understand → Suggest → Approve → Execute → Audit
 
-> **Status:** v0.3.5 internal beta  
+> **Status:** v0.3.6 internal beta  
 > **Runtime:** Python 3.11+  
 > **License:** Apache License 2.0
 
@@ -59,6 +59,7 @@ The daily loop is deliberately **read-only**. It reports, prioritises, and recom
 Chief of Staff currently runs as a Hermes plugin.
 
 ```bash
+mkdir -p ~/.hermes/plugins
 cd ~/.hermes/plugins
 
 git clone \
@@ -69,20 +70,37 @@ cd chief-of-staff
 python -m pip install -r requirements.txt
 ```
 
-Bootstrap your workspace:
+Bootstrap your workspace and name your assistant:
 
 ```bash
 python shared/scripts/bootstrap.py \
   --company "Acme Studio" \
   --jurisdiction SG \
-  --operator you@example.com
+  --operator you@example.com \
+  --assistant-name "Ada"
 ```
+
+`--assistant-name` (default `Chief of Staff`) is written to `assistant.name` in
+`company.yaml`. Address the assistant by that name ("Ask Ada to check my email")
+so requests route to these skills instead of a generic email/calendar handler.
 
 For Google Workspace and Composio setup, see [`docs/SETUP.md`](docs/SETUP.md).
 
 ---
 
 ## ⏱️ Your first 15 minutes
+
+### 0. Try it first (zero credentials)
+
+Before configuring any workspace, render a sample-data daily brief:
+
+```bash
+python shared/scripts/chief_of_staff.py demo
+```
+
+The `demo` subcommand renders a daily brief from bundled sample data with no
+credentials, so you can see the operating view before connecting Gmail,
+Calendar, or Drive.
 
 ### 1. Check your setup
 
@@ -118,6 +136,8 @@ Other output formats:
 python shared/scripts/chief_of_staff.py daily --json
 python shared/scripts/chief_of_staff.py daily --markdown
 ```
+
+If your agent has already fetched Gmail/Calendar data with its own tools, pass it to `python skills/daily-briefing/scripts/daily_briefing.py --input <file>` (a `schemas.py` workspace envelope, or `-` for stdin) to build the brief without a workspace client.
 
 ### 5. Ask naturally in Hermes
 
@@ -185,14 +205,14 @@ Audit history and knowledge updates
 
 ---
 
-## 🧰 The 17 skills
+## 🧰 The 18 skills
 
 | Operating area | Skills |
 |---|---|
 | **Command centre** | `daily-briefing` · `weekly-review` |
 | **Planning** | `todo-list` · `deadline-tracker` · `calendar-manager` |
 | **Meetings and email** | `meeting-prep` · `email-organisation` |
-| **Documents and files** | `document-preparer` · `drive-filer` · `self-sign` |
+| **Documents and files** | `document-preparer` · `drive-filer` · `self-sign` · `esign-connector` |
 | **Commercial operations** | `pipeline-manager` · `bookkeeper` |
 | **Knowledge and research** | `note-taker` · `deep-research` · `entity-research` |
 | **Travel and resilience** | `travel-itinerary` · `backup` |

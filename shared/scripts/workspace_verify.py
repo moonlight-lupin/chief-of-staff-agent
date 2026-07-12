@@ -88,6 +88,12 @@ from typing import Any, Callable, Mapping
 
 from workspace_client import get_workspace_client
 
+try:  # Structured operational logging (safe no-op with no active run).
+    from runtime_log import log_event as _log_event
+except Exception:  # pragma: no cover - runtime_log always ships alongside this
+    def _log_event(*_args: Any, **_kwargs: Any) -> None:  # type: ignore
+        return None
+
 # Exact, ordered public contract — other modules code against this list.
 CHECK_NAMES = [
     "auth",
@@ -359,6 +365,31 @@ def _check_files_write(client: Any) -> dict[str, str]:
                 pass
 
 
+def _emit_check_failures(provider: Any, checks: Mapping[str, dict[str, str]]) -> None:
+    """For every check that FAILED, emit a structured ``verify_check_failed``
+    error event so the failure lands in the run's events.jsonl (driving the
+    observed error counters and the log_analyser matchers).
+
+    ``runtime_log.log_event`` redacts every value and silently no-ops when no
+    run is active, so this is safe for standalone/console use. The check ``detail``
+    (e.g. an msal credential error) is carried verbatim in ``message`` so the
+    analyser can classify it.
+    """
+    for name, check in checks.items():
+        if not isinstance(check, Mapping):
+            continue
+        if str(check.get("status", "")).lower() != "fail":
+            continue
+        _log_event(
+            "verify_check_failed",
+            level="error",
+            component="workspace_verify",
+            check=str(name),
+            provider=str(provider),
+            message=str(check.get("detail", "") or ""),
+        )
+
+
 def _run_write_checks(client: Any, config: Any, checks: dict[str, dict[str, str]]) -> None:
     """Run the opt-in write smoke checks with the auto-approve env var set for
     the duration (restored in finally). ALLOW_DESTRUCTIVE is never touched."""
@@ -415,6 +446,10 @@ def run_verification(config: Any, include_writes: bool = False) -> dict[str, Any
     # mail_send / calendar_write are ALWAYS not_tested — never auto-send/create.
     checks["mail_send"] = _mk("not_tested", "verification never sends mail")
     checks["calendar_write"] = _mk("not_tested", "verification never creates calendar events")
+
+    # Emit a structured error event for every failed check (observability): these
+    # become error events in the active run's events.jsonl and feed the analyser.
+    _emit_check_failures(client.provider_name, checks)
 
     # read_ready gates the reads the product actually depends on: auth, mail_read,
     # folder-scoped mail search, calendar_read and files_read. mail_tags_list is

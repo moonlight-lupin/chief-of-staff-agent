@@ -118,6 +118,17 @@ def _events_named(events: Sequence[Mapping[str, Any]], name: str) -> list[Mappin
     return [e for e in events if e.get("event") == name]
 
 
+# Structured failure events emitted by workspace_verify / readiness. Unlike
+# provider_request_failed / action_failed these carry no HTTP status_code or
+# error_class — the failure detail lives in their ``message`` field — so matchers
+# must inspect their text directly (see _m_invalid_credentials).
+_STRUCTURED_FAILURE_EVENTS = {"verify_check_failed", "readiness_row_failed"}
+
+
+def _structured_failure_events(events: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [e for e in events if e.get("event") in _STRUCTURED_FAILURE_EVENTS]
+
+
 def _all_text(events: Sequence[Mapping[str, Any]], summary: Mapping[str, Any]) -> str:
     """Every text fragment across events + summary (first_error, warnings)."""
     parts: list[str] = [_event_text(e) for e in events]
@@ -133,7 +144,7 @@ def _all_text(events: Sequence[Mapping[str, Any]], summary: Mapping[str, Any]) -
 def _describe(ev: Mapping[str, Any]) -> str:
     """One-line, human-readable evidence string for a provider/action event."""
     bits: list[str] = [str(ev.get("event", "event"))]
-    for key in ("provider", "operation", "action_type", "method", "endpoint_category"):
+    for key in ("provider", "check", "row", "operation", "action_type", "method", "endpoint_category"):
         val = ev.get(key)
         if val:
             bits.append(str(val))
@@ -159,7 +170,13 @@ _CREDENTIAL_MARKERS = (
     "credential",
     "aadsts7000215",
     "aadsts700",
+    "aadsts90002",
+    "aadsts50",
     "unauthorized_client",
+    # msal tenant/GUID resolution failures surface this exact phrasing.
+    "check your tenant name or guid",
+    "tenant name or guid",
+    "tenant name or a guid",
 )
 _ADMIN_CONSENT_MARKERS = ("admin consent", "admin-consent", "adminconsent", "consent required")
 _MAILBOX_MARKERS = ("/users", "user_principal", "user principal", "mailboxnotfound", "resourcenotfound", "recipientnotfound")
@@ -209,6 +226,12 @@ def _m_invalid_credentials(events, summary):
     for e in _failed_events(events):
         text = _event_text(e)
         if _has_any(text, _CREDENTIAL_MARKERS) and (_status(e) in (401, 403) or e.get("error_class") == "auth"):
+            out.append(_describe(e))
+    # Structured verify_check_failed / readiness_row_failed events carry the
+    # credential error text in their message field but have no status_code /
+    # error_class to gate on — classify on the credential markers alone.
+    for e in _structured_failure_events(events):
+        if _has_any(_event_text(e), _CREDENTIAL_MARKERS):
             out.append(_describe(e))
     return out
 
@@ -653,7 +676,25 @@ def analyse_run(run_dir: Path) -> dict[str, Any]:
         "status": status,
         "findings": findings,
         "primary": primary,
+        "first_error": _resolve_first_error(events, summary),
     }
+
+
+def _resolve_first_error(
+    events: Sequence[Mapping[str, Any]], summary: Mapping[str, Any]
+) -> str | None:
+    """The run's first error message (from summary) or, failing that, the last
+    error-level event's message. Used to surface an unclassified failure honestly."""
+    fe = summary.get("first_error")
+    if isinstance(fe, str) and fe.strip():
+        return fe
+    last: str | None = None
+    for e in events:
+        if e.get("level") == "error":
+            msg = str(e.get("message") or e.get("event") or "").strip()
+            if msg:
+                last = msg
+    return last
 
 
 def _first_command(events: Sequence[Mapping[str, Any]]) -> str | None:
@@ -681,12 +722,32 @@ def _render_human(result: Mapping[str, Any]) -> str:
     findings = result.get("findings") or []
     primary = result.get("primary")
     if not findings or primary is None:
-        outcome = result.get("status", "ok")
+        status = result.get("status", "ok")
+        run_id = result.get("run_id", "?")
         lines.append("Primary finding: none")
-        lines.append(
-            f"No problems detected — the run finished with outcome '{outcome}'. "
-            "Clean bill of health."
-        )
+        if status == "failed":
+            fe = result.get("first_error") or "(no error message captured)"
+            lines.append(
+                f"Run failed but no classified finding matched. First error: {fe}. "
+                "This may be a new failure class — inspect:"
+            )
+            lines.append(
+                f"  python shared/scripts/chief_of_staff.py logs show --run-id {run_id} --level error"
+            )
+        elif status == "degraded":
+            fe = result.get("first_error") or "(no warning/error message captured)"
+            lines.append(
+                f"Run degraded but no classified finding matched. First warning/error: {fe}. "
+                "This may be a new degradation class — inspect:"
+            )
+            lines.append(
+                f"  python shared/scripts/chief_of_staff.py logs show --run-id {run_id} --level warning"
+            )
+        else:
+            lines.append(
+                f"No problems detected — the run finished with outcome '{status}'. "
+                "Clean bill of health."
+            )
         return "\n".join(lines)
 
     lines.append(f"Primary finding: {primary['id']} ({primary['severity']})")
@@ -726,11 +787,34 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
     findings = result.get("findings") or []
     primary = result.get("primary")
     if not findings or primary is None:
+        status = result.get("status", "ok")
+        run_id = result.get("run_id", "?")
         lines.append("## Primary finding")
         lines.append("")
-        lines.append(
-            f"None — the run finished with outcome `{result.get('status', 'ok')}`. Clean bill of health."
-        )
+        if status == "failed":
+            fe = result.get("first_error") or "(no error message captured)"
+            lines.append(
+                f"None classified — the run **failed** but no rule matched. First error: {fe}. "
+                "This may be a new failure class — inspect:"
+            )
+            lines.append("")
+            lines.append(
+                f"```\npython shared/scripts/chief_of_staff.py logs show --run-id {run_id} --level error\n```"
+            )
+        elif status == "degraded":
+            fe = result.get("first_error") or "(no warning/error message captured)"
+            lines.append(
+                f"None classified — the run **degraded** but no rule matched. First warning/error: {fe}. "
+                "This may be a new degradation class — inspect:"
+            )
+            lines.append("")
+            lines.append(
+                f"```\npython shared/scripts/chief_of_staff.py logs show --run-id {run_id} --level warning\n```"
+            )
+        else:
+            lines.append(
+                f"None — the run finished with outcome `{status}`. Clean bill of health."
+            )
         return "\n".join(lines)
 
     lines.append(f"## Primary finding: {primary['id']} ({primary['severity']})")

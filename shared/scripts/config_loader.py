@@ -7,6 +7,17 @@ A caller can override the path explicitly or via ``CHIEF_OF_STAFF_CONFIG``.
 This module intentionally depends only on the Python standard library plus
 PyYAML when available. If PyYAML is absent, it falls back to a conservative
 YAML subset parser that supports the structures used by the example config.
+
+Environment secrets (``.env``)
+------------------------------
+The onboarding docs instruct operators to place secrets such as
+``COMPOSIO_MCP_KEY``, ``M365_CLIENT_SECRET`` and ``DOCUSEAL_*`` in a ``.env``
+file at the plugin root. :func:`load_dotenv_file` implements a tiny, dependency
+-free ``KEY=VALUE`` parser for that file and is invoked automatically from
+:func:`load_config` (config discovery) so every entrypoint that loads
+configuration also picks up those secrets. The shell environment always wins:
+a key already present in ``os.environ`` is never overwritten, and values are
+never logged.
 """
 
 from __future__ import annotations
@@ -117,6 +128,57 @@ def _default_config_path() -> Path:
     if env_path:
         return Path(env_path).expanduser()
     return get_config_dir() / "company.yaml"
+
+
+def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, str]:
+    """Populate ``os.environ`` from a ``.env`` file (no python-dotenv dependency).
+
+    Minimal ``KEY=VALUE`` parser used so that secrets documented for the
+    plugin's ``.env`` (e.g. ``COMPOSIO_MCP_KEY``, ``M365_CLIENT_SECRET``,
+    ``DOCUSEAL_*``) become available to every entrypoint that loads
+    configuration, matching the onboarding docs.
+
+    Semantics:
+      * Default path is the plugin-root ``.env``; ``path`` overrides it (tests).
+      * Each recognised line is ``KEY=VALUE``; surrounding whitespace is stripped.
+      * Blank lines and lines whose first non-space character is ``#`` are ignored.
+      * A single matching pair of surrounding single/double quotes around the
+        value is stripped.
+      * Malformed lines (no ``=``, empty key, or whitespace inside the key) are
+        ignored.
+      * A key is set only when it is NOT already present in ``os.environ`` — the
+        shell environment always wins.
+      * Values are never logged.
+
+    Returns a mapping of the keys/values this call newly set (never contains
+    keys that were already present in the environment).
+    """
+    env_path = Path(path).expanduser() if path is not None else (_PLUGIN_ROOT / ".env")
+    applied: dict[str, str] = {}
+    try:
+        if not env_path.is_file():
+            return applied
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return applied
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or any(ch.isspace() for ch in key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key not in os.environ:
+            os.environ[key] = value
+            applied[key] = value
+    return applied
 
 
 def _parse_scalar(value: str) -> Any:
@@ -298,6 +360,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config | None:
         ``Config`` on success. On missing/unreadable/invalid config, prints a
         clear error to stderr and returns ``None`` instead of raising.
     """
+
+    # Auto-load plugin-root .env so documented secrets are available to every
+    # entrypoint that loads config (shell env always wins; values never logged).
+    load_dotenv_file()
 
     config_path = Path(path).expanduser() if path else _default_config_path()
     try:

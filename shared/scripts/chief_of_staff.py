@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chief-of-Staff top-level entrypoint (v0.3.5).
+"""Chief-of-Staff top-level entrypoint (v0.3.6).
 
 READ-ONLY orchestration layer for the daily operating loop and subsystem
 summaries. This module must NEVER approve, execute, send, write, or mutate
@@ -35,7 +35,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.5"
+VERSION = "0.3.6"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -598,6 +598,8 @@ def build_recommended_commands(
 
     if not system_health.get("config_loaded"):
         add(1, "Config failed to load — fix company.yaml first", "python shared/scripts/doctor.py --summary")
+        add(2, "See it work now on bundled sample data — no credentials needed",
+            "python shared/scripts/chief_of_staff.py demo")
     elif system_health.get("status") in {"fail", "warn"}:
         add(2, "System health needs attention", "python shared/scripts/chief_of_staff.py doctor --summary")
 
@@ -1229,7 +1231,7 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Readiness report (v0.3.5) — generated go/no-go check
+# Readiness report (v0.3.6) — generated go/no-go check
 # ---------------------------------------------------------------------------
 
 # Row status vocabulary
@@ -1317,6 +1319,23 @@ def _run_verification(config: Any) -> tuple[Mapping[str, Any] | None, str]:
     if not isinstance(report, Mapping):
         return None, "verification returned no report"
     return report, ""
+
+
+def _workspace_auth_row(report: Mapping[str, Any] | None, reason: str) -> tuple[str, str]:
+    """Row 2 — workspace authentication.
+
+    When ``run_verification`` actually attempted the connection but raised (bad
+    credentials that blow up at client construction — the google_api path, as
+    opposed to the m365 path where ``health_check()`` raises per-check), the
+    report is None with a ``"verification error: ..."`` reason. That is a genuine
+    auth FAILURE and must land as FAIL (not NOT TESTED) so the diagnose pointer
+    fires for EVERY provider/failure path — unifying the m365 and google_api
+    behaviour the audit flagged. Benign None reasons (module absent, config not
+    loaded) stay NOT TESTED.
+    """
+    if report is None and str(reason).startswith("verification error:"):
+        return _R_FAIL, reason
+    return _verify_check(report, "auth", reason)
 
 
 def _verify_check(report: Mapping[str, Any] | None, name: str, reason: str) -> tuple[str, str]:
@@ -1423,7 +1442,7 @@ def build_readiness_payload(config: Any, config_path: str | None) -> dict[str, A
     s1, d1 = _core_config_row(config, config_path)
     report, reason = _run_verification(config)
 
-    s2, d2 = _verify_check(report, "auth", reason)
+    s2, d2 = _workspace_auth_row(report, reason)
     s3, d3 = _mail_read_row(report, reason)
     s4, d4 = _verify_check(report, "calendar_read", reason)
     s5, d5 = _verify_check(report, "files_read", reason)
@@ -1480,7 +1499,34 @@ def build_readiness_payload(config: Any, config_path: str | None) -> dict[str, A
         payload["verification_skipped_reason"] = reason
     if _IMPORT_ERRORS:
         payload["import_errors"] = dict(_IMPORT_ERRORS)
+
+    # Belt-and-braces observability: any row that landed FAIL emits a structured
+    # error event. This classifies config-row failures (no provider involved) too
+    # and guarantees the run's events.jsonl carries the failure detail even when
+    # workspace_verify could not run (e.g. client construction raised), so the
+    # diagnose pointer and log_analyser always have something to match.
+    _emit_readiness_row_failures(rows)
     return payload
+
+
+def _emit_readiness_row_failures(rows: Sequence[Mapping[str, Any]]) -> None:
+    """Emit a ``readiness_row_failed`` error event for each FAIL row (no-op when
+    runtime_log is absent or no run is active)."""
+    if runtime_log is None:
+        return
+    for row in rows:
+        if not isinstance(row, Mapping) or str(row.get("status")) != _R_FAIL:
+            continue
+        try:
+            runtime_log.log_event(
+                "readiness_row_failed",
+                level="error",
+                component="readiness",
+                row=str(row.get("key", "")),
+                message=str(row.get("detail", "") or ""),
+            )
+        except Exception:
+            pass
 
 
 def render_readiness_summary(payload: Mapping[str, Any]) -> str:
@@ -1579,7 +1625,106 @@ def cmd_readiness(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Logs subcommand group (v0.3.5) — read-only observability + self-diagnosis
+# Demo — zero-credential first-value path (bundled sample data)
+# ---------------------------------------------------------------------------
+
+_DEMO_BANNER_TOP = "═" * 70 + "\n  DEMO — sample data (no credentials, no live workspace required)\n" + "═" * 70
+_DEMO_BANNER_BOTTOM = "═" * 70 + "\n  DEMO — sample data — end of demo briefing (nothing was written)\n" + "═" * 70
+
+_DEMO_CONFIG = {
+    "company": {
+        "name": "Sample Co (DEMO)",
+        "jurisdiction": "SG",
+        "currency": "SGD",
+        "incorporation_date": "2026-01-01",
+        "financial_year_end": "31 Dec",
+        "business_type": "professional_services",
+    },
+    "delivery": {
+        "channel": "cli",
+        "briefing_time": "08:00",
+        "weekly_review_day": "friday",
+        "weekly_review_time": "17:00",
+        "timezone": "Asia/Singapore",
+    },
+    "sales_stages": [
+        "Lead", "Qualified", "Proposal Sent", "NDA Signed",
+        "Contract Signed", "Invoiced", "Paid", "Lost",
+    ],
+    "stale_threshold_days": 14,
+}
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Render the daily briefing from the bundled ``examples/`` sample data.
+
+    The zero-credential first-value path: synthesizes a minimal in-memory config
+    whose ``project_root`` points at the bundled ``examples/`` directory (so the
+    sample pipeline/todos/invoices/expenses YAML are read read-only) and feeds a
+    bundled sample workspace envelope (``examples/sample-workspace.json``) through
+    the existing ``daily_briefing --input`` compute path. No credentials, no
+    company.yaml required. Writes NOTHING into ``examples/`` and creates no
+    ``.runs`` there — the temp config lives in a tmp dir and the briefing
+    computation is pure read-only; runtime logging for the demo run is console-only
+    when no real config is present.
+    """
+    import tempfile as _tempfile
+
+    examples_dir = PLUGIN_ROOT / "examples"
+    envelope_path = examples_dir / "sample-workspace.json"
+
+    fmt = "text"
+    if getattr(args, "json", False):
+        fmt = "json"
+    elif getattr(args, "markdown", False):
+        fmt = "markdown"
+
+    if daily_briefing_mod is None or briefing_renderer is None:
+        print("demo unavailable: daily_briefing/briefing_renderer modules not importable", file=sys.stderr)
+        return 1
+
+    # Synthesize a throwaway company.yaml in a tmp dir (NOT under examples/) that
+    # points project_root at the bundled examples/ sample data.
+    tmp_dir = Path(_tempfile.mkdtemp(prefix="cos-demo-"))
+    demo_cfg = dict(_DEMO_CONFIG)
+    demo_cfg["paths"] = {
+        "project_root": str(examples_dir),
+        "wiki_path": str(tmp_dir / "wiki"),
+        "templates": str(PLUGIN_ROOT / "shared" / "templates"),
+    }
+    cfg_path = tmp_dir / "company.yaml"
+    try:
+        import yaml as _yaml
+        cfg_path.write_text(_yaml.safe_dump(demo_cfg), encoding="utf-8")
+    except Exception as exc:
+        print(f"demo error: could not write temp demo config: {exc}", file=sys.stderr)
+        return 1
+
+    # Load the bundled sample workspace envelope through the real --input path.
+    workspace_input = None
+    try:
+        workspace_input = daily_briefing_mod.load_workspace_input(str(envelope_path))
+    except Exception as exc:
+        print(f"demo error: could not load sample workspace envelope: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        briefing = daily_briefing_mod._build_structured_briefing(
+            str(cfg_path), workspace_input=workspace_input
+        )
+        rendered = briefing_renderer.render(briefing, fmt)
+    except Exception as exc:
+        print(f"demo error: could not render sample briefing: {exc}", file=sys.stderr)
+        return 1
+
+    print(_DEMO_BANNER_TOP)
+    print(rendered)
+    print(_DEMO_BANNER_BOTTOM)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Logs subcommand group (v0.3.6) — read-only observability + self-diagnosis
 # ---------------------------------------------------------------------------
 
 import re as _re
@@ -1997,7 +2142,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chief_of_staff.py",
         description=(
-            "Chief-of-Staff v0.3.5 — read-only daily operating loop and subsystem summaries. "
+            "Chief-of-Staff v0.3.6 — read-only daily operating loop and subsystem summaries. "
             "Never approves, executes, or mutates state."
         ),
     )
@@ -2058,6 +2203,16 @@ def build_parser() -> argparse.ArgumentParser:
     r_out.add_argument("--json", action="store_true", help="Structured JSON (rows + verdicts + verification)")
     r_out.add_argument("--markdown", action="store_true", help="Markdown formatted")
     readiness.set_defaults(func=cmd_readiness)
+
+    demo = sub.add_parser(
+        "demo",
+        help="Render the daily briefing from bundled sample data (no credentials/config)",
+    )
+    demo_out = demo.add_mutually_exclusive_group()
+    demo_out.add_argument("--summary", action="store_true", default=True, help="Human-readable text (default)")
+    demo_out.add_argument("--json", action="store_true", help="Stable JSON schema")
+    demo_out.add_argument("--markdown", action="store_true", help="Markdown formatted")
+    demo.set_defaults(func=cmd_demo)
 
     # logs subcommand group (read-only observability; these do NOT create runs)
     logs = sub.add_parser("logs", help="Operational log inspection and self-diagnosis")
