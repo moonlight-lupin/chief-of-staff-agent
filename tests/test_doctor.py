@@ -97,3 +97,46 @@ def test_reports_missing_config(tmp_path):
     company = next(row for row in data if row["name"] == "company_yaml")
     assert company["status"] == "fail"
     assert "missing" in company["detail"] or "invalid" in company["detail"]
+
+
+def test_assistant_name_warns_when_missing(tmp_path):
+    """Named CoS triggers need assistant.name — doctor must surface the gap."""
+    config = minimal_config(tmp_path)
+    report = run_checks(fix=False, config=str(config))
+    row = next(r for r in report if r.name == "assistant_name")
+    assert row.status == "warn"
+    assert "assistant.name" in row.detail
+    assert "named" in row.detail.lower() or "trigger" in row.detail.lower()
+
+
+def test_assistant_name_passes_when_set(tmp_path):
+    config = minimal_config(tmp_path)
+    data = yaml.safe_load(config.read_text(encoding="utf-8"))
+    data["assistant"] = {"name": "Ada"}
+    config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    report = run_checks(fix=False, config=str(config))
+    row = next(r for r in report if r.name == "assistant_name")
+    assert row.status == "pass"
+    assert "Ada" in row.detail
+
+
+def test_assistant_name_passes_generic_default_with_guidance(tmp_path):
+    config = minimal_config(tmp_path)
+    data = yaml.safe_load(config.read_text(encoding="utf-8"))
+    data["assistant"] = {"name": "Chief of Staff"}
+    config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    report = run_checks(fix=False, config=str(config))
+    row = next(r for r in report if r.name == "assistant_name")
+    assert row.status == "pass"
+    assert "Chief of Staff" in row.detail
+    assert "distinctive" in row.detail.lower() or "default" in row.detail.lower()
+
+
+def test_assistant_name_warns_on_blank(tmp_path):
+    config = minimal_config(tmp_path)
+    data = yaml.safe_load(config.read_text(encoding="utf-8"))
+    data["assistant"] = {"name": "   "}
+    config.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    report = run_checks(fix=False, config=str(config))
+    row = next(r for r in report if r.name == "assistant_name")
+    assert row.status == "warn"

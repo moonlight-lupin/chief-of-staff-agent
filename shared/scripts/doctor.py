@@ -323,6 +323,36 @@ def _check_signature(fix: bool, data: dict[str, Any] | None, config_path: Path) 
     return CheckResult("signature_image", "pass" if path.exists() else "warn", str(path))
 
 
+def _check_assistant_name(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Warn when assistant.name is unset — named invocation is how operators
+    route requests to CoS skills instead of generic email/calendar handlers.
+
+    Examples that rely on a name: \"Ask Ada to check my email\", \"Ada, what's on today?\".
+    """
+    assistant = (data or {}).get("assistant") if isinstance((data or {}).get("assistant"), dict) else {}
+    raw = assistant.get("name") if assistant else None
+    name = str(raw).strip() if raw is not None else ""
+
+    if not name:
+        return CheckResult(
+            "assistant_name",
+            "warn",
+            "assistant.name not set in company.yaml — named triggers "
+            "(\"Ask <name> to check my email\") will not route to CoS skills. "
+            "Set assistant.name (e.g. via bootstrap --assistant-name Ada).",
+        )
+
+    if name.lower() in {"chief of staff", "chief-of-staff", "cos"}:
+        return CheckResult(
+            "assistant_name",
+            "pass",
+            f"assistant.name='{name}' (generic default — a distinctive name "
+            "improves routing away from Hermes generic email/calendar handlers)",
+        )
+
+    return CheckResult("assistant_name", "pass", f"assistant.name='{name}'")
+
+
 def _check_wiki(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     paths = (data or {}).get("paths") if isinstance((data or {}).get("paths"), dict) else {}
     raw = paths.get("wiki_path") if paths else None
@@ -769,6 +799,7 @@ def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path)
 
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
+    _check_assistant_name,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,
     _check_jurisdiction_pack, _check_config_file("drive-map.yaml"), _check_config_file("queries.yaml"),
     _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_compile,
