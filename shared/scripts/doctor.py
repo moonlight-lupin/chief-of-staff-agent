@@ -535,19 +535,35 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
         details.append(f"mcp_initialize: failed — {exc}")
         all_pass = False
 
-    # Check connections via metadata
+    # Check connections via metadata. The toolkit set is family-aware so a
+    # Composio Microsoft connection reports outlook/one_drive, not the Google
+    # toolkits (family: explicit config wins, else inferred from the toolkit list).
+    family = workspace.get("family")
+    toolkits_cfg = workspace.get("toolkits", [])
+    if str(family or "").strip().lower() == "microsoft" or (
+        isinstance(toolkits_cfg, list)
+        and any(str(t).strip().lower() in ("outlook", "one_drive", "onedrive") for t in toolkits_cfg)
+    ):
+        expected_toolkits = ("outlook", "one_drive")
+        connect_hint_tk = "outlook"
+    else:
+        expected_toolkits = ("gmail", "googlecalendar", "googledrive")
+        connect_hint_tk = "gmail"
     try:
         from providers.composio_mcp_workspace import load_session_meta
         meta = load_session_meta(data or {})
         if meta and meta.get("connections"):
-            for tk in ("gmail", "googlecalendar", "googledrive"):
+            for tk in expected_toolkits:
                 status = meta.get("connections", {}).get(tk, {}).get("status", "unknown")
                 if status == "connected":
                     details.append(f"{tk}: connected")
                 else:
                     details.append(f"{tk}: {status}")
         else:
-            details.append("no session metadata — run: connect_workspace.py --provider composio --connect gmail")
+            details.append(
+                f"no session metadata — run: connect_workspace.py "
+                f"--provider composio --connect {connect_hint_tk}"
+            )
     except Exception as exc:
         details.append(f"connection check failed: {exc}")
 

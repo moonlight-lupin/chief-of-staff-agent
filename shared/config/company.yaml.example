@@ -177,6 +177,12 @@ integrations:
   workspace:
     provider: google_api        # google_api | composio | m365
     mode: direct                # direct | sdk | mcp
+    # Composio toolkit family (only used when provider: composio):
+    #   google    -> Gmail / Google Calendar / Google Drive
+    #   microsoft -> Outlook mail / Outlook calendar / OneDrive
+    # Defaults to google. If omitted but the toolkits list below contains
+    # outlook/one_drive, microsoft is inferred (with a one-time warning).
+    family: google
     user_id: null
     account_aliases:
       gmail: null
@@ -186,6 +192,24 @@ integrations:
       - gmail
       - googlecalendar
       - googledrive
+    # For a Composio Microsoft 365 connection, use instead:
+    #   family: microsoft
+    #   toolkits: [outlook, one_drive]
+    #
+    # Optional per-operation Composio tool-slug overrides (provider: composio).
+    # Each operation has a built-in default per family (see
+    # providers/composio_mcp_workspace.py FAMILY_SLUGS). Override an entry ONLY if
+    # Composio renames a tool in their catalog — a wrong slug reports itself with
+    # this exact override path. Microsoft-family defaults shown below for reference:
+    # tool_slugs:
+    #   mail_search: OUTLOOK_OUTLOOK_LIST_MESSAGES
+    #   mail_create_draft: OUTLOOK_OUTLOOK_CREATE_DRAFT
+    #   calendar_list: OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW
+    #   calendar_create: OUTLOOK_OUTLOOK_CREATE_EVENT
+    #   calendar_update: OUTLOOK_OUTLOOK_UPDATE_EVENT
+    #   files_search: ONE_DRIVE_ONE_DRIVE_FIND_FILE
+    #   files_upload: ONE_DRIVE_ONE_DRIVE_UPLOAD_FILE
+    #   files_download: ONE_DRIVE_ONE_DRIVE_DOWNLOAD_FILE
     tools_allowlist:
       gmail:
         read:

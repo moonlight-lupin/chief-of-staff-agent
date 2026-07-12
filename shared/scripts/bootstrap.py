@@ -253,10 +253,17 @@ def _provider_overlay(
                 f"Wrote placeholder integrations.workspace.user_id={COMPOSIO_USER_PLACEHOLDER}; "
                 "set it to your real Composio user id before connecting."
             )
+        family = (getattr(args, "composio_family", None) or "google").strip().lower()
+        if family not in ("google", "microsoft"):
+            family = "google"
+        toolkits = (["outlook", "one_drive"] if family == "microsoft"
+                    else ["gmail", "googlecalendar", "googledrive"])
         overlay["integrations"] = {
             "workspace": {
                 "provider": "composio",
+                "family": family,
                 "user_id": user_id,
+                "toolkits": toolkits,
                 "mcp": {
                     "endpoint": "https://connect.composio.dev/mcp",
                     "key_env": "COMPOSIO_MCP_KEY",
@@ -264,10 +271,24 @@ def _provider_overlay(
             }
         }
         required_env.append("COMPOSIO_MCP_KEY")
-        next_commands = [
-            "python shared/scripts/doctor.py",
-            "python shared/scripts/connect_workspace.py --provider composio --verify",
-        ]
+        if family == "microsoft":
+            notices.append(
+                "Composio family=microsoft: connect Outlook mail/calendar + OneDrive. "
+                "Tool slugs are best-effort against Composio's catalog and are "
+                "overridable via integrations.workspace.tool_slugs (see "
+                "company.yaml.example)."
+            )
+            next_commands = [
+                "python shared/scripts/doctor.py",
+                "python shared/scripts/connect_workspace.py --provider composio --connect outlook",
+                "python shared/scripts/connect_workspace.py --provider composio --connect one_drive",
+                "python shared/scripts/connect_workspace.py --provider composio --verify",
+            ]
+        else:
+            next_commands = [
+                "python shared/scripts/doctor.py",
+                "python shared/scripts/connect_workspace.py --provider composio --verify",
+            ]
         return overlay, required_env, notices, next_commands
 
     if provider == "m365":
@@ -651,6 +672,11 @@ def _main(argv: list[str] | None = None) -> int:
         help="Env var holding the M365 client secret (default: M365_CLIENT_SECRET)",
     )
     parser.add_argument("--composio-user-id", help="Composio user id")
+    parser.add_argument(
+        "--composio-family", choices=("google", "microsoft"), default="google",
+        help="Composio toolkit family: google (Gmail/Calendar/Drive) or "
+             "microsoft (Outlook/OneDrive). Default: google.",
+    )
     parser.add_argument(
         "--esign-url", default=None,
         help="DocuSeal instance URL (e.g. https://sign.yourdomain.com). "

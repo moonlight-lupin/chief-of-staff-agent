@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.3.6 internal beta  
+> **Status:** v0.3.7 internal beta  
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -60,7 +60,7 @@ The daily loop is deliberately **read-only** — it reports and recommends, it n
 
 **2. Your data is yours, in files you can read.** Deals, invoices, expenses, tasks, and your knowledge wiki live as plain YAML and Markdown on your own machine. Inspect them, version them, edit them in any editor, walk away anytime. No hosted database, no vendor lock-in.
 
-**3. Works with the workspace you already have.** Google Workspace (service account or managed auth via Composio) **and Microsoft 365** (Outlook, Calendar, OneDrive via Microsoft Graph) are first-class, switchable with one config line. If your AI agent has its own Gmail/M365 connectors, it can fetch data itself and feed the same pipeline — no API client needed.
+**3. Works with the workspace you already have.** Google Workspace (service account or managed auth via Composio) **and Microsoft 365** (Outlook, Calendar, OneDrive — via Microsoft Graph, or via Composio managed OAuth with no Entra admin) are first-class, switchable with one config line. If your AI agent has its own Gmail/M365 connectors, it can fetch data itself and feed the same pipeline — no API client needed.
 
 **4. It tells you when — and why — it isn't working.** A generated readiness report gives a go/no-go verdict per capability (not a vague health check). Every run writes structured, secret-redacted logs, and `logs diagnose` turns failures into plain-English findings with the exact commands to fix them: *"Microsoft Graph rejected your credentials — the client secret may have expired. Run: …"*
 
@@ -147,7 +147,7 @@ One config line selects the backend; every skill works unchanged:
 | Provider | Auth | Best for |
 |---|---|---|
 | `google_api` | Service account, domain-wide delegation | Self-hosted Google Workspace |
-| `composio` | Managed OAuth (Composio MCP) | Easiest Google onboarding |
+| `composio` | Managed OAuth (Composio MCP) | Google **or Microsoft 365** via managed OAuth (Connect Link, no admin) |
 | `m365` | Entra ID app (client credentials or device code) | Microsoft 365 / Outlook / OneDrive |
 | `agent` | Your AI agent's own connectors | Agent-native: fetch with connector tools, feed via `--input` |
 

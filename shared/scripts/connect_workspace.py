@@ -24,6 +24,33 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 
+_MICROSOFT_TOOLKITS = {"outlook", "one_drive", "onedrive"}
+
+
+def _composio_family(workspace: Mapping[str, Any]) -> str:
+    """Resolve the Composio toolkit family from config: explicit ``family`` wins,
+    else infer ``microsoft`` from outlook/one_drive toolkit names (mirrors
+    ComposioMCPWorkspaceClient._resolve_family)."""
+    if not isinstance(workspace, Mapping):
+        return "google"
+    explicit = workspace.get("family")
+    if explicit:
+        fam = str(explicit).strip().lower()
+        return fam if fam in ("google", "microsoft") else "google"
+    toolkits = workspace.get("toolkits", [])
+    if isinstance(toolkits, list) and any(
+        str(t).strip().lower() in _MICROSOFT_TOOLKITS for t in toolkits
+    ):
+        return "microsoft"
+    return "google"
+
+
+def _composio_connect_toolkits(family: str) -> list[str]:
+    """The toolkits an operator connects for a given family."""
+    return ["outlook", "one_drive"] if family == "microsoft" else \
+        ["gmail", "googlecalendar", "googledrive"]
+
+
 def _read_yaml_config(path: str) -> dict[str, Any]:
     """Load a YAML config file into a plain dict (no validation)."""
     try:
@@ -130,6 +157,7 @@ def cmd_status(config: dict[str, Any]) -> int:
     elif provider == "composio":
         result["mcp_key_set"] = bool(os.getenv("COMPOSIO_MCP_KEY"))
         result["user_id"] = workspace.get("user_id", "")
+        result["family"] = _composio_family(workspace)
         # Check connections
         try:
             from providers.composio_mcp_workspace import load_session_meta, ComposioMCPWorkspaceClient
@@ -383,9 +411,9 @@ def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
         from workspace_client import get_workspace_client
         client = get_workspace_client(config)
 
-        if toolkit == "gmail":
-            results = client.gmail_search("is:unread", max_results=3)
-            print(f"✅ Gmail: got {len(results)} unread emails")
+        if toolkit in ("gmail", "outlook", "mail"):
+            results = client.mail_search("is:unread", max_results=3)
+            print(f"✅ Mail: got {len(results)} unread emails")
             for e in results[:3]:
                 subject = e.get("subject", e.get("Subject", "?"))[:60]
                 print(f"   {subject}")
@@ -395,9 +423,9 @@ def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
             end = (date.today() + timedelta(days=7)).isoformat()
             results = client.calendar_list(start, end)
             print(f"✅ Calendar: got {len(results)} events in next 7 days")
-        elif toolkit in ("googledrive", "drive"):
-            results = client.drive_search("", max_results=5)
-            print(f"✅ Drive: got {len(results)} files")
+        elif toolkit in ("googledrive", "drive", "one_drive", "onedrive"):
+            results = client.files_search("", max_results=5)
+            print(f"✅ Files: got {len(results)} files")
             for f in results[:5]:
                 name = f.get("name", "?")[:60]
                 print(f"   {name}")
@@ -465,6 +493,9 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
     else:
         print(f"❌ {key_env}: NOT set")
 
+    family = _composio_family(workspace)
+    print(f"✅ family: {family} ({'Outlook/OneDrive' if family == 'microsoft' else 'Gmail/Calendar/Drive'})")
+
     user_id = workspace.get("user_id", "")
     if user_id:
         print(f"✅ user_id: {user_id}")
@@ -487,13 +518,15 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
             print(f"⚠️  MCP initialize failed: {exc}")
 
     if print_steps or not os.getenv(key_env):
+        connect_tks = _composio_connect_toolkits(family)
         print("\nNext steps:")
         print(f"  1. Set {key_env} in .env (from https://connect.composio.dev)")
         print("  2. Set integrations.workspace.user_id in company.yaml")
-        print("  3. python connect_workspace.py --provider composio --connect gmail")
-        print("  4. python connect_workspace.py --provider composio --connect googlecalendar")
-        print("  5. python connect_workspace.py --provider composio --connect googledrive")
-        print("  6. python connect_workspace.py --status")
+        step = 3
+        for tk in connect_tks:
+            print(f"  {step}. python connect_workspace.py --provider composio --connect {tk}")
+            step += 1
+        print(f"  {step}. python connect_workspace.py --status")
 
     return 0 if os.getenv(key_env) else 1
 
@@ -662,14 +695,16 @@ def cmd_capabilities(config: dict[str, Any], provider_override: str | None = Non
             integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
             workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
             mode = workspace.get("mode", "mcp")
-            provider = f"composio:{mode}"
+            base = "composio_microsoft" if _composio_family(workspace) == "microsoft" else "composio"
+            provider = f"{base}:{mode}"
     else:
         integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
         workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
         provider = workspace.get("provider", "google_api")
         mode = workspace.get("mode", "direct")
         if provider == "composio":
-            provider = f"composio:{mode}"
+            base = "composio_microsoft" if _composio_family(workspace) == "microsoft" else "composio"
+            provider = f"{base}:{mode}"
 
     caps = get_capabilities(provider)
     if not caps:
@@ -766,7 +801,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--print-next-steps", action="store_true",
                         help="Print next steps for the selected provider")
     parser.add_argument("--connect", metavar="TOOLKIT",
-                        help="Connect a Composio toolkit (e.g. gmail, googlecalendar)")
+                        help="Connect a Composio toolkit — google family: gmail, "
+                             "googlecalendar, googledrive; microsoft family: outlook, one_drive")
     parser.add_argument("--mcp-url", action="store_true",
                         help="Print MCP endpoint URL for Composio session")
     parser.add_argument("--mcp-info", action="store_true",

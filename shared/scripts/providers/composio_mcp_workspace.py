@@ -23,8 +23,203 @@ if str(_PARENT) not in sys.path:
 
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
+from query_compiler import compile_query
 
 _SCRIPT_DIR = Path(__file__).resolve().parent.parent  # shared/scripts
+
+
+# ── Toolkit-family architecture (v0.3.7) ──────────────────────────────────
+# Composio's managed OAuth works against DIFFERENT tool catalogs depending on the
+# toolkit family the operator connected. The provider is family-selectable so a
+# single ComposioMCPWorkspaceClient can drive Google (Gmail/Calendar/Drive) OR
+# Microsoft 365 (Outlook mail/calendar, OneDrive), chosen by config.
+#
+# FAMILY_SLUGS is the SINGLE source of truth mapping neutral operations to the
+# default Composio tool slug per family. Every slug is OVERRIDABLE per-operation
+# via integrations.workspace.tool_slugs (a flat {operation: slug} map) so a slug
+# rename in Composio's catalog is a config edit, not a code change.
+FAMILY_SLUGS: dict[str, dict[str, str]] = {
+    "google": {
+        "mail_search": "GMAIL_FETCH_EMAILS",
+        "mail_create_draft": "GMAIL_CREATE_EMAIL_DRAFT",
+        "calendar_list": "GOOGLECALENDAR_FIND_EVENT",
+        "calendar_create": "GOOGLECALENDAR_CREATE_EVENT",
+        "calendar_update": "GOOGLECALENDAR_UPDATE_EVENT",
+        "files_search": "GOOGLEDRIVE_FIND_FILE",
+        "files_upload": "GOOGLEDRIVE_UPLOAD_FILE",
+        "files_download": "GOOGLEDRIVE_DOWNLOAD_FILE",
+    },
+    # Microsoft (Outlook + OneDrive) slugs are best-effort against Composio's
+    # current catalog — see the confidence notes in docs/SETUP.md. Any slug can
+    # be corrected via integrations.workspace.tool_slugs without a code change.
+    "microsoft": {
+        "mail_search": "OUTLOOK_OUTLOOK_LIST_MESSAGES",
+        "mail_create_draft": "OUTLOOK_OUTLOOK_CREATE_DRAFT",
+        "calendar_list": "OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW",
+        "calendar_create": "OUTLOOK_OUTLOOK_CREATE_EVENT",
+        "calendar_update": "OUTLOOK_OUTLOOK_UPDATE_EVENT",
+        "files_search": "ONE_DRIVE_ONE_DRIVE_FIND_FILE",
+        "files_upload": "ONE_DRIVE_ONE_DRIVE_UPLOAD_FILE",
+        "files_download": "ONE_DRIVE_ONE_DRIVE_DOWNLOAD_FILE",
+    },
+}
+
+# Toolkit names that imply the microsoft family when family is not set explicitly.
+_MICROSOFT_TOOLKITS = {"outlook", "one_drive", "onedrive"}
+
+VALID_FAMILIES = ("google", "microsoft")
+
+
+class ComposioToolError(RuntimeError):
+    """Raised when Composio reports an unknown/invalid tool slug for an operation.
+
+    The message names the failing slug AND the tool_slugs config override path so
+    a catalog drift is self-diagnosing (reads warn with it; guarded writes surface
+    it as the ActionResult error).
+    """
+
+
+def _is_unknown_tool_error(err: Any) -> bool:
+    """True if a Composio error payload/string looks like an unknown-tool error."""
+    text = str(err).lower()
+    needles = (
+        "unknown tool", "no such tool", "invalid tool", "tool not found",
+        "not found", "does not exist", "no tool", "unrecognized tool",
+        "not a valid tool", "invalid tool_slug", "unknown slug",
+    )
+    return any(n in text for n in needles)
+
+
+def _unknown_tool_message(operation: str, slug: str, err: Any) -> str:
+    op = operation or "<operation>"
+    return (
+        f"Composio returned an unknown-tool error for slug {slug!r} "
+        f"(operation {op!r}): {err}. The default slug may be wrong for your "
+        f"toolkit family — override it via integrations.workspace.tool_slugs."
+        f"{op} in company.yaml."
+    )
+
+
+# ── Microsoft (Graph-shaped) normalizers ──────────────────────────────────
+# Composio surfaces Outlook/OneDrive payloads in Microsoft Graph shape. These
+# small local functions MIRROR providers/m365_graph.py's normalizers (rather than
+# importing that module, which would couple this provider to the Graph REST
+# client and its requests/query_compiler surface) so a Composio-Microsoft record
+# validates against the SAME canonical schemas.py shapes as an agent-fetched or
+# Graph-fetched record. Google-family normalization is byte-identical to today
+# and stays in _normalize_tool_result.
+
+def _ms_extract_records(data: Any) -> list[Any]:
+    """Best-effort extraction of the record list from a Composio Outlook/OneDrive
+    response envelope. Handles a bare list, Graph's ``value`` array, and the
+    common Composio wrapper keys/nestings defensively."""
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, Mapping):
+        return []
+    for key in ("value", "messages", "events", "files", "items", "results"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return val
+    for key in ("response_data", "data", "result"):
+        val = data.get(key)
+        if isinstance(val, (Mapping, list)):
+            got = _ms_extract_records(val)
+            if got:
+                return got
+    return []
+
+
+def _ms_normalize_message(m: Mapping[str, Any]) -> dict[str, Any]:
+    """Graph message -> canonical schemas.validate_message shape (source outlook)."""
+    sender = ""
+    frm = m.get("from") or m.get("sender") or {}
+    if isinstance(frm, Mapping):
+        addr = frm.get("emailAddress", {}) or {}
+        if isinstance(addr, Mapping):
+            sender = addr.get("address", "") or addr.get("name", "") or ""
+    out: dict[str, Any] = {
+        "id": m.get("id"),
+        "sender": sender or "unknown",
+        "subject": m.get("subject") or "(no subject)",
+        "date": (m.get("receivedDateTime") or m.get("sentDateTime")
+                 or m.get("createdDateTime") or ""),
+        "source": "outlook",
+    }
+    if m.get("conversationId"):
+        out["thread_id"] = m.get("conversationId")
+    if m.get("bodyPreview") is not None:
+        out["snippet"] = m.get("bodyPreview")
+    if m.get("categories") is not None:
+        out["tags"] = list(m.get("categories") or [])
+    if m.get("hasAttachments") is not None:
+        out["has_attachments"] = bool(m.get("hasAttachments"))
+    if m.get("webLink"):
+        out["link"] = m.get("webLink")
+    return out
+
+
+def _ms_normalize_event(e: Mapping[str, Any]) -> dict[str, Any]:
+    """Graph event -> canonical schemas.validate_event shape (source outlook)."""
+    start = (e.get("start", {}) or {}).get("dateTime") if isinstance(e.get("start"), Mapping) else e.get("start")
+    end = (e.get("end", {}) or {}).get("dateTime") if isinstance(e.get("end"), Mapping) else e.get("end")
+    attendees: list[str] = []
+    for a in e.get("attendees", []) or []:
+        addr = ((a.get("emailAddress", {}) or {}).get("address")) if isinstance(a, Mapping) else None
+        if addr:
+            attendees.append(addr)
+    organizer = ((e.get("organizer", {}) or {}).get("emailAddress", {}) or {}).get("address") \
+        if isinstance(e.get("organizer"), Mapping) else None
+    location = (e.get("location", {}) or {}).get("displayName") if isinstance(e.get("location"), Mapping) else None
+    conference_link = ((e.get("onlineMeeting", {}) or {}).get("joinUrl")
+                       if isinstance(e.get("onlineMeeting"), Mapping) else None) or location
+    out: dict[str, Any] = {
+        "id": e.get("id"),
+        "title": e.get("subject", "") or "",
+        "start": start,
+        "end": end,
+        "source": "outlook",
+    }
+    if attendees:
+        out["attendees"] = attendees
+    if organizer:
+        out["organizer"] = organizer
+    if location:
+        out["location"] = location
+    if conference_link:
+        out["conference_link"] = conference_link
+    if e.get("isCancelled") is not None:
+        out["status"] = "cancelled" if e.get("isCancelled") else (e.get("showAs") or "confirmed")
+    elif e.get("showAs"):
+        out["status"] = e.get("showAs")
+    return out
+
+
+def _ms_normalize_file(f: Mapping[str, Any]) -> dict[str, Any]:
+    """Graph DriveItem -> canonical schemas.validate_file shape (source onedrive)."""
+    out: dict[str, Any] = {
+        "id": f.get("id"),
+        "name": f.get("name"),
+        "source": "onedrive",
+    }
+    file_facet = f.get("file") or {}
+    if isinstance(file_facet, Mapping) and file_facet.get("mimeType"):
+        out["mime_type"] = file_facet.get("mimeType")
+    if f.get("lastModifiedDateTime"):
+        out["modified"] = f.get("lastModifiedDateTime")
+    if f.get("webUrl"):
+        out["link"] = f.get("webUrl")
+    parent = f.get("parentReference") or {}
+    if isinstance(parent, Mapping) and parent.get("id"):
+        out["parents"] = [parent.get("id")]
+    return out
+
+
+_MS_NORMALIZERS = {
+    "mail_search": _ms_normalize_message,
+    "calendar_list": _ms_normalize_event,
+    "files_search": _ms_normalize_file,
+}
 
 
 def _get_session_store_path(config: Any) -> Path:
@@ -85,7 +280,6 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
     def __init__(self, config: Any) -> None:
         self.config = config
-        self._provider_name = "composio:mcp"
         self._validate_config()
 
         integrations = config.get("integrations", {}) if isinstance(config, Mapping) else {}
@@ -95,12 +289,58 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         if not isinstance(self.toolkits, list):
             self.toolkits = ["gmail", "googlecalendar", "googledrive"]
 
+        # Toolkit family: explicit config wins; else infer from toolkit names.
+        self.family = self._resolve_family(workspace)
+        # Google family keeps the historical provider name ("composio:mcp") so all
+        # existing capability lookups, queues and tests stay valid; microsoft gets
+        # a distinct provider name with its own capability entry.
+        self._provider_name = (
+            "composio_microsoft:mcp" if self.family == "microsoft" else "composio:mcp"
+        )
+        # Per-operation slug overrides (drift mitigation). Flat {operation: slug}.
+        self._tool_slugs: dict[str, str] = {}
+        raw_slugs = workspace.get("tool_slugs")
+        if isinstance(raw_slugs, Mapping):
+            self._tool_slugs = {
+                str(k): str(v) for k, v in raw_slugs.items() if v
+            }
+
         mcp_cfg = workspace.get("mcp", {}) if isinstance(workspace, Mapping) else {}
         self.endpoint = str(mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp"))
         self.key_env = str(mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY"))
 
         self._mcp_client = None
         self._session_meta = load_session_meta(config)
+
+    def _resolve_family(self, workspace: Mapping[str, Any]) -> str:
+        """Resolve the toolkit family. Explicit ``family`` wins; otherwise infer
+        ``microsoft`` from outlook/one_drive toolkit names and warn once."""
+        explicit = workspace.get("family") if isinstance(workspace, Mapping) else None
+        if explicit:
+            fam = str(explicit).strip().lower()
+            if fam in VALID_FAMILIES:
+                return fam
+            warnings.warn(
+                f"integrations.workspace.family={explicit!r} is not one of "
+                f"{VALID_FAMILIES}; defaulting to 'google'"
+            )
+            return "google"
+        if any(str(t).strip().lower() in _MICROSOFT_TOOLKITS for t in self.toolkits):
+            warnings.warn(
+                "integrations.workspace.family not set but toolkits contain "
+                "outlook/one_drive — inferring family='microsoft'. Set family "
+                "explicitly in company.yaml to silence this warning."
+            )
+            return "microsoft"
+        return "google"
+
+    def _slug_for(self, operation: str) -> str:
+        """Return the Composio tool slug for a neutral operation, honouring a
+        config ``tool_slugs`` override before the family default."""
+        override = self._tool_slugs.get(operation)
+        if override:
+            return override
+        return FAMILY_SLUGS.get(self.family, FAMILY_SLUGS["google"])[operation]
 
     def _validate_config(self) -> None:
         if not isinstance(self.config, Mapping):
@@ -126,7 +366,8 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         self._mcp_client = MCPClient(endpoint=self.endpoint, key_env=self.key_env)
         return self._mcp_client
 
-    def _execute_composio_tool(self, tool_slug: str, input_data: dict[str, Any]) -> dict[str, Any]:
+    def _execute_composio_tool(self, tool_slug: str, input_data: dict[str, Any],
+                               operation: str = "") -> dict[str, Any]:
         """Core helper: call COMPOSIO_MULTI_EXECUTE_TOOL with a tool slug.
 
         Live-validated payload shape (v0.1.11):
@@ -136,6 +377,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         Earlier versions used 'input' which worked for some tools (Gmail) but
         failed for others (Calendar Create) because the input dict was not
         passed through to the underlying tool.
+
+        ``operation`` is the neutral op name (e.g. "mail_search"); it is used ONLY
+        to build a self-diagnosing message when Composio reports the slug as an
+        unknown tool — the raise names the slug and the tool_slugs override path.
         """
         mcp = self._get_mcp()
         result = mcp.call_tool(
@@ -155,9 +400,27 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             resp = results[0].get("response", {})
             if resp.get("successful"):
                 return resp.get("data", {})
-            else:
-                return {"error": resp.get("error", "tool execution failed"), "successful": False}
+            err = resp.get("error", "tool execution failed")
+            # A wrong/renamed slug (a real risk for the best-effort Microsoft
+            # slugs) is surfaced with the slug + override path instead of being
+            # swallowed into an empty read.
+            if _is_unknown_tool_error(err):
+                raise ComposioToolError(_unknown_tool_message(operation, tool_slug, err))
+            return {"error": err, "successful": False}
         return result
+
+    def _normalize_records(self, operation: str, slug: str, data: Any) -> Any:
+        """Family-aware read normalization. Google reads are byte-identical to
+        today (delegates to the static ``_normalize_tool_result``); microsoft
+        reads extract the Graph-shaped list and normalize each record to the
+        canonical schemas.py shape."""
+        if self.family == "microsoft":
+            normalizer = _MS_NORMALIZERS.get(operation)
+            records = _ms_extract_records(data)
+            if normalizer is None:
+                return records
+            return [normalizer(r) for r in records if isinstance(r, Mapping)]
+        return self._normalize_tool_result(slug, data)
 
     @staticmethod
     def _normalize_tool_result(tool_slug: str, data: dict[str, Any]) -> Any:
@@ -234,37 +497,85 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     # --- Mail ---
 
     def mail_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
+        slug = self._slug_for("mail_search")
         try:
-            data = self._execute_composio_tool("GMAIL_FETCH_EMAILS", {
-                "query": query,
-                "max_results": max_results,
-            })
-            return self._normalize_tool_result("GMAIL_FETCH_EMAILS", data)
+            if self.family == "microsoft":
+                args = self._ms_mail_search_args(query, max_results)
+            else:
+                args = {"query": query, "max_results": max_results}
+            data = self._execute_composio_tool(slug, args, operation="mail_search")
+            return self._normalize_records("mail_search", slug, data)
         except Exception as exc:
             warnings.warn(f"Composio MCP mail_search failed: {exc}")
             return []
+
+    def _ms_mail_search_args(self, query: Any, max_results: int) -> dict[str, Any]:
+        """Map an incoming query through the m365 query compiler and lay the
+        {folder, filter, search} result into the Outlook slug's arguments.
+
+        The query compiler already supports a per-dialect raw override
+        (dict model with ``raw={"m365": {...}}``), which passes through here as an
+        exact folder/filter/search — the documented raw-passthrough escape hatch.
+        Argument NAMES here are best-effort against Composio's Outlook tool and
+        are the primary thing to confirm on a live connection.
+        """
+        args: dict[str, Any] = {"max_results": max_results, "top": max_results}
+        try:
+            compiled = compile_query(query, "m365")
+        except Exception:
+            # Untranslatable free-text (compiler raises) -> fall back to a plain
+            # recent-messages listing rather than an opaque failure.
+            return args
+        if isinstance(compiled, Mapping):
+            if compiled.get("filter"):
+                args["filter"] = compiled["filter"]
+            if compiled.get("search"):
+                args["search"] = compiled["search"]
+            if compiled.get("folder"):
+                args["folder"] = compiled["folder"]
+        return args
 
     @guarded("gmail.draft", target_arg="to", audit_provider="composio",
              audit_tool="GMAIL_CREATE_EMAIL_DRAFT", audit_operation="gmail.create_draft",
              tool_slug="GMAIL_CREATE_EMAIL_DRAFT")
     def mail_create_draft(self, to: str, subject: str, body: str,
                           cc: str | None = None) -> dict[str, Any]:
-        args: dict[str, Any] = {"to": to, "subject": subject, "body": body}
-        if cc:
-            args["cc"] = cc
-        data = self._execute_composio_tool("GMAIL_CREATE_EMAIL_DRAFT", args)
+        slug = self._slug_for("mail_create_draft")
+        if self.family == "microsoft":
+            args: dict[str, Any] = {
+                "subject": subject,
+                "body": body,
+                "to_recipients": [to] if to else [],
+            }
+            if cc:
+                args["cc_recipients"] = [cc]
+        else:
+            args = {"to": to, "subject": subject, "body": body}
+            if cc:
+                args["cc"] = cc
+        data = self._execute_composio_tool(slug, args, operation="mail_create_draft")
         return data if isinstance(data, dict) else {}
 
     # --- Calendar ---
 
     def calendar_list(self, start: str, end: str) -> list[dict[str, Any]]:
+        slug = self._slug_for("calendar_list")
         try:
-            data = self._execute_composio_tool("GOOGLECALENDAR_FIND_EVENT", {
-                "time_min": f"{start}T00:00:00Z" if "T" not in start else start,
-                "time_max": f"{end}T23:59:59Z" if "T" not in end else end,
-                "max_results": 50,
-            })
-            return self._normalize_tool_result("GOOGLECALENDAR_FIND_EVENT", data)
+            if self.family == "microsoft":
+                args = {
+                    "startDateTime": f"{start}T00:00:00Z" if "T" not in start else start,
+                    "endDateTime": f"{end}T23:59:59Z" if "T" not in end else end,
+                    "top": 50,
+                    "max_results": 50,
+                }
+            else:
+                args = {
+                    "time_min": f"{start}T00:00:00Z" if "T" not in start else start,
+                    "time_max": f"{end}T23:59:59Z" if "T" not in end else end,
+                    "max_results": 50,
+                }
+            data = self._execute_composio_tool(slug, args, operation="calendar_list")
+            return self._normalize_records("calendar_list", slug, data)
         except Exception as exc:
             warnings.warn(f"Composio MCP calendar_list failed: {exc}")
             return []
@@ -274,34 +585,48 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def calendar_create(self, title: str, start: str, end: str,
                         attendees: list[str] | None = None,
                         description: str | None = None) -> dict[str, Any]:
-        args: dict[str, Any] = {
-            "summary": title,
-            "start_datetime": f"{start}T00:00:00Z" if "T" not in start else start,
-            "end_datetime": f"{end}T23:59:59Z" if "T" not in end else end,
-        }
-        if attendees:
-            args["attendees"] = attendees
-        if description:
-            args["description"] = description
-        data = self._execute_composio_tool("GOOGLECALENDAR_CREATE_EVENT", args)
+        slug = self._slug_for("calendar_create")
+        if self.family == "microsoft":
+            args: dict[str, Any] = {
+                "subject": title,
+                "start_datetime": f"{start}T00:00:00Z" if "T" not in start else start,
+                "end_datetime": f"{end}T23:59:59Z" if "T" not in end else end,
+            }
+            if attendees:
+                args["attendees"] = attendees
+            if description:
+                args["body"] = description
+        else:
+            args = {
+                "summary": title,
+                "start_datetime": f"{start}T00:00:00Z" if "T" not in start else start,
+                "end_datetime": f"{end}T23:59:59Z" if "T" not in end else end,
+            }
+            if attendees:
+                args["attendees"] = attendees
+            if description:
+                args["description"] = description
+        data = self._execute_composio_tool(slug, args, operation="calendar_create")
         return data if isinstance(data, dict) else {}
 
     @guarded("calendar.update", target_arg="event_id", audit_provider="composio",
              audit_tool="GOOGLECALENDAR_UPDATE_EVENT", tool_slug="GOOGLECALENDAR_UPDATE_EVENT")
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
+        slug = self._slug_for("calendar_update")
         args = {"event_id": event_id, **fields}
-        data = self._execute_composio_tool("GOOGLECALENDAR_UPDATE_EVENT", args)
+        data = self._execute_composio_tool(slug, args, operation="calendar_update")
         return data if isinstance(data, dict) else {}
 
     # --- Files ---
 
     def files_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
+        slug = self._slug_for("files_search")
         try:
-            data = self._execute_composio_tool("GOOGLEDRIVE_FIND_FILE", {
-                "query": query,
-                "max_results": max_results,
-            })
-            return self._normalize_tool_result("GOOGLEDRIVE_FIND_FILE", data)
+            data = self._execute_composio_tool(
+                slug, {"query": query, "max_results": max_results},
+                operation="files_search",
+            )
+            return self._normalize_records("files_search", slug, data)
         except Exception as exc:
             warnings.warn(f"Composio MCP files_search failed: {exc}")
             return []
@@ -309,19 +634,21 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     @guarded("drive.upload", target_arg="file_path", audit_provider="composio",
              audit_tool="GOOGLEDRIVE_UPLOAD_FILE", tool_slug="GOOGLEDRIVE_UPLOAD_FILE")
     def files_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
+        slug = self._slug_for("files_upload")
         args: dict[str, Any] = {"file_path": file_path}
         if parent_id:
             args["parent_id"] = parent_id
-        data = self._execute_composio_tool("GOOGLEDRIVE_UPLOAD_FILE", args)
+        data = self._execute_composio_tool(slug, args, operation="files_upload")
         return data if isinstance(data, dict) else {}
 
     @guarded("drive.download", target_arg="file_id", audit_provider="composio",
              audit_tool="GOOGLEDRIVE_DOWNLOAD_FILE", tool_slug="GOOGLEDRIVE_DOWNLOAD_FILE")
     def files_download(self, file_id: str, output_path: str) -> dict[str, Any]:
-        data = self._execute_composio_tool("GOOGLEDRIVE_DOWNLOAD_FILE", {
+        slug = self._slug_for("files_download")
+        data = self._execute_composio_tool(slug, {
             "file_id": file_id,
             "output_path": output_path,
-        })
+        }, operation="files_download")
         return {"path": output_path, **(data if isinstance(data, dict) else {})}
 
     # --- Health ---

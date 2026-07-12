@@ -149,6 +149,70 @@ python shared/scripts/connect_workspace.py --status
 python skills/daily-briefing/scripts/daily_briefing.py --dry-run --json
 ```
 
+#### Microsoft 365 via Composio (easiest M365 onboarding — no Entra admin)
+
+The same Composio managed-OAuth path also drives **Microsoft 365** — Outlook mail,
+Outlook calendar, and OneDrive — with **no Entra app registration and no admin
+consent**. You connect Outlook/OneDrive with a Connect Link, exactly like Gmail.
+Select the toolkit *family* with one config key.
+
+1. Bootstrap with the microsoft family:
+```bash
+python shared/scripts/bootstrap.py --company "Your Company" --jurisdiction SG \
+  --operator you@yourcompany.com \
+  --workspace-provider composio --composio-family microsoft \
+  --composio-user-id your-stable-user-id
+```
+This writes `family: microsoft` and `toolkits: [outlook, one_drive]` under
+`integrations.workspace`. (You can also set these by hand — the config below.)
+
+2. Config (`shared/config/company.yaml`):
+```yaml
+integrations:
+  workspace:
+    provider: composio
+    mode: mcp
+    family: microsoft          # Outlook mail/calendar + OneDrive
+    user_id: "your-stable-user-id"
+    toolkits:
+      - outlook
+      - one_drive
+    mcp:
+      endpoint: "https://connect.composio.dev/mcp"
+      key_env: "COMPOSIO_MCP_KEY"
+    # Optional: override a tool slug if Composio renames one in their catalog.
+    # tool_slugs:
+    #   mail_search: OUTLOOK_OUTLOOK_LIST_MESSAGES
+```
+
+3. Connect Outlook and OneDrive (open each printed Connect Link in your browser):
+```bash
+python shared/scripts/connect_workspace.py --provider composio --connect outlook
+python shared/scripts/connect_workspace.py --provider composio --connect one_drive
+```
+
+4. Verify / readiness (this is the acceptance test on a live connection):
+```bash
+python shared/scripts/connect_workspace.py --status          # shows family + per-toolkit state
+python shared/scripts/connect_workspace.py --verify          # per-capability go/no-go
+python shared/scripts/connect_workspace.py --provider composio --capabilities
+```
+
+> **Honesty note (mirrors the Graph provider's history).** The Composio Microsoft
+> tool slugs (`OUTLOOK_OUTLOOK_LIST_MESSAGES`, `OUTLOOK_OUTLOOK_CREATE_DRAFT`,
+> `OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW`, `OUTLOOK_OUTLOOK_CREATE_EVENT` /
+> `..._UPDATE_EVENT`, `ONE_DRIVE_ONE_DRIVE_FIND_FILE` / `..._UPLOAD_FILE` /
+> `..._DOWNLOAD_FILE`) are **best-effort against Composio's current catalog**.
+> Every slug is **config-overridable** via `integrations.workspace.tool_slugs`
+> (a flat `{operation: slug}` map) — and a wrong slug reports *itself*: the error
+> names the failing slug and the exact `tool_slugs` key to fix. `--verify` on a
+> live Composio Microsoft connection is the real acceptance test; run it before
+> relying on writes. Gmail-syntax queries are translated to Outlook automatically
+> (`in:inbox`, `is:unread`, `from:`, `newer_than:` …); a dict query with a
+> `raw: {m365: {...}}` override is passed through verbatim. `mail.send` is
+> intentionally disabled; archive/trash/categories/cancel are not exposed via
+> Composio (capabilities report them honestly as unsupported).
+
 ### Option 3: Microsoft 365 (Graph API)
 
 Talks to Outlook mail, Outlook calendar, and OneDrive over the Microsoft Graph

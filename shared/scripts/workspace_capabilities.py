@@ -87,6 +87,49 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": False,
     },
+    # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
+    # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
+    # reports provider_name "composio_microsoft:mcp". The SUPPORTED set mirrors the
+    # Google-family Composio provider exactly because the same eight neutral
+    # operations have Composio Microsoft slugs (FAMILY_SLUGS["microsoft"]); every
+    # operation WITHOUT a slug is honestly False (mail.send is intentionally
+    # disabled; archive/trash/tags/cancel are not exposed via Composio).
+    "composio_microsoft": {
+        "mail.search": True,
+        "mail.draft": True,
+        "mail.send": False,
+        "mail.archive": False,
+        "mail.trash": False,
+        "mail.list_tags": False,
+        "mail.tag": False,
+        "mail.create_tag": False,
+        "calendar.list": True,
+        "calendar.create": True,
+        "calendar.update": True,
+        "calendar.cancel": False,
+        "files.search": True,
+        "files.upload": True,
+        "files.download": True,
+        "files.trash": False,
+    },
+    "composio_microsoft:mcp": {
+        "mail.search": True,
+        "mail.draft": True,
+        "mail.send": False,
+        "mail.archive": False,
+        "mail.trash": False,
+        "mail.list_tags": False,
+        "mail.tag": False,
+        "mail.create_tag": False,
+        "calendar.list": True,
+        "calendar.create": True,
+        "calendar.update": True,
+        "calendar.cancel": False,
+        "files.search": True,
+        "files.upload": True,
+        "files.download": True,
+        "files.trash": False,
+    },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
     # mail.send is destructive (env-gated identically to gmail.send).
@@ -154,6 +197,10 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio_microsoft", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio_microsoft:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio_microsoft", "mail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio_microsoft:mcp", "mail.send"): "sending email is intentionally disabled for Composio MCP",
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "
