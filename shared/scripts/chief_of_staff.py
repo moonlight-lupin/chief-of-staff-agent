@@ -1664,9 +1664,10 @@ def cmd_demo(args: argparse.Namespace) -> int:
     bundled sample workspace envelope (``examples/sample-workspace.json``) through
     the existing ``daily_briefing --input`` compute path. No credentials, no
     company.yaml required. Writes NOTHING into ``examples/`` and creates no
-    ``.runs`` there — the temp config lives in a tmp dir and the briefing
-    computation is pure read-only; runtime logging for the demo run is console-only
-    when no real config is present.
+    ``.runs`` there — the temp config lives in a TemporaryDirectory (cleaned up
+    on exit) and the briefing computation is pure read-only. ``main()`` dispatches
+    ``demo`` outside the runtime-log lifecycle so a missing company.yaml does not
+    print config-not-found noise.
     """
     import tempfile as _tempfile
 
@@ -1683,44 +1684,44 @@ def cmd_demo(args: argparse.Namespace) -> int:
         print("demo unavailable: daily_briefing/briefing_renderer modules not importable", file=sys.stderr)
         return 1
 
-    # Synthesize a throwaway company.yaml in a tmp dir (NOT under examples/) that
-    # points project_root at the bundled examples/ sample data.
-    tmp_dir = Path(_tempfile.mkdtemp(prefix="cos-demo-"))
-    demo_cfg = dict(_DEMO_CONFIG)
-    demo_cfg["paths"] = {
-        "project_root": str(examples_dir),
-        "wiki_path": str(tmp_dir / "wiki"),
-        "templates": str(PLUGIN_ROOT / "shared" / "templates"),
-    }
-    cfg_path = tmp_dir / "company.yaml"
-    try:
-        import yaml as _yaml
-        cfg_path.write_text(_yaml.safe_dump(demo_cfg), encoding="utf-8")
-    except Exception as exc:
-        print(f"demo error: could not write temp demo config: {exc}", file=sys.stderr)
-        return 1
+    # Throwaway company.yaml in a TemporaryDirectory (NOT under examples/) —
+    # auto-cleaned so repeated demos never leak /tmp/cos-demo-* dirs.
+    with _tempfile.TemporaryDirectory(prefix="cos-demo-") as tmp:
+        tmp_dir = Path(tmp)
+        demo_cfg = dict(_DEMO_CONFIG)
+        demo_cfg["paths"] = {
+            "project_root": str(examples_dir),
+            "wiki_path": str(tmp_dir / "wiki"),
+            "templates": str(PLUGIN_ROOT / "shared" / "templates"),
+        }
+        cfg_path = tmp_dir / "company.yaml"
+        try:
+            import yaml as _yaml
+            cfg_path.write_text(_yaml.safe_dump(demo_cfg), encoding="utf-8")
+        except Exception as exc:
+            print(f"demo error: could not write temp demo config: {exc}", file=sys.stderr)
+            return 1
 
-    # Load the bundled sample workspace envelope through the real --input path.
-    workspace_input = None
-    try:
-        workspace_input = daily_briefing_mod.load_workspace_input(str(envelope_path))
-    except Exception as exc:
-        print(f"demo error: could not load sample workspace envelope: {exc}", file=sys.stderr)
-        return 1
+        # Load the bundled sample workspace envelope through the real --input path.
+        try:
+            workspace_input = daily_briefing_mod.load_workspace_input(str(envelope_path))
+        except Exception as exc:
+            print(f"demo error: could not load sample workspace envelope: {exc}", file=sys.stderr)
+            return 1
 
-    try:
-        briefing = daily_briefing_mod._build_structured_briefing(
-            str(cfg_path), workspace_input=workspace_input
-        )
-        rendered = briefing_renderer.render(briefing, fmt)
-    except Exception as exc:
-        print(f"demo error: could not render sample briefing: {exc}", file=sys.stderr)
-        return 1
+        try:
+            briefing = daily_briefing_mod._build_structured_briefing(
+                str(cfg_path), workspace_input=workspace_input
+            )
+            rendered = briefing_renderer.render(briefing, fmt)
+        except Exception as exc:
+            print(f"demo error: could not render sample briefing: {exc}", file=sys.stderr)
+            return 1
 
-    print(_DEMO_BANNER_TOP)
-    print(rendered)
-    print(_DEMO_BANNER_BOTTOM)
-    return 0
+        print(_DEMO_BANNER_TOP)
+        print(rendered)
+        print(_DEMO_BANNER_BOTTOM)
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2287,9 +2288,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     command = getattr(args, "command", None)
 
-    # The `logs` group is pure inspection and must NOT create runs (avoids
-    # recursion/noise). Dispatch it directly, outside the run lifecycle.
-    if command == "logs":
+    # Pure inspection / zero-config paths must NOT create runs or load company.yaml
+    # (avoids recursion/noise and the scary "config not found" banner on `demo`).
+    if command in ("logs", "demo"):
         try:
             return int(args.func(args))
         except BrokenPipeError:  # pragma: no cover

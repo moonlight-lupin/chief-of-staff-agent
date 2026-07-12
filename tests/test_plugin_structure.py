@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for plugin structure — all 16 skills present, frontmatter valid."""
+"""Tests for plugin structure — all 18 skills present, frontmatter valid."""
 
 from pathlib import Path
 import yaml
@@ -8,12 +8,14 @@ import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
+# Must match plugin.yaml skill_profiles.default.registered (and enterprise).
 ALL_SKILLS = [
     "daily-briefing", "deadline-tracker", "note-taker",
     "todo-list", "calendar-manager", "drive-filer",
     "meeting-prep", "weekly-review", "document-preparer",
     "pipeline-manager", "bookkeeper", "deep-research",
-    "entity-research", "travel-itinerary", "backup", "self-sign",
+    "entity-research", "travel-itinerary", "backup",
+    "email-organisation", "self-sign", "esign-connector",
 ]
 
 
@@ -39,10 +41,22 @@ class TestPluginStructure:
         assert data["requires_skills"] == []
         assert "google-workspace" in data.get("optional_skills", [])
 
-    def test_init_registers_all_skills(self):
-        content = (PLUGIN_ROOT / "__init__.py").read_text()
-        for name in ALL_SKILLS:
-            assert name in content, f"Skill '{name}' not registered in __init__.py"
+    def test_plugin_yaml_registers_all_skills(self):
+        """Source of truth is skill_profiles — not a hardcoded fallback string in __init__."""
+        with open(PLUGIN_ROOT / "plugin.yaml") as f:
+            data = yaml.safe_load(f)
+        profiles = data.get("skill_profiles") or {}
+        for profile_name in ("default", "enterprise"):
+            registered = profiles.get(profile_name, {}).get("registered") or []
+            missing = [s for s in ALL_SKILLS if s not in registered]
+            assert not missing, (
+                f"plugin.yaml skill_profiles.{profile_name}.registered missing: {missing}"
+            )
+            extra = [s for s in registered if s not in ALL_SKILLS]
+            assert not extra, (
+                f"plugin.yaml skill_profiles.{profile_name}.registered has unknown skills: {extra}"
+            )
+            assert len(registered) == 18
 
     def test_release_versions_agree(self):
         """plugin.yaml, pyproject.toml, and the chief_of_staff entrypoint must
@@ -112,18 +126,24 @@ class TestSkillFrontmatter:
         path = PLUGIN_ROOT / "skills" / skill_name / "SKILL.md"
         content = path.read_text()
         parts = content.split("---", 2)
+        assert len(parts) >= 3, f"{skill_name}: malformed frontmatter"
         fm = yaml.safe_load(parts[1])
-        if "version" in fm:
-            assert fm["version"] == "0.1.0", f"{skill_name}: version is {fm['version']}, expected 0.1.0"
+        assert "version" in fm, f"{skill_name}: missing 'version' in frontmatter"
+        assert str(fm["version"]).strip(), f"{skill_name}: empty version"
+        # Accept dotted version strings (skills evolve independently of plugin).
+        assert isinstance(fm["version"], (str, int, float))
 
     @pytest.mark.parametrize("skill_name", ALL_SKILLS)
     def test_license_is_apache(self, skill_name):
         path = PLUGIN_ROOT / "skills" / skill_name / "SKILL.md"
         content = path.read_text()
         parts = content.split("---", 2)
+        assert len(parts) >= 3, f"{skill_name}: malformed frontmatter"
         fm = yaml.safe_load(parts[1])
-        if "license" in fm:
-            assert str(fm["license"]) == "Apache-2.0", f"{skill_name}: license is {fm['license']}, expected Apache-2.0"
+        assert "license" in fm, f"{skill_name}: missing 'license' in frontmatter"
+        assert str(fm["license"]) == "Apache-2.0", (
+            f"{skill_name}: license is {fm['license']}, expected Apache-2.0"
+        )
 
 
 class TestConfigExamples:

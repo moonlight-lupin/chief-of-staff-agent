@@ -141,6 +141,8 @@ def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, st
     Semantics:
       * Default path is the plugin-root ``.env``; ``path`` overrides it (tests).
       * Each recognised line is ``KEY=VALUE``; surrounding whitespace is stripped.
+      * An optional leading ``export `` (shell-style) is stripped before parsing
+        so ``export M365_CLIENT_SECRET=...`` works the same as a bare assignment.
       * Blank lines and lines whose first non-space character is ``#`` are ignored.
       * A single matching pair of surrounding single/double quotes around the
         value is stripped.
@@ -166,6 +168,9 @@ def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, st
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        # Accept shell-style "export KEY=VALUE" (python-dotenv compatible).
+        if line.startswith("export ") or line.startswith("export\t"):
+            line = line[6:].lstrip()
         if "=" not in line:
             continue
         key, value = line.split("=", 1)

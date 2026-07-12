@@ -1,3 +1,15 @@
+---
+name: email-organisation
+description: "Use when inspecting Gmail labels, proposing or saving a label policy, or when the operator addresses their Chief of Staff by name to check email (e.g. 'Ask <name> to check my email')."
+version: 0.1.0
+author: moonlight-lupin
+license: Apache-2.0
+metadata:
+  hermes:
+    tags: [chief-of-staff, email, gmail, labels, organisation]
+    related_skills: [daily-briefing, calendar-manager, meeting-prep]
+---
+
 # Email Organisation
 
 Email organisation onboarding and label policy management.

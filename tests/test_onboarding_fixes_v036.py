@@ -55,6 +55,9 @@ _MANAGED_ENV_KEYS = [
     "COS_TEST_EMPTY",
     "COS_TEST_SHELL",
     "COS_TEST_SPACED",
+    "COS_TEST_EXPORT",
+    "COS_TEST_EXPORT_Q",
+    "COS_TEST_EXPORT_TAB",
 ]
 
 
@@ -232,6 +235,23 @@ class TestDotenvLoader:
         assert "COS TEST SPACED" not in os.environ
         assert applied["COS_TEST_FOO"] == "plain_value"
         assert "COS TEST SPACED" not in applied
+
+    def test_export_prefix_is_accepted(self, tmp_path, monkeypatch):
+        """Shell-style 'export KEY=VALUE' must load (python-dotenv compatible)."""
+        monkeypatch.delenv("COS_TEST_EXPORT", raising=False)
+        monkeypatch.delenv("COS_TEST_EXPORT_Q", raising=False)
+        monkeypatch.delenv("COS_TEST_EXPORT_TAB", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "export COS_TEST_EXPORT=from_export\n"
+            'export COS_TEST_EXPORT_Q="quoted export"\n'
+            "export\tCOS_TEST_EXPORT_TAB=tabbed\n"
+        )
+        applied = config_loader.load_dotenv_file(env_file)
+        assert os.environ["COS_TEST_EXPORT"] == "from_export"
+        assert os.environ["COS_TEST_EXPORT_Q"] == "quoted export"
+        assert os.environ["COS_TEST_EXPORT_TAB"] == "tabbed"
+        assert applied["COS_TEST_EXPORT"] == "from_export"
 
     def test_shell_env_wins_over_dotenv(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COS_TEST_SHELL", "from_shell")

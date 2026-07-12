@@ -47,13 +47,14 @@ def _get_registered_skills() -> list[str]:
         except Exception:
             pass
 
-    # Fallback: default 16 skills
+    # Fallback: default 18 skills (mirrors plugin.yaml skill_profiles.default)
     return [
         "daily-briefing", "deadline-tracker", "note-taker",
         "todo-list", "calendar-manager", "drive-filer",
         "meeting-prep", "weekly-review", "document-preparer",
         "pipeline-manager", "bookkeeper", "deep-research",
-        "entity-research", "travel-itinerary", "backup", "self-sign",
+        "entity-research", "travel-itinerary", "backup",
+        "email-organisation", "self-sign", "esign-connector",
     ]
 
 

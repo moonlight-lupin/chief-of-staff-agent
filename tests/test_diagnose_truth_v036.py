@@ -323,9 +323,11 @@ class TestDemo:
 
         import chief_of_staff
         buf = io.StringIO()
-        with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+        err = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
             rc = chief_of_staff.main(["demo"])
         out = buf.getvalue()
+        err_out = err.getvalue()
 
         assert rc == 0
         # Banner top AND bottom.
@@ -336,20 +338,55 @@ class TestDemo:
         assert "Acme Corp — procurement sync" in out
         assert "Active deals:" in out
 
+        # Zero-config path: no scary config-not-found / run lifecycle noise.
+        assert "config not found" not in err_out.lower()
+        assert "run_started" not in err_out
+        assert "run_completed" not in err_out
+
         # examples/ must be byte-for-byte unchanged (no writes, no .runs).
         assert _hash_dir(examples_dir) == before
         assert not (examples_dir / ".runs").exists()
+
+    def test_demo_cleans_temp_dir(self, monkeypatch, tmp_path):
+        """cmd_demo must not leave /tmp/cos-demo-* dirs behind."""
+        import tempfile
+        import chief_of_staff
+
+        monkeypatch.delenv("CHIEF_OF_STAFF_CONFIG", raising=False)
+        monkeypatch.delenv("CHIEF_OF_STAFF_PROJECT_ROOT", raising=False)
+
+        # Force TemporaryDirectory into a known parent so we can assert cleanup.
+        real_td = tempfile.TemporaryDirectory
+
+        class _TrackedTD(real_td):
+            last_name = None
+
+            def __init__(self, *a, **k):
+                k = dict(k)
+                k.setdefault("dir", str(tmp_path))
+                super().__init__(*a, **k)
+                type(self).last_name = self.name
+
+        monkeypatch.setattr(tempfile, "TemporaryDirectory", _TrackedTD)
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc = chief_of_staff.main(["demo"])
+        assert rc == 0
+        assert _TrackedTD.last_name is not None
+        assert not Path(_TrackedTD.last_name).exists()
 
     def test_demo_json_format(self, monkeypatch):
         monkeypatch.delenv("CHIEF_OF_STAFF_CONFIG", raising=False)
         monkeypatch.delenv("CHIEF_OF_STAFF_PROJECT_ROOT", raising=False)
         import chief_of_staff
         buf = io.StringIO()
-        with redirect_stdout(buf), redirect_stderr(io.StringIO()):
+        err = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
             rc = chief_of_staff.main(["demo", "--json"])
         out = buf.getvalue()
         assert rc == 0
         assert "DEMO — sample data" in out
+        assert "config not found" not in err.getvalue().lower()
         # The JSON briefing body sits between the banners.
         start = out.index("{")
         end = out.rindex("}") + 1
