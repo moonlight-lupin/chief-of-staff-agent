@@ -14,6 +14,16 @@ It watches, prioritises, prepares, and proposes. **You approve. It executes. Eve
 
 ---
 
+## 🤖 Easiest install: ask your agent
+
+Chief of Staff is built to be agent-operated — every setup step is a CLI with machine-readable output, a readiness go/no-go, and self-diagnosis on failure. So the simplest install is to paste this to your agent (Hermes, OpenClaw, Claude Code, …):
+
+> Clone https://github.com/moonlight-lupin/chief-of-staff-agent.git into my plugins directory and install its requirements. Run `chief_of_staff.py demo` and show me the output. Then bootstrap it for **\<company\>**, jurisdiction **\<SG\>**, operator **\<me@company.com\>**, workspace provider **\<m365 | google_api | composio\>**, assistant name **\<Ada\>**. I'll give you the credentials when you ask — put them in `.env`. Verify with `connect_workspace.py --verify`, run `chief_of_staff.py readiness --summary`, and if anything fails, use `chief_of_staff.py logs diagnose` and fix it. Stop before anything that sends email or modifies my workspace.
+
+Your agent handles the clone, config, verification, and troubleshooting; you supply credentials and approvals. Prefer to drive it yourself? Everything below works by hand too.
+
+---
+
 ## ⚡ See it in 60 seconds
 
 No account, no credentials, no config:
