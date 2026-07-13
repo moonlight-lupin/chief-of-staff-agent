@@ -1,6 +1,6 @@
 ---
 name: daily-briefing
-description: "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, deadlines, pipeline, to-dos, and bookkeeping sources."
+description: "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, deadlines, pipeline, to-dos, and bookkeeping sources. When the user addresses '{assistant_name}' (the CoS assistant name), route all Gmail/Calendar/Drive operations through the company service account configured in company.yaml for {company_name}, NOT the agent's personal email."
 version: 0.1.0
 author: "moonlight-lupin"
 license: Apache-2.0

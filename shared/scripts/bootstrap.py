@@ -429,6 +429,58 @@ def _write_config(preset: Mapping[str, Any]) -> Path:
     return path
 
 
+# Skills whose description field should include the assistant name for routing.
+# The description is the first thing the agent sees in the system prompt's skill
+# list, so embedding the name there ensures the agent routes named requests
+# ("Ask Arthur to check my email") to CoS skills instead of generic handlers.
+ROUTING_SKILLS = [
+    "daily-briefing",
+    "drive-filer",
+    "email-organisation",
+    "calendar-manager",
+    "meeting-prep",
+]
+
+
+def _inject_assistant_name_into_skills(config_path: Path) -> list[str]:
+    """Rewrite the description field of routing skills to include the actual
+    assistant name and company from company.yaml.
+
+    The skill SKILL.md files ship with ``{assistant_name}`` and ``{company_name}``
+    placeholders in their description lines.  This function replaces them with
+    the concrete values from the just-written company.yaml so the agent's
+    skill-list prompt contains the real name.
+
+    Returns a list of human-readable messages about what was patched.
+    """
+    config = _load_yaml(config_path)
+    assistant_name = (
+        config.get("assistant", {}).get("name", "")
+        if isinstance(config.get("assistant"), dict)
+        else ""
+    )
+    company_name = config.get("company", {}).get("name", "") if isinstance(config.get("company"), dict) else ""
+    if not assistant_name or assistant_name == "Chief of Staff":
+        return []  # nothing to inject — still using the default
+
+    skills_dir = PLUGIN_ROOT / "skills"
+    messages: list[str] = []
+    for skill_slug in ROUTING_SKILLS:
+        skill_md = skills_dir / skill_slug / "SKILL.md"
+        if not skill_md.exists():
+            continue
+        text = skill_md.read_text(encoding="utf-8")
+        original = text
+        # Replace placeholders in the description line only
+        text = text.replace("{assistant_name}", assistant_name)
+        if company_name:
+            text = text.replace("{company_name}", company_name)
+        if text != original:
+            skill_md.write_text(text, encoding="utf-8")
+            messages.append(f"Injected '{assistant_name}' into {skill_slug}/SKILL.md")
+    return messages
+
+
 def _project_root(config: Mapping[str, Any], config_path: Path) -> Path:
     raw = config["paths"]["project_root"]
     path = Path(str(raw)).expanduser()
@@ -487,6 +539,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     root = _project_root(config, config_path)
     stores = _init_stores(root)
     wiki = _init_wiki(config, root)
+    skill_injections = _inject_assistant_name_into_skills(config_path)
     final = run_checks(fix=True, config=str(config_path))
     provider = getattr(args, "workspace_provider", None)
     result: dict[str, Any] = {
@@ -500,6 +553,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         "next_steps": _next_steps(provider),
         "identity_notices": identity_notices,
         "assistant_name": getattr(args, "assistant_name", None) or "Chief of Staff",
+        "skill_injections": skill_injections,
     }
     # Only surface provider metadata when a non-default provider is chosen, so a
     # default (google) invocation's JSON/text output stays byte-compatible.

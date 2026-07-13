@@ -95,9 +95,36 @@ class GmailClient(GoogleClient):
         result = self._run("gmail", "modify", id, "--remove-labels", "UNREAD")
         return result if isinstance(result, dict) else {"result": result}
 
-    def get_attachment(self, msg_id: str, attachment_id: str) -> dict[str, Any]:
-        result = self._run("gmail", "attachment", msg_id, attachment_id)
+    def list_attachments(self, msg_id: str) -> list[dict[str, Any]]:
+        """List all attachments in a Gmail message."""
+        result = self._run("gmail", "attachments", msg_id)
+        return result if isinstance(result, list) else []
+
+    def download_attachment(
+        self,
+        msg_id: str,
+        *,
+        filename: str = "",
+        attachment_id: str = "",
+        output_dir: str = "/tmp",
+        output_name: str = "",
+    ) -> dict[str, Any]:
+        """Download a Gmail attachment by filename or attachment ID."""
+        args = ["gmail", "attachment-download", msg_id]
+        if filename:
+            args.extend(["--filename", filename])
+        elif attachment_id:
+            args.extend(["--attachment-id", attachment_id])
+        if output_dir:
+            args.extend(["--output-dir", output_dir])
+        if output_name:
+            args.extend(["--output-name", output_name])
+        result = self._run(*args)
         return result if isinstance(result, dict) else {"result": result}
+
+    def get_attachment(self, msg_id: str, attachment_id: str) -> dict[str, Any]:
+        """Deprecated: use download_attachment instead. Kept for backward compat."""
+        return self.download_attachment(msg_id, attachment_id=attachment_id)
 
 
 class CalendarClient(GoogleClient):

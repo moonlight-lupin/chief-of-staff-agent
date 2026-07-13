@@ -1,6 +1,6 @@
 ---
 name: drive-filer
-description: File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules.
+description: "File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules. When the user addresses '{assistant_name}' (the CoS assistant name) to file or sync documents, use the company service account configured in company.yaml for {company_name} for all Gmail/Drive operations, NOT the agent's personal email."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
@@ -172,7 +172,18 @@ Search queries in these examples use the Google Drive query dialect; the `m365` 
 
 1. Identify the target email by user reference, Gmail search result, or Daily Briefing item.
 2. Confirm which attachment(s) to file if there is more than one.
-3. Download attachments through an approved mail access path (a Gmail/Outlook connector or `workspace_client` mail methods).
+3. Download attachments through the shared `GmailClient`:
+   ```python
+   from google_client import GmailClient
+   gmail = GmailClient(config)
+   # List attachments
+   atts = gmail.list_attachments(msg_id)
+   # Download by filename
+   result = gmail.download_attachment(msg_id, filename="report.pdf", output_dir="/tmp")
+   # Or by attachment ID
+   result = gmail.download_attachment(msg_id, attachment_id="ANGjd...", output_dir="/tmp")
+   ```
+   Or via CLI: `python google_api.py --account phronesis --as <email> gmail attachment-download <msg_id> --filename X.zip --output-dir /tmp`
 4. Build filing context:
    - filename,
    - email subject,
