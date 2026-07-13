@@ -24,6 +24,12 @@ if str(_PARENT) not in sys.path:
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
 from query_compiler import compile_query
+from composio_family import (  # noqa: E402
+    VALID_FAMILIES,
+    MICROSOFT_TOOLKITS as _MICROSOFT_TOOLKITS,
+    _resolve_composio_family,
+    warn_family_toolkit_mismatch,
+)
 
 _SCRIPT_DIR = Path(__file__).resolve().parent.parent  # shared/scripts
 
@@ -69,11 +75,6 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
     },
 }
 
-# Toolkit names that imply the microsoft family when family is not set explicitly.
-_MICROSOFT_TOOLKITS = {"outlook", "one_drive", "onedrive"}
-
-VALID_FAMILIES = ("google", "microsoft")
-
 
 class ComposioToolError(RuntimeError):
     """Raised when Composio reports an unknown/invalid tool slug for an operation.
@@ -95,24 +96,32 @@ class ComposioConnectionError(RuntimeError):
     """
 
 
-def _is_unknown_tool_error(err: Any) -> bool:
-    """True if a Composio error payload/string looks like an unknown-tool error."""
-    text = str(err).lower()
-    needles = (
-        "unknown tool", "no such tool", "invalid tool", "tool not found",
-        "not found", "does not exist", "no tool", "unrecognized tool",
-        "not a valid tool", "invalid tool_slug", "unknown slug",
-    )
-    return any(n in text for n in needles)
-
-
 def _is_connection_error(err: Any) -> bool:
     """True if a Composio error payload/string looks like a no-active-connection
-    error (the toolkit was never connected / the OAuth link is still pending)."""
+    error (the toolkit was never connected / the OAuth link is still pending).
+
+    Checked BEFORE unknown-tool classification so phrases like
+    ``connection not found`` are not swallowed by a bare ``not found`` needle.
+    """
     text = str(err).lower()
     needles = (
         "no active connection", "no connection found", "connection not found",
         "not connected", "establish a connection", "no connected account",
+    )
+    return any(n in text for n in needles)
+
+
+def _is_unknown_tool_error(err: Any) -> bool:
+    """True if a Composio error payload/string looks like an unknown-tool error.
+
+    Needles are tool-oriented only — bare ``not found`` / ``does not exist``
+    would collide with connection and resource-missing messages.
+    """
+    text = str(err).lower()
+    needles = (
+        "unknown tool", "no such tool", "invalid tool", "tool not found",
+        "no tool", "unrecognized tool", "not a valid tool",
+        "invalid tool_slug", "unknown slug",
     )
     return any(n in text for n in needles)
 
@@ -259,6 +268,30 @@ _MS_NORMALIZERS = {
 }
 
 
+def _ms_recipient(address: str) -> dict[str, dict[str, str]]:
+    return {"emailAddress": {"address": address}}
+
+
+def _ms_datetime(value: str, *, is_end: bool = False) -> dict[str, str]:
+    """Convert a date or datetime string to a Graph dateTime object.
+
+    Date-only strings get ``T00:00:00Z`` for starts and ``T23:59:59Z`` for ends
+    so all-day events have a non-zero duration.
+    """
+    if "T" not in value:
+        suffix = "T23:59:59Z" if is_end else "T00:00:00Z"
+    else:
+        suffix = ""
+    return {
+        "dateTime": f"{value}{suffix}" if suffix else value,
+        "timeZone": "UTC",
+    }
+
+
+def _ms_attendee(address: str) -> dict[str, Any]:
+    return {"emailAddress": {"address": address}, "type": "required"}
+
+
 def _get_session_store_path(config: Any) -> Path:
     """Return path to .integrations/composio/session.json under project root."""
     project_root = None
@@ -328,6 +361,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
         # Toolkit family: explicit config wins; else infer from toolkit names.
         self.family = self._resolve_family(workspace)
+        warn_family_toolkit_mismatch(self.family, self.toolkits)
         # Google family keeps the historical provider name ("composio:mcp") so all
         # existing capability lookups, queues and tests stay valid; microsoft gets
         # a distinct provider name with its own capability entry.
@@ -350,26 +384,9 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         self._session_meta = load_session_meta(config)
 
     def _resolve_family(self, workspace: Mapping[str, Any]) -> str:
-        """Resolve the toolkit family. Explicit ``family`` wins; otherwise infer
-        ``microsoft`` from outlook/one_drive toolkit names and warn once."""
-        explicit = workspace.get("family") if isinstance(workspace, Mapping) else None
-        if explicit:
-            fam = str(explicit).strip().lower()
-            if fam in VALID_FAMILIES:
-                return fam
-            warnings.warn(
-                f"integrations.workspace.family={explicit!r} is not one of "
-                f"{VALID_FAMILIES}; defaulting to 'google'"
-            )
-            return "google"
-        if any(str(t).strip().lower() in _MICROSOFT_TOOLKITS for t in self.toolkits):
-            warnings.warn(
-                "integrations.workspace.family not set but toolkits contain "
-                "outlook/one_drive — inferring family='microsoft'. Set family "
-                "explicitly in company.yaml to silence this warning."
-            )
-            return "microsoft"
-        return "google"
+        """Resolve the toolkit family via the shared helper (warns on invalid /
+        inferred family)."""
+        return _resolve_composio_family(workspace, toolkits=self.toolkits)
 
     def _slug_for(self, operation: str) -> str:
         """Return the Composio tool slug for a neutral operation, honouring a
@@ -452,15 +469,21 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             )
             # A wrong/renamed slug (a real risk for the Microsoft slugs) is
             # surfaced with the slug + override path; a missing connection is a
-            # hard blocker surfaced with the connect guidance — neither is
-            # swallowed into an empty read.
-            if _is_unknown_tool_error(err):
-                raise ComposioToolError(_unknown_tool_message(operation, tool_slug, err))
+            # hard blocker surfaced with the connect guidance. Soft failures
+            # (rate limits, auth, malformed payloads) also raise — never
+            # normalize to an empty successful read (that falsely certifies
+            # read_ready). Connection is classified before unknown-tool so
+            # "connection not found" is not mis-tagged as a slug error.
             if _is_connection_error(err):
                 raise ComposioConnectionError(
                     _connection_error_message(operation, tool_slug, err)
                 )
-            return {"error": err, "successful": False}
+            if _is_unknown_tool_error(err):
+                raise ComposioToolError(_unknown_tool_message(operation, tool_slug, err))
+            raise RuntimeError(
+                f"Composio tool execution failed for slug {tool_slug!r} "
+                f"(operation {(operation or '<operation>')!r}): {err}"
+            )
         return result
 
     def _normalize_records(self, operation: str, slug: str, data: Any) -> Any:
@@ -578,9 +601,16 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         args: dict[str, Any] = {"top": max_results}
         try:
             compiled = compile_query(query, "m365")
-        except Exception:
+        except Exception as exc:
             # Untranslatable free-text (compiler raises) -> fall back to a plain
-            # recent-messages listing rather than an opaque failure.
+            # recent-messages listing, but warn so the operator knows the query
+            # was broadened rather than failing silently.
+            warnings.warn(
+                f"m365 mail query compile failed ({exc!r}); broadening to "
+                f"list recent mail (top={max_results})",
+                UserWarning,
+                stacklevel=2,
+            )
             return args
         if isinstance(compiled, Mapping):
             if compiled.get("filter"):
@@ -592,19 +622,20 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return args
 
     @guarded("gmail.draft", target_arg="to", audit_provider="composio",
-             audit_tool="GMAIL_CREATE_EMAIL_DRAFT", audit_operation="gmail.create_draft",
-             tool_slug="GMAIL_CREATE_EMAIL_DRAFT")
+             audit_tool=lambda self: self._slug_for("mail_create_draft"),
+             audit_operation="gmail.create_draft",
+             tool_slug=lambda self: self._slug_for("mail_create_draft"))
     def mail_create_draft(self, to: str, subject: str, body: str,
                           cc: str | None = None) -> dict[str, Any]:
         slug = self._slug_for("mail_create_draft")
         if self.family == "microsoft":
             args: dict[str, Any] = {
                 "subject": subject,
-                "body": body,
-                "to_recipients": [to] if to else [],
+                "body": {"contentType": "HTML", "content": body},
+                "toRecipients": [_ms_recipient(to)] if to else [],
             }
             if cc:
-                args["cc_recipients"] = [cc]
+                args["ccRecipients"] = [_ms_recipient(cc)]
         else:
             args = {"to": to, "subject": subject, "body": body}
             if cc:
@@ -638,7 +669,8 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             return []
 
     @guarded("calendar.create", target_arg="title", audit_provider="composio",
-             audit_tool="GOOGLECALENDAR_CREATE_EVENT", tool_slug="GOOGLECALENDAR_CREATE_EVENT")
+             audit_tool=lambda self: self._slug_for("calendar_create"),
+             tool_slug=lambda self: self._slug_for("calendar_create"))
     def calendar_create(self, title: str, start: str, end: str,
                         attendees: list[str] | None = None,
                         description: str | None = None) -> dict[str, Any]:
@@ -646,13 +678,13 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         if self.family == "microsoft":
             args: dict[str, Any] = {
                 "subject": title,
-                "start_datetime": f"{start}T00:00:00Z" if "T" not in start else start,
-                "end_datetime": f"{end}T23:59:59Z" if "T" not in end else end,
+                "start": _ms_datetime(start),
+                "end": _ms_datetime(end, is_end=True),
             }
             if attendees:
-                args["attendees"] = attendees
+                args["attendees"] = [_ms_attendee(a) for a in attendees]
             if description:
-                args["body"] = description
+                args["body"] = {"contentType": "HTML", "content": description}
         else:
             args = {
                 "summary": title,
@@ -667,10 +699,25 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return data if isinstance(data, dict) else {}
 
     @guarded("calendar.update", target_arg="event_id", audit_provider="composio",
-             audit_tool="GOOGLECALENDAR_UPDATE_EVENT", tool_slug="GOOGLECALENDAR_UPDATE_EVENT")
+             audit_tool=lambda self: self._slug_for("calendar_update"),
+             tool_slug=lambda self: self._slug_for("calendar_update"))
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:
         slug = self._slug_for("calendar_update")
-        args = {"event_id": event_id, **fields}
+        if self.family == "microsoft":
+            args: dict[str, Any] = {"event_id": event_id}
+            for key, value in fields.items():
+                if key == "title":
+                    args["subject"] = value
+                elif key in ("start", "end") and value:
+                    args[key] = _ms_datetime(str(value), is_end=(key == "end"))
+                elif key == "description" and value is not None:
+                    args["body"] = {"contentType": "HTML", "content": str(value)}
+                elif key == "attendees" and isinstance(value, list):
+                    args["attendees"] = [_ms_attendee(str(a)) for a in value]
+                else:
+                    args[key] = value
+        else:
+            args = {"event_id": event_id, **fields}
         data = self._execute_composio_tool(slug, args, operation="calendar_update")
         return data if isinstance(data, dict) else {}
 
@@ -692,23 +739,31 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             return []
 
     @guarded("drive.upload", target_arg="file_path", audit_provider="composio",
-             audit_tool="GOOGLEDRIVE_UPLOAD_FILE", tool_slug="GOOGLEDRIVE_UPLOAD_FILE")
+             audit_tool=lambda self: self._slug_for("files_upload"),
+             tool_slug=lambda self: self._slug_for("files_upload"))
     def files_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
         slug = self._slug_for("files_upload")
-        args: dict[str, Any] = {"file_path": file_path}
-        if parent_id:
-            args["parent_id"] = parent_id
+        if self.family == "microsoft":
+            args = {"file": file_path, "name": Path(file_path).name}
+            if parent_id:
+                args["parentReference"] = {"id": parent_id}
+        else:
+            args = {"file_path": file_path}
+            if parent_id:
+                args["parent_id"] = parent_id
         data = self._execute_composio_tool(slug, args, operation="files_upload")
         return data if isinstance(data, dict) else {}
 
     @guarded("drive.download", target_arg="file_id", audit_provider="composio",
-             audit_tool="GOOGLEDRIVE_DOWNLOAD_FILE", tool_slug="GOOGLEDRIVE_DOWNLOAD_FILE")
+             audit_tool=lambda self: self._slug_for("files_download"),
+             tool_slug=lambda self: self._slug_for("files_download"))
     def files_download(self, file_id: str, output_path: str) -> dict[str, Any]:
         slug = self._slug_for("files_download")
-        data = self._execute_composio_tool(slug, {
-            "file_id": file_id,
-            "output_path": output_path,
-        }, operation="files_download")
+        if self.family == "microsoft":
+            args = {"item_id": file_id, "output_path": output_path}
+        else:
+            args = {"file_id": file_id, "output_path": output_path}
+        data = self._execute_composio_tool(slug, args, operation="files_download")
         return {"path": output_path, **(data if isinstance(data, dict) else {})}
 
     # --- Health ---

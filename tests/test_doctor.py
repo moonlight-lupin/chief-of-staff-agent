@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -15,7 +16,7 @@ SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from doctor import run_checks  # noqa: E402
+from doctor import _check_docuseal, run_checks  # noqa: E402
 
 
 def minimal_config(tmp_path: Path, project_root: Path | None = None) -> Path:
@@ -140,3 +141,109 @@ def test_assistant_name_warns_on_blank(tmp_path):
     report = run_checks(fix=False, config=str(config))
     row = next(r for r in report if r.name == "assistant_name")
     assert row.status == "warn"
+
+
+def test_doctor_refuses_non_https_docuseal_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("unsafe DocuSeal URL must not be opened")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    result = _check_docuseal(
+        False,
+        {"esign": {"provider": "docuseal", "url": "http://docuseal.example.com", "domain": "docuseal.example.com"}},
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "fail"
+    assert "https" in result.detail.lower()
+
+
+def test_doctor_refuses_metadata_ip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("metadata DocuSeal URL must not be opened")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    result = _check_docuseal(
+        False,
+        {"esign": {"provider": "docuseal", "url": "https://169.254.169.254/latest/meta-data"}},
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "fail"
+    assert "metadata" in result.detail.lower() or "link-local" in result.detail.lower()
+
+
+def test_doctor_refuses_loopback_ip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("loopback DocuSeal URL must not be opened")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    result = _check_docuseal(
+        False,
+        {"esign": {"provider": "docuseal", "url": "https://127.0.0.1:3000"}},
+        tmp_path / "company.yaml",
+    )
+    assert result.status == "fail"
+    assert "link-local" in result.detail.lower() or "metadata" in result.detail.lower()
+
+
+def test_doctor_refuses_private_ip(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("private DocuSeal URL must not be opened")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    result = _check_docuseal(
+        False,
+        {"esign": {"provider": "docuseal", "url": "https://10.0.0.1:3000"}},
+        tmp_path / "company.yaml",
+    )
+    assert result.status == "fail"
+    assert "link-local" in result.detail.lower() or "metadata" in result.detail.lower()
+
+
+def test_doctor_probes_https_matching_domain(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+    monkeypatch.delenv("DOCUSEAL_MCP_TOKEN", raising=False)
+    opened: list[urllib.request.Request] = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=0):
+        opened.append(req)
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    result = _check_docuseal(
+        False,
+        {
+            "esign": {
+                "provider": "docuseal",
+                "url": "https://docuseal.example.com",
+                "domain": "docuseal.example.com",
+                "auth_mode": "pro_api_only",
+            }
+        },
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "pass"
+    assert [req.full_url for req in opened] == [
+        "https://docuseal.example.com",
+        "https://docuseal.example.com/api/templates?limit=1",
+    ]
+    assert opened[1].get_header("X-auth-token") == "secret"

@@ -89,6 +89,36 @@ class Config(dict):
 
 
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+_DOTENV_REJECT_KEYS = {
+    "PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+}
+
+
+def _strip_dotenv_inline_comment(value: str) -> str:
+    """Strip unquoted `` # comment`` suffixes from dotenv values."""
+    quote: str | None = None
+    escaped = False
+    for idx, ch in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            continue
+        if ch == "#" and idx > 0 and value[idx - 1].isspace():
+            return value[:idx].rstrip()
+    return value
 
 
 def get_hermes_home() -> Path:
@@ -144,10 +174,12 @@ def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, st
       * An optional leading ``export `` (shell-style) is stripped before parsing
         so ``export M365_CLIENT_SECRET=...`` works the same as a bare assignment.
       * Blank lines and lines whose first non-space character is ``#`` are ignored.
+      * Inline comments after an unquoted value are stripped (``KEY=val # note``).
       * A single matching pair of surrounding single/double quotes around the
         value is stripped.
       * Malformed lines (no ``=``, empty key, or whitespace inside the key) are
-        ignored.
+        ignored. Suspicious process-control keys such as ``PATH`` and
+        ``LD_PRELOAD`` are ignored.
       * A key is set only when it is NOT already present in ``os.environ`` — the
         shell environment always wins.
       * Values are never logged.
@@ -168,16 +200,16 @@ def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, st
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        # Accept shell-style "export KEY=VALUE" (python-dotenv compatible).
+        # Accept shell-style "export KEY=VALUE" without relying on slice offsets.
         if line.startswith("export ") or line.startswith("export\t"):
-            line = line[6:].lstrip()
+            line = line.removeprefix("export").lstrip()
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if not key or any(ch.isspace() for ch in key):
+        if not key or any(ch.isspace() for ch in key) or key in _DOTENV_REJECT_KEYS:
             continue
-        value = value.strip()
+        value = _strip_dotenv_inline_comment(value.strip())
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
         if key not in os.environ:
@@ -409,6 +441,24 @@ def get_project_root(config: Mapping[str, Any] | Config | None) -> Path | None:
     except Exception as exc:
         print(f"Cannot resolve paths.project_root from config: {exc}", file=sys.stderr)
         return None
+
+
+# Default / generic assistant names — operators who keep these do not get
+# name-injection into skill descriptions or the company_context_primer identity
+# prefix. Kept case-insensitive and shared across bootstrap / doctor / hooks.
+_DEFAULT_ASSISTANT_NAMES = frozenset({"chief of staff", "chief-of-staff", "cos"})
+
+
+def is_default_assistant_name(name: Any) -> bool:
+    """Return True when ``name`` is empty or a generic CoS default alias.
+
+    Matches (case-insensitive, stripped): ``chief of staff``, ``chief-of-staff``,
+    ``cos``. Used to skip skill name-injection and primer identity prefixes.
+    """
+    text = str(name or "").strip().lower()
+    if not text:
+        return True
+    return text in _DEFAULT_ASSISTANT_NAMES
 
 
 def _main(argv: list[str] | None = None) -> int:

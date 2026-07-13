@@ -292,6 +292,22 @@ def test_write_smoke_happy_path(monkeypatch):
     assert DESTRUCTIVE not in os.environ
 
 
+def test_legacy_admin_email_still_accepted(monkeypatch):
+    client = FakeClient(
+        supports_map={"mail.draft": True},
+        writes={
+            "mail_create_draft": _ok({"id": "draft-1"}),
+            "mail_trash": _ok({"id": "draft-1"}),
+        },
+    )
+    _patch_client(monkeypatch, client)
+    rep = wv.run_verification({"esign": {"admin_email": "legacy@sign.example"}}, include_writes=True)
+    assert rep["checks"]["mail_draft"]["status"] == "pass"
+    assert client.called("mail_create_draft")[0][1][0] == "legacy@sign.example"
+    assert AUTO not in os.environ
+    assert DESTRUCTIVE not in os.environ
+
+
 def test_write_smoke_restores_preexisting_auto_approve(monkeypatch):
     os.environ[AUTO] = "preset"
     client = FakeClient(

@@ -14,6 +14,8 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -98,7 +100,15 @@ class GmailClient(GoogleClient):
     def list_attachments(self, msg_id: str) -> list[dict[str, Any]]:
         """List all attachments in a Gmail message."""
         result = self._run("gmail", "attachments", msg_id)
-        return result if isinstance(result, list) else []
+        if isinstance(result, list):
+            return result
+        warnings.warn(
+            f"gmail attachments for {msg_id!r} returned unexpected shape "
+            f"{type(result).__name__}; treating as empty list",
+            UserWarning,
+            stacklevel=2,
+        )
+        return []
 
     def download_attachment(
         self,
@@ -106,25 +116,36 @@ class GmailClient(GoogleClient):
         *,
         filename: str = "",
         attachment_id: str = "",
-        output_dir: str = "/tmp",
+        output_dir: str | None = None,
         output_name: str = "",
     ) -> dict[str, Any]:
-        """Download a Gmail attachment by filename or attachment ID."""
+        """Download a Gmail attachment to disk by filename or attachment ID.
+
+        When ``output_dir`` is omitted, writes to a private temp directory
+        created with ``tempfile.mkdtemp()`` (mode ``0o700``), not world-readable
+        ``/tmp``.
+        """
+        if not output_dir:
+            output_dir = tempfile.mkdtemp()
         args = ["gmail", "attachment-download", msg_id]
         if filename:
             args.extend(["--filename", filename])
         elif attachment_id:
             args.extend(["--attachment-id", attachment_id])
-        if output_dir:
-            args.extend(["--output-dir", output_dir])
+        args.extend(["--output-dir", output_dir])
         if output_name:
             args.extend(["--output-name", output_name])
         result = self._run(*args)
         return result if isinstance(result, dict) else {"result": result}
 
     def get_attachment(self, msg_id: str, attachment_id: str) -> dict[str, Any]:
-        """Deprecated: use download_attachment instead. Kept for backward compat."""
-        return self.download_attachment(msg_id, attachment_id=attachment_id)
+        """Fetch attachment metadata/data inline via the legacy ``gmail attachment`` CLI.
+
+        Prefer ``download_attachment`` when you need a file on disk. This method
+        preserves the pre-v0.3.6 in-memory / JSON payload semantics.
+        """
+        result = self._run("gmail", "attachment", msg_id, attachment_id)
+        return result if isinstance(result, dict) else {"result": result}
 
 
 class CalendarClient(GoogleClient):

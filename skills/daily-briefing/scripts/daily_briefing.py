@@ -655,6 +655,15 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
     }
 
 
+def build_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50,
+                   workspace_input: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Public entrypoint for structured briefing construction (used by ``cmd_demo``)."""
+    return _build_structured_briefing(
+        config_path, since_hours=since_hours, limit=limit,
+        workspace_input=workspace_input,
+    )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Generate structured briefing and output in requested format."""
     workspace_input = None

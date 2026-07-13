@@ -170,6 +170,15 @@ class TestEsignWriteThrough:
         data = _load(path)
         assert data["esign"]["provider_email"] == "alicia@acme.com"
 
+    def test_legacy_admin_email_normalized_to_provider_email(self, tmp_config_dir, tmp_path):
+        path = bootstrap._write_config({
+            "paths": {"project_root": str(tmp_path / "proj")},
+            "esign": {"admin_email": "legacy@acme.com"},
+        })
+        data = _load(path)
+        assert data["esign"]["provider_email"] == "legacy@acme.com"
+        assert data["esign"]["admin_email"] == "legacy@acme.com"
+
 
 # ── Bootstrap _main messaging ───────────────────────────────────────────
 

@@ -16,6 +16,7 @@ company:
   # Used to seed wiki taxonomy, template suggestions, and role-based signing hints.
   business_type: "professional_services"
   # Optional identifiers included in generated documents where relevant.
+  # bootstrap clears these to placeholders — do not leave sample legal IDs in live installs.
   registration_number: "202400001A"
   tax_registration_number: "M90000001A"
   address: "1 Raffles Place, #20-01, Singapore 048616"
@@ -41,6 +42,8 @@ assistant:
 # Google Workspace integration.
 # Actual Google auth is performed by the external google-workspace skill via google_api.py.
 # Chief-of-Staff calls google_api.py through GoogleWorkspaceClient with --account and --as flags.
+# bootstrap.py overwrites domain / account_alias / service_account_path / drive_root_folder_id
+# / delegate_email from --operator so these Acme sample values never survive a real install.
 google:
   # Service account JSON with domain-wide delegation.
   # Checked by Chief-of-Staff doctor/setup. Must exist for service-account auth.
@@ -68,6 +71,7 @@ paths:
   staging: "~/.hermes/projects/acme-advisory/staging/"
 
 # Delivery preferences for scheduled agent outputs.
+# bootstrap clears home_chat_id so the sample chat id never leaks.
 delivery:
   channel: telegram            # telegram | whatsapp | email | slack | cli
   home_chat_id: "123456789"    # platform-specific; omit if using CLI only
@@ -240,6 +244,7 @@ esign:
   domain: "sign.yourdomain.com"
   # Email of the provider's signer (the company's representative).
   provider_email: "you@yourdomain.com"
+  # Legacy configs may use admin_email; provider_email is preferred.
   # Role labels used in DocuSeal submissions.
   provider_role: "Service Provider"
   client_role: "Client"

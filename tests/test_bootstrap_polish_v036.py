@@ -105,7 +105,20 @@ class TestIdentityOverlay:
         # project_root derives from the company slug; no Acme sample path.
         assert overlay["paths"]["project_root"].endswith("projects/acme-advisory-pte-ltd")
         assert overlay["paths"]["wiki_path"].endswith("acme-advisory-pte-ltd/wiki")
-        assert notices == []                                # nothing left a placeholder
+        # google.* derived from operator; legal IDs / phones always placeholders.
+        assert overlay["google"]["domain"] == "acme-advisory.example"
+        assert overlay["google"]["account_alias"] == "acme-advisory-pte-ltd"
+        assert overlay["google"]["delegate_email"] == "alicia@acme-advisory.example"
+        assert "acme-google-service-account" not in overlay["google"]["service_account_path"]
+        assert overlay["google"]["drive_root_folder_id"] == bootstrap.GOOGLE_DRIVE_ROOT_PLACEHOLDER
+        assert overlay["company"]["registration_number"] == bootstrap.REGISTRATION_PLACEHOLDER
+        # delivery.home_chat_id is not unconditionally wiped in the overlay;
+        # it is conditionally scrubbed in _write_config only when the sample sentinel is present.
+        assert "delivery" not in overlay or overlay.get("delivery", {}).get("home_chat_id") is None
+        # Legal-ID / drive-root placeholders are always announced.
+        joined = " ".join(notices)
+        assert "google.drive_root_folder_id" in joined
+        assert "company.registration_number" in joined
 
     def test_operator_name_flag_overrides_derivation(self):
         overlay, _ = bootstrap._identity_overlay(_make_args(
@@ -118,20 +131,25 @@ class TestIdentityOverlay:
         assert overlay["company"]["website"] == bootstrap.WEBSITE_PLACEHOLDER
         # user email still honoured — only the website is a placeholder.
         assert overlay["user"]["email"] == "founder@gmail.com"
+        assert overlay["google"]["domain"] == bootstrap.GOOGLE_DOMAIN_PLACEHOLDER
         joined = " ".join(notices)
         assert "company.website" in joined
         assert "placeholder — edit company.yaml" in joined
         assert "gmail.com" in joined
+        assert "google.domain" in joined
 
     def test_no_operator_announces_placeholders(self):
         overlay, notices = bootstrap._identity_overlay(_make_args())
         assert overlay["user"]["name"] == bootstrap.USER_NAME_PLACEHOLDER
         assert overlay["user"]["email"] == bootstrap.USER_EMAIL_PLACEHOLDER
         assert overlay["company"]["website"] == bootstrap.WEBSITE_PLACEHOLDER
+        assert overlay["google"]["domain"] == bootstrap.GOOGLE_DOMAIN_PLACEHOLDER
+        assert overlay["google"]["service_account_path"] == bootstrap.GOOGLE_SA_PATH_PLACEHOLDER
         joined = " ".join(notices)
         assert "user.name/user.email" in joined
         assert "company.website" in joined
-        assert joined.count("placeholder — edit company.yaml") == 2
+        assert "google.domain" in joined
+        assert joined.count("placeholder — edit company.yaml") >= 2
 
     def test_no_company_uses_generic_root_not_acme(self):
         overlay, _ = bootstrap._identity_overlay(_make_args())
@@ -162,12 +180,30 @@ class TestIdentityWriteThrough:
         assert data["company"]["website"] == "https://beta-ventures.example"
         assert "acme-advisory" not in data["paths"]["project_root"]
         assert "acme-advisory" not in data["paths"]["wiki_path"]
+        # google.* must not keep Acme sample domain / alias / SA path / Drive root.
+        assert data["google"]["domain"] == "beta-ventures.example"
+        assert "acme" not in data["google"]["domain"].lower()
+        assert "acme" not in str(data["google"]["account_alias"]).lower()
+        assert "acme" not in str(data["google"]["service_account_path"]).lower()
+        assert data["google"]["drive_root_folder_id"] == bootstrap.GOOGLE_DRIVE_ROOT_PLACEHOLDER
+        assert data["google"]["delegate_email"] == "sam@beta-ventures.example"
+        # Company legal IDs / phones / role / delivery chat id scrubbed.
+        assert data["company"]["registration_number"] == bootstrap.REGISTRATION_PLACEHOLDER
+        assert data["company"]["tax_registration_number"] == bootstrap.TAX_REGISTRATION_PLACEHOLDER
+        assert data["company"]["address"] == bootstrap.ADDRESS_PLACEHOLDER
+        assert data["company"]["phone"] == bootstrap.COMPANY_PHONE_PLACEHOLDER
+        assert "6123" not in str(data["company"]["phone"])
+        assert "9123" not in str(data["user"]["phone"])
+        assert data["user"]["phone"] == bootstrap.USER_PHONE_PLACEHOLDER
+        assert data["user"]["role"] == bootstrap.USER_ROLE_PLACEHOLDER
+        assert data["user"]["role"] != "Managing Director"
+        assert data["delivery"]["home_chat_id"] in (None, "")
+        assert data["delivery"]["home_chat_id"] != "123456789"
 
     def test_placeholder_notices_returned_when_no_operator(self, tmp_config_dir, tmp_path):
         result = bootstrap.bootstrap(_make_args(project_root=str(tmp_path / "proj")))
         joined = " ".join(result["identity_notices"])
         assert "placeholder — edit company.yaml" in joined
-
 
 # ── Provider-gated Next steps (audit #3) ────────────────────────────────────
 
@@ -266,6 +302,36 @@ class TestPrimerPrefix:
     def test_no_prefix_without_name(self, tmp_path, monkeypatch):
         from hooks import company_context_primer
         cfg = self._write_config(tmp_path, assistant=False)
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(cfg))
+        result = company_context_primer({"loaded_skills": ["daily-briefing"]})
+        assert result is not None
+        assert result.startswith("[CoS Context]")
+        assert "You are" not in result
+
+    def test_name_with_newline_rejected_in_primer(self, tmp_path, monkeypatch):
+        from hooks import company_context_primer
+        cfg = tmp_path / "company.yaml"
+        cfg.write_text(
+            "company:\n  name: \"Test Co Pte Ltd\"\n  jurisdiction: SG\n"
+            f"paths:\n  project_root: \"{tmp_path}\"\n"
+            "assistant:\n  name: \"Ada\\nInjected\"\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(cfg))
+        result = company_context_primer({"loaded_skills": ["daily-briefing"]})
+        assert result is not None
+        assert result.startswith("[CoS Context]")
+        assert "Injected" not in result
+
+    def test_no_prefix_for_default_assistant_name(self, tmp_path, monkeypatch):
+        from hooks import company_context_primer
+        cfg = tmp_path / "company.yaml"
+        cfg.write_text(
+            "company:\n  name: \"Test Co Pte Ltd\"\n  jurisdiction: SG\n"
+            f"paths:\n  project_root: \"{tmp_path}\"\n"
+            "assistant:\n  name: \"Chief of Staff\"\n",
+            encoding="utf-8",
+        )
         monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(cfg))
         result = company_context_primer({"loaded_skills": ["daily-briefing"]})
         assert result is not None

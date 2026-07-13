@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.3.7 internal beta  
+> **Status:** v0.3.8 internal beta  
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -21,6 +21,8 @@ Chief of Staff is built to be agent-operated — every setup step is a CLI with 
 > Clone https://github.com/moonlight-lupin/chief-of-staff-agent.git into my plugins directory and install its requirements. Run `chief_of_staff.py demo` and show me the output. Then bootstrap it for **\<company\>**, jurisdiction **\<SG\>**, operator **\<me@company.com\>**, workspace provider **\<m365 | google_api | composio\>**, assistant name **\<Ada\>**. I'll give you the credentials when you ask — put them in `.env`. Verify with `connect_workspace.py --verify`, run `chief_of_staff.py readiness --summary`, and if anything fails, use `chief_of_staff.py logs diagnose` and fix it. Stop before anything that sends email or modifies my workspace.
 
 Your agent handles the clone, config, verification, and troubleshooting; you supply credentials and approvals. Prefer to drive it yourself? Everything below works by hand too.
+
+Never paste API keys or secrets directly into chat logs.
 
 ---
 

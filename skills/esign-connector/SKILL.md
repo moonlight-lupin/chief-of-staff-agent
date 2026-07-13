@@ -42,6 +42,7 @@ esign:
   url: "https://sign.yourdomain.com"
   domain: "sign.yourdomain.com"
   provider_email: "you@yourdomain.com"
+  # Legacy configs may use admin_email; provider_email is preferred.
   provider_role: "Service Provider"
   client_role: "Client"
   auth_mode: auto        # auto | mcp_and_api | pro_api_only

@@ -1,6 +1,6 @@
 ---
 name: drive-filer
-description: "File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules. When the user addresses '{assistant_name}' (the CoS assistant name) to file or sync documents, use the company workspace account configured in company.yaml for {company_name} for all Gmail/Drive operations, NOT the agent's personal email."
+description: "File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules. When the user addresses 'Chief of Staff' (the CoS assistant name) to file or sync documents, use the company workspace account configured in company.yaml for your organization for all Gmail/Drive operations, NOT the agent's personal email."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
@@ -176,13 +176,18 @@ Search queries in these examples use the Google Drive query dialect; the `m365` 
    - **Native connector tools** in your agent environment (Gmail or Microsoft 365/Outlook connectors) — fetch the attachment directly.
    - **`google_api` provider**: the shared `GmailClient`:
      ```python
+     import tempfile
      from google_client import GmailClient
      gmail = GmailClient(config)
-     atts = gmail.list_attachments(msg_id)                                          # list
-     result = gmail.download_attachment(msg_id, filename="report.pdf", output_dir="/tmp")   # by filename
-     result = gmail.download_attachment(msg_id, attachment_id="ANGjd...", output_dir="/tmp")  # by id
+     atts = gmail.list_attachments(msg_id)                                   # list
+     # Inline JSON payload (legacy CLI: gmail attachment) — no disk write
+     payload = gmail.get_attachment(msg_id, attachment_id="ANGjd...")
+     # Download to a private temp dir (default) or an explicit staging path
+     staging = tempfile.mkdtemp()  # mode 0o700; never use world-readable /tmp
+     result = gmail.download_attachment(msg_id, filename="report.pdf")       # auto staging dir
+     result = gmail.download_attachment(msg_id, attachment_id="ANGjd...", output_dir=staging)
      ```
-     Or via CLI: `python google_api.py --account <account> --as <email> gmail attachment-download <msg_id> --filename X.zip --output-dir /tmp`
+     Or via CLI: `python google_api.py --account <account> --as <email> gmail attachment-download <msg_id> --filename X.zip --output-dir "$(mktemp -d)"`
    - **Other providers (m365, composio)**: attachment download is not yet exposed on the neutral `workspace_client` surface — use the native connector path above, or fetch via the provider's own tooling.
 4. Build filing context:
    - filename,

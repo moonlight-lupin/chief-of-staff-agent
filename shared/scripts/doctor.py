@@ -13,12 +13,14 @@ import argparse
 import importlib.util
 import json
 import os
+import ipaddress
 import py_compile
 import shutil
 import subprocess
 import sys
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -28,7 +30,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for doctor.py") from exc
 
-from config_loader import get_project_root, load_config, load_dotenv_file
+from config_loader import get_project_root, is_default_assistant_name, load_config, load_dotenv_file
 from state_store import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -54,22 +56,34 @@ def _get_registered_skills() -> list[str]:
         profile_data = profiles.get(profile, {})
         skills = profile_data.get("registered", [])
         if skills:
-            return skills
+            return _filter_configured_skills(skills)
         # Fallback to default profile
         default_data = profiles.get("default", {})
-        return default_data.get("registered", [
+        return _filter_configured_skills(default_data.get("registered", [
+            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
+            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
+            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
+            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
+        ]))
+    except Exception:
+        return _filter_configured_skills([
             "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
             "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
             "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
             "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
         ])
-    except Exception:
-        return [
-            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
-            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
-            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
-        ]
+
+
+def _filter_configured_skills(skills: list[str]) -> list[str]:
+    """Hide externally-backed skills when their required config is absent."""
+    if "esign-connector" not in skills:
+        return skills
+    config_path = _config_path(os.getenv("CHIEF_OF_STAFF_CONFIG"))
+    data, _ = _parse_config(config_path)
+    esign = data.get("esign") if isinstance(data, dict) and isinstance(data.get("esign"), dict) else {}
+    if str(esign.get("url") or "").strip():
+        return skills
+    return [skill for skill in skills if skill != "esign-connector"]
 
 
 def get_all_skills():
@@ -342,7 +356,7 @@ def _check_assistant_name(fix: bool, data: dict[str, Any] | None, config_path: P
             "Set assistant.name (e.g. via bootstrap --assistant-name Ada).",
         )
 
-    if name.lower() in {"chief of staff", "chief-of-staff", "cos"}:
+    if is_default_assistant_name(name):
         return CheckResult(
             "assistant_name",
             "pass",
@@ -381,6 +395,9 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     auth_mode = str(esign.get("auth_mode", "auto")).lower()
     if not url or not (api_key or mcp_token):
         return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
+    unsafe_reason = _unsafe_docuseal_url_reason(url, esign)
+    if unsafe_reason:
+        return CheckResult("docuseal", "fail", unsafe_reason)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "chief-of-staff-doctor/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:  # nosec - configured URL health check
@@ -419,6 +436,50 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
         return CheckResult("docuseal", "warn", f"DocuSeal HTTP {exc.code}: {exc.reason}")
     except Exception as exc:
         return CheckResult("docuseal", "warn", f"DocuSeal ping failed: {exc}")
+
+
+def _unsafe_docuseal_url_reason(url: str, esign: Mapping[str, Any]) -> str | None:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https":
+        return "refusing DocuSeal probe: esign.url must use https"
+    if not parsed.hostname:
+        return "refusing DocuSeal probe: esign.url host is missing"
+
+    host = parsed.hostname.strip().lower().rstrip(".")
+    domain = _normalise_docuseal_domain(str(esign.get("domain") or ""))
+    if domain and host != domain:
+        return "refusing DocuSeal probe: esign.url host must match esign.domain"
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address and _is_blocked_docuseal_address(address):
+        return "refusing DocuSeal probe: esign.url points to link-local or metadata address"
+    return None
+
+
+def _is_blocked_docuseal_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Block metadata, link-local, loopback, and private/reserved ranges."""
+    metadata_v4 = ipaddress.ip_address("169.254.169.254")
+    metadata_v6 = ipaddress.ip_address("fd00:ec2::254")
+    if address in {metadata_v4, metadata_v6}:
+        return True
+    if address.is_link_local:
+        return True
+    if address.is_loopback:
+        return True
+    if address.is_private:
+        return True
+    return False
+
+
+def _normalise_docuseal_domain(raw: str) -> str:
+    value = raw.strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    return (parsed.hostname or value).strip().lower().rstrip(".")
 
 
 def _check_cron(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:

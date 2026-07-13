@@ -391,6 +391,47 @@ def test_no_secret_leak_at_every_level(project, level):
     assert "clean string" in flat
 
 
+def test_provider_error_detail_is_classified_and_truncated():
+    raw = (
+        "ClientAuthenticationError: AADSTS7000215: Invalid client secret is provided. "
+        "Trace ID: 11111111-2222-3333-4444-555555555555 "
+        "error={'error': 'invalid_client', 'error_description': 'client_secret=super-secret "
+        "access_token=ya29.this-token-should-not-leak'} "
+        + "x" * 500
+    )
+
+    msg = rl.sanitize_provider_error_detail(raw)
+
+    assert "provider authentication failed" in msg
+    assert "credentials rejected" in msg
+    assert "aadsts7000215" in msg
+    assert "invalid_client" in msg
+    assert "super-secret" not in msg
+    assert "ya29.this-token-should-not-leak" not in msg
+    assert len(msg) < 240
+
+
+def test_runtime_log_scrubs_google_and_msal_error_shapes(project):
+    run_id = rl.init_run("cmd", _config(project), level="debug")
+    rl.log_event(
+        "auth_failed",
+        level="error",
+        component="workspace",
+        message=(
+            "google.auth RefreshError access_token=ya29.aVerySecretGoogleToken "
+            "\"refresh_token\": \"1//refreshSecret\" "
+            "Trace ID: 11111111-2222-3333-4444-555555555555"
+        ),
+    )
+    rl.finish_run("failed")
+
+    raw = (project / ".runs" / run_id / "events.jsonl").read_text()
+    assert "ya29.aVerySecretGoogleToken" not in raw
+    assert "refreshSecret" not in raw
+    assert "11111111-2222-3333-4444-555555555555" not in raw
+    assert rl.REDACTED in raw
+
+
 def test_reserved_keys_not_overridable(project):
     run_id = rl.init_run("real-command", _config(project))
     rl.log_event("evt", level="info", component="c", run_id="FAKE", command="FAKE", timestamp="FAKE")

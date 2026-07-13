@@ -36,7 +36,7 @@ class TestPluginStructure:
         with open(PLUGIN_ROOT / "plugin.yaml") as f:
             data = yaml.safe_load(f)
         assert data["name"] == "chief-of-staff"
-        assert data["version"] == "0.3.7"
+        assert data["version"] == "0.3.8"
         assert data["license"] == "Apache-2.0"
         assert data["requires_skills"] == []
         assert "google-workspace" in data.get("optional_skills", [])
@@ -143,6 +143,21 @@ class TestSkillFrontmatter:
         assert "license" in fm, f"{skill_name}: missing 'license' in frontmatter"
         assert str(fm["license"]) == "Apache-2.0", (
             f"{skill_name}: license is {fm['license']}, expected Apache-2.0"
+        )
+
+    def test_shipped_skills_have_no_unreplaced_placeholders(self):
+        """Default installs must not expose literal {assistant_name}/{company_name}."""
+        import re
+
+        pat = re.compile(r"\{(?:assistant_name|company_name)\}")
+        offenders = []
+        for skill_md in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
+            matches = pat.findall(skill_md.read_text(encoding="utf-8"))
+            if matches:
+                offenders.append(f"{skill_md.parent.name}: {sorted(set(matches))}")
+        assert not offenders, (
+            "unreplaced placeholders in shipped SKILL.md files:\n  "
+            + "\n  ".join(offenders)
         )
 
 

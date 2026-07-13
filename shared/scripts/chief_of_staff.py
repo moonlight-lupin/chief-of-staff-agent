@@ -35,7 +35,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.7"
+VERSION = "0.3.8"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1514,6 +1514,11 @@ def _emit_readiness_row_failures(rows: Sequence[Mapping[str, Any]]) -> None:
     runtime_log is absent or no run is active)."""
     if runtime_log is None:
         return
+    sanitize_detail = getattr(
+        runtime_log,
+        "sanitize_provider_error_detail",
+        lambda value: str(value or "").replace("\n", " ").replace("\r", " ")[:240],
+    )
     for row in rows:
         if not isinstance(row, Mapping) or str(row.get("status")) != _R_FAIL:
             continue
@@ -1523,10 +1528,14 @@ def _emit_readiness_row_failures(rows: Sequence[Mapping[str, Any]]) -> None:
                 level="error",
                 component="readiness",
                 row=str(row.get("key", "")),
-                message=str(row.get("detail", "") or ""),
+                message=sanitize_detail(row.get("detail", "") or ""),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(
+                f"readiness_row_failed emission error for "
+                f"{row.get('key', '')!r}: {exc}",
+                file=sys.stderr,
+            )
 
 
 def render_readiness_summary(payload: Mapping[str, Any]) -> str:
@@ -1710,7 +1719,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
             return 1
 
         try:
-            briefing = daily_briefing_mod._build_structured_briefing(
+            briefing = daily_briefing_mod.build_briefing(
                 str(cfg_path), workspace_input=workspace_input
             )
             rendered = briefing_renderer.render(briefing, fmt)

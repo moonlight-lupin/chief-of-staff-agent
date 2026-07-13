@@ -191,7 +191,7 @@ python shared/scripts/connect_workspace.py --provider composio --connect outlook
 python shared/scripts/connect_workspace.py --provider composio --connect one_drive
 ```
 
-4. Verify / readiness (this is the acceptance test on a live connection):
+4. Verify / readiness (read verification on a live connection):
 ```bash
 python shared/scripts/connect_workspace.py --status          # shows family + per-toolkit state
 python shared/scripts/connect_workspace.py --verify          # per-capability go/no-go
@@ -205,7 +205,11 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > live Outlook + OneDrive connection (`read_ready: true`). The write slugs
 > (`OUTLOOK_CREATE_DRAFT`, `OUTLOOK_CALENDAR_CREATE_EVENT`,
 > `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE`, …) are catalog/schema-verified but not yet
-> executed — run `--verify-writes` on your own connection before relying on them.
+> execution-verified. They are intentionally advertised as unsupported in the
+> Composio Microsoft capability matrix until a live write/cleanup probe exists.
+> `--verify-writes` is not an acceptance test for Composio Microsoft writes today:
+> the verifier skips write probes when cleanup capabilities such as mail/file
+> trash are unavailable.
 > Every slug remains **config-overridable** via `integrations.workspace.tool_slugs`
 > in case Composio renames one: a wrong slug reports *itself*, naming the failing
 > slug and the exact `tool_slugs` key to fix. Gmail-syntax queries are translated
@@ -343,6 +347,10 @@ Notes:
   creates a draft, applies a tag, and uploads a tiny temp file, then trashes the
   draft and the file. `mail_send` and `calendar_write` are always reported
   `not_tested`.
+- **Composio Microsoft write verification is unsupported today.** Its write
+  slugs are catalog/schema-verified but not execution-verified, and the verifier
+  skips write checks when cleanup capabilities are missing. Do not treat
+  `--verify-writes` as Microsoft Composio write acceptance.
 - **Writes are only attempted when they can be cleaned up.** `mail_draft` (and
   the tag write that tags it) is skipped as `not_tested` unless the provider
   supports `mail.trash`; `files_write` is skipped unless it supports
@@ -436,6 +444,9 @@ password required.
        prefer: auto
        page_indexing: zero_based
    ```
+
+   Migration note: older configs with `esign.admin_email` still work, but rename
+   it to `esign.provider_email` when you next edit `company.yaml`.
 
 5. Verify:
    ```bash
@@ -538,6 +549,9 @@ Skills call `get_workspace_client(config)` → get the right backend automatical
 - Supports Calendar and Drive actions.
 - Recommended provider for document handoff workflows (upload + draft email).
 - Best for: managed-auth workflows that need Gmail drafts.
+- For the Microsoft Composio family, Outlook/OneDrive reads are
+  execution-verified, but write capabilities are catalog/schema-verified only
+  and currently reported unsupported.
 
 **Microsoft 365 (Graph):**
 - Outlook mail search/draft/send/archive/trash, categories (tags), calendar, and OneDrive files.
@@ -560,4 +574,3 @@ If you previously used `provider: composio, mode: sdk`:
    ```
 4. Run: `python connect_workspace.py --provider composio --connections`
 5. Remove `composio-core` from your pip dependencies (no longer needed)
-

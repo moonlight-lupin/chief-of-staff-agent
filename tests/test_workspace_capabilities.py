@@ -30,6 +30,21 @@ class TestCapabilities:
         assert caps["gmail.send"] is False
         assert caps["drive.search"] is True
 
+    def test_composio_microsoft_writes_disabled_until_execution_verified(self):
+        from workspace_capabilities import get_capabilities, get_unsupported_reason
+        caps = get_capabilities("composio_microsoft:mcp")
+        assert caps["mail.search"] is True
+        assert caps["calendar.list"] is True
+        assert caps["files.search"] is True
+        for action in (
+            "mail.draft", "gmail.draft", "calendar.create", "calendar.update",
+            "files.upload", "drive.upload", "files.download", "drive.download",
+        ):
+            assert caps[action] is False
+            assert "catalog-verified but not execution-verified" in get_unsupported_reason(
+                "composio_microsoft:mcp", action
+            )
+
     def test_supports(self):
         from workspace_capabilities import supports
         assert supports("google_api", "gmail.send") is True

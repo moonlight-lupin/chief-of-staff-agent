@@ -76,3 +76,24 @@ class TestConfigLoading:
     def test_source_path_tracked(self, sample_company_yaml):
         config = load_config(str(sample_company_yaml))
         assert config.source_path == Path(sample_company_yaml)
+
+class TestIsDefaultAssistantName:
+    def test_matches_default_aliases(self):
+        from config_loader import is_default_assistant_name
+        assert is_default_assistant_name("Chief of Staff") is True
+        assert is_default_assistant_name("chief of staff") is True
+        assert is_default_assistant_name("CHIEF-OF-STAFF") is True
+        assert is_default_assistant_name("CoS") is True
+        assert is_default_assistant_name("  cos  ") is True
+
+    def test_empty_is_default(self):
+        from config_loader import is_default_assistant_name
+        assert is_default_assistant_name("") is True
+        assert is_default_assistant_name(None) is True
+        assert is_default_assistant_name("   ") is True
+
+    def test_distinctive_name_is_not_default(self):
+        from config_loader import is_default_assistant_name
+        assert is_default_assistant_name("Ada") is False
+        assert is_default_assistant_name("Jarvis") is False
+        assert is_default_assistant_name("Chief of Staff Extra") is False

@@ -228,9 +228,9 @@ def guarded(
     *,
     target_arg: str,
     audit_provider: str,
-    audit_tool: str = "google_api.py",
+    audit_tool: str | Callable[[Any], str] = "google_api.py",
     audit_operation: str | None = None,
-    tool_slug: str = "",
+    tool_slug: str | Callable[[Any], str] = "",
     block_error: str = "cancelled by guardrail",
 ) -> Callable[[Callable[..., Any]], Callable[..., dict[str, Any]]]:
     """Factor out the confirm_action -> run -> audit -> ActionResult boilerplate.
@@ -257,7 +257,9 @@ def guarded(
         audit_provider: provider string written to the audit log
             (e.g. "google_api", "composio").
         audit_tool: tool identifier for the audit log
-            ("google_api.py" or a Composio tool slug).
+            ("google_api.py" or a Composio tool slug). May be a callable that
+            receives ``self`` for providers whose tool slug depends on runtime
+            config, such as Composio toolkit family.
         audit_operation: audit operation string; defaults to ``action_id``.
         tool_slug: ActionResult.tool_slug value (Composio slug or "").
         block_error: error message returned when the guardrail blocks the action.
@@ -279,6 +281,8 @@ def guarded(
             target = str(bound.arguments.get(target_arg, "") or "")
             provider = getattr(self, "provider_name", None) or getattr(self, "_provider_name", "unknown")
             operation = audit_operation or action_id
+            resolved_audit_tool = audit_tool(self) if callable(audit_tool) else audit_tool
+            resolved_tool_slug = tool_slug(self) if callable(tool_slug) else tool_slug
 
             if not confirm_action(action_id, **{target_arg: target}):
                 # confirm_action already emitted guardrail_blocked with the
@@ -288,27 +292,27 @@ def guarded(
                 # covers the operational events.
                 return ActionResult(
                     success=False, action=action_id, provider=provider,
-                    tool_slug=tool_slug, target=target, error=block_error,
+                    tool_slug=str(resolved_tool_slug), target=target, error=block_error,
                 ).to_dict()
 
             try:
                 data = fn(self, *args, **kwargs)
             except Exception as exc:  # noqa: BLE001 — provider errors become ActionResult
                 audit_workspace_action(
-                    self.config, audit_provider, operation, audit_tool,
+                    self.config, audit_provider, operation, str(resolved_audit_tool),
                     target=target, status="failed",
                 )
                 return ActionResult(
                     success=False, action=action_id, provider=provider,
-                    tool_slug=tool_slug, target=target, error=str(exc), audited=True,
+                    tool_slug=str(resolved_tool_slug), target=target, error=str(exc), audited=True,
                 ).to_dict()
 
             audit_workspace_action(
-                self.config, audit_provider, operation, audit_tool, target=target,
+                self.config, audit_provider, operation, str(resolved_audit_tool), target=target,
             )
             return ActionResult(
                 success=True, action=action_id, provider=provider,
-                tool_slug=tool_slug, target=target,
+                tool_slug=str(resolved_tool_slug), target=target,
                 data=data if isinstance(data, dict) else {}, audited=True,
             ).to_dict()
 

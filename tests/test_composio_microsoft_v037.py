@@ -23,7 +23,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -159,8 +159,43 @@ class TestFamilySelection:
             client = ComposioMCPWorkspaceClient(_google_workspace(family="office365"))
         assert client.family == "google"
 
+    def test_family_toolkit_mismatch_microsoft_with_gmail_warns(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        cfg = _ms_workspace()
+        cfg["integrations"]["workspace"]["toolkits"] = ["gmail", "googlecalendar"]
+        with pytest.warns(UserWarning, match="family='microsoft'.*gmail"):
+            client = ComposioMCPWorkspaceClient(cfg)
+        assert client.family == "microsoft"
 
-# ── google-family byte-for-byte compatibility ────────────────────────────────
+    def test_family_toolkit_mismatch_google_with_outlook_warns(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        cfg = _google_workspace(family="google")
+        cfg["integrations"]["workspace"]["toolkits"] = ["outlook", "one_drive"]
+        with pytest.warns(UserWarning, match="family='google'.*outlook"):
+            client = ComposioMCPWorkspaceClient(cfg)
+        assert client.family == "google"
+
+
+class TestResolveComposioFamilyShared:
+    def test_explicit_and_inferred(self):
+        from composio_family import _resolve_composio_family
+        assert _resolve_composio_family({"family": "microsoft"}) == "microsoft"
+        assert _resolve_composio_family({"family": "google"}) == "google"
+        assert _resolve_composio_family({}) == "google"
+        with pytest.warns(UserWarning, match="inferring family='microsoft'"):
+            assert _resolve_composio_family(
+                {"toolkits": ["outlook", "one_drive"]}
+            ) == "microsoft"
+        with pytest.warns(UserWarning, match="not one of"):
+            assert _resolve_composio_family({"family": "office365"}) == "google"
+
+    def test_connect_workspace_uses_shared_helper(self):
+        import connect_workspace as cw
+        from composio_family import _resolve_composio_family
+        ws = {"family": "microsoft", "toolkits": ["outlook"]}
+        assert cw._composio_family(ws) == _resolve_composio_family(ws, warn=False)
+        with pytest.warns(UserWarning, match="inferring"):
+            assert cw._composio_family({"toolkits": ["one_drive"]}) == "microsoft"
 
 class TestGoogleFamilyByteForByte:
     def _client(self, family=None):
@@ -247,6 +282,113 @@ class TestMicrosoftMailSearch:
         assert args["folder"] == "sentitems"
         assert args["search"] == "subject:contract"
 
+    def test_compile_failure_warns_and_broadens_to_top_only(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"value": []})
+        client._mcp_client = mock
+        with patch(
+            "providers.composio_mcp_workspace.compile_query",
+            side_effect=ValueError("untranslatable"),
+        ):
+            with pytest.warns(UserWarning, match="broadening to list recent mail"):
+                client.mail_search("in:anywhere", max_results=3)
+        args = mock.call_tool.call_args[0][1]["tools"][0]["arguments"]
+        assert args == {"top": 3}
+
+
+class TestMicrosoftWriteArgs:
+    def _client(self):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        return ComposioMCPWorkspaceClient(_ms_workspace())
+
+    def test_microsoft_draft_args_match_graph_schema(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "draft"})
+        client._mcp_client = mock
+
+        res = client.mail_create_draft("a@b.com", "S", "B", cc="c@d.com")
+
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "OUTLOOK_CREATE_DRAFT"
+        args = call["arguments"]
+        assert args["toRecipients"] == [{"emailAddress": {"address": "a@b.com"}}]
+        assert args["ccRecipients"] == [{"emailAddress": {"address": "c@d.com"}}]
+        assert args["body"] == {"contentType": "HTML", "content": "B"}
+        assert "to_recipients" not in args
+        assert res["tool_slug"] == "OUTLOOK_CREATE_DRAFT"
+
+    def test_microsoft_calendar_create_args_match_graph_schema(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "evt"})
+        client._mcp_client = mock
+
+        client.calendar_create(
+            "Sync", "2026-07-10", "2026-07-10",
+            attendees=["a@x.com"], description="Discuss",
+        )
+
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "OUTLOOK_CALENDAR_CREATE_EVENT"
+        args = call["arguments"]
+        assert args["subject"] == "Sync"
+        assert args["start"] == {"dateTime": "2026-07-10T00:00:00Z", "timeZone": "UTC"}
+        assert args["end"] == {"dateTime": "2026-07-10T23:59:59Z", "timeZone": "UTC"}
+        assert args["attendees"] == [{"emailAddress": {"address": "a@x.com"}, "type": "required"}]
+        assert args["body"] == {"contentType": "HTML", "content": "Discuss"}
+        assert "start_datetime" not in args
+
+    def test_microsoft_calendar_update_args_match_graph_schema(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "evt"})
+        client._mcp_client = mock
+
+        client.calendar_update("e1", title="New", start="2026-07-10", description="Updated")
+
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "OUTLOOK_UPDATE_CALENDAR_EVENT"
+        args = call["arguments"]
+        assert args["event_id"] == "e1"
+        assert args["subject"] == "New"
+        assert args["start"] == {"dateTime": "2026-07-10T00:00:00Z", "timeZone": "UTC"}
+        assert args["body"] == {"contentType": "HTML", "content": "Updated"}
+        assert "title" not in args
+
+    def test_microsoft_files_upload_args_are_not_google_shape(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "file"})
+        client._mcp_client = mock
+
+        client.files_upload("/tmp/x.pdf", parent_id="folder")
+
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE"
+        args = call["arguments"]
+        assert args == {
+            "file": "/tmp/x.pdf",
+            "name": "x.pdf",
+            "parentReference": {"id": "folder"},
+        }
+        assert "file_path" not in args
+        assert "parent_id" not in args
+
+    def test_audit_slug_matches_family_microsoft(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "draft"})
+        client._mcp_client = mock
+
+        with patch("workspace_audit.audit_workspace_action") as audit:
+            res = client.mail_create_draft("a@b.com", "S", "B")
+
+        assert res["success"] is True
+        assert res["tool_slug"] == "OUTLOOK_CREATE_DRAFT"
+        assert audit.call_args[0][3] == "OUTLOOK_CREATE_DRAFT"
+
 
 class TestUnknownToolError:
     def test_read_warns_with_slug_and_override_path(self, mcp_key, tmp_project):
@@ -275,16 +417,65 @@ class TestUnknownToolError:
         assert "tool_slugs" in res["error"]
 
     def test_non_unknown_error_is_not_enriched(self, mcp_key, tmp_project):
-        # A generic tool error is NOT treated as unknown-tool: read returns [] with
-        # no raise/enrichment (byte-compatible with prior swallow behaviour).
+        # Soft failures (rate limits, etc.) must warn — never silent [] — but
+        # must NOT be enriched with the unknown-tool / tool_slugs override path.
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
         mock.call_tool.return_value = _err("rate limited, try again")
         client._mcp_client = mock
-        # No warning expected (data returns an error dict, normalized to []).
-        result = client.mail_search("is:unread")
+        with pytest.warns(UserWarning) as record:
+            result = client.mail_search("is:unread")
         assert result == []
+        text = " ".join(str(w.message) for w in record)
+        assert "rate limited" in text.lower()
+        assert "tool_slugs" not in text
+
+    def test_rate_limit_error_emits_warning(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = _err("rate limited, try again later")
+        client._mcp_client = mock
+        with pytest.warns(UserWarning, match="rate limited"):
+            assert client.calendar_list("2026-07-01", "2026-07-02") == []
+
+
+class TestErrorClassifierOrdering:
+    """P0-2: connection check before unknown-tool; no bare 'not found' needle."""
+
+    def test_connection_not_found_classified_as_connection_error(self):
+        from providers.composio_mcp_workspace import (
+            _is_connection_error, _is_unknown_tool_error,
+        )
+        err = "connection not found for toolkit outlook"
+        assert _is_connection_error(err) is True
+        assert _is_unknown_tool_error(err) is False
+
+    def test_message_not_found_not_classified_as_unknown_tool(self):
+        from providers.composio_mcp_workspace import _is_unknown_tool_error
+        assert _is_unknown_tool_error("Message not found") is False
+
+    def test_user_not_found_not_classified_as_unknown_tool(self):
+        from providers.composio_mcp_workspace import _is_unknown_tool_error
+        assert _is_unknown_tool_error("User not found") is False
+
+    def test_tool_not_found_still_unknown_tool(self):
+        from providers.composio_mcp_workspace import _is_unknown_tool_error
+        assert _is_unknown_tool_error("Tool not found: OUTLOOK_QUERY_EMAILS") is True
+
+    def test_connection_not_found_raises_connection_error(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioConnectionError,
+        )
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = _err("connection not found for toolkit outlook")
+        client._mcp_client = mock
+        with pytest.raises(ComposioConnectionError):
+            client._execute_composio_tool(
+                "OUTLOOK_QUERY_EMAILS", {"top": 1}, operation="mail_search"
+            )
 
 
 class TestNoActiveConnection:
@@ -425,11 +616,14 @@ class TestCapabilities:
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
-        assert caps["mail.draft"] is True
+        assert caps["mail.draft"] is False
         assert caps["calendar.list"] is True
-        assert caps["files.upload"] is True
+        assert caps["calendar.create"] is False
+        assert caps["calendar.update"] is False
+        assert caps["files.upload"] is False
+        assert caps["files.download"] is False
         # legacy aliases resolve too
-        assert caps["gmail.draft"] is True
+        assert caps["gmail.draft"] is False
 
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
@@ -490,6 +684,35 @@ class TestConnectFlow:
         assert rc == 0
         assert "composio_microsoft:mcp" in out
         assert "mail.send" in out and "intentionally disabled" in out
+
+    def test_test_help_lists_microsoft_toolkits(self):
+        import connect_workspace as cw
+        help_text = cw.build_parser().format_help()
+        assert "outlook" in help_text
+        assert "one_drive" in help_text
+
+    def test_debug_tool_accepts_microsoft_toolkits(self):
+        import io
+        from contextlib import redirect_stdout
+        import connect_workspace as cw
+
+        for tk in ("outlook", "one_drive", "onedrive", "outlook_calendar"):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cw.cmd_composio_debug_tool(_ms_workspace(), tk)
+            assert rc == 1
+            assert "Unknown toolkit" not in buf.getvalue()
+
+    def test_test_command_accepts_outlook_calendar_alias(self, monkeypatch):
+        import connect_workspace as cw
+        mock_client = MagicMock()
+        mock_client.calendar_list.return_value = [{"id": "event-1"}]
+
+        monkeypatch.setattr("workspace_client.get_workspace_client", lambda config: mock_client)
+        rc = cw.cmd_composio_test(_ms_workspace(), "outlook_calendar")
+
+        assert rc == 0
+        mock_client.calendar_list.assert_called_once()
 
 
 # ── bootstrap --composio-family microsoft ────────────────────────────────────
@@ -590,3 +813,26 @@ class TestVerifySmoke:
         assert report["read_ready"] is True
         # mail_tags_list is OPTIONAL: unsupported doesn't block read_ready.
         assert report["checks"]["mail_tags_list"]["status"] == "fail"
+
+    def test_soft_error_fails_verification(self, monkeypatch, mcp_key, tmp_project):
+        """successful: False must not certify read_ready (P0-1 regression)."""
+        import warnings
+
+        import workspace_verify
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = _err("rate limited, try again")
+        client._mcp_client = mock
+
+        monkeypatch.setattr(
+            workspace_verify, "get_workspace_client", lambda cfg: client
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            report = workspace_verify.run_verification(
+                _ms_workspace(), include_writes=False
+            )
+        assert report["read_ready"] is False
+        assert report["checks"]["mail_read"]["status"] == "fail"

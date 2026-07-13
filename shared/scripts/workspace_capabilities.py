@@ -89,14 +89,12 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
-    # reports provider_name "composio_microsoft:mcp". The SUPPORTED set mirrors the
-    # Google-family Composio provider exactly because the same eight neutral
-    # operations have Composio Microsoft slugs (FAMILY_SLUGS["microsoft"]); every
-    # operation WITHOUT a slug is honestly False (mail.send is intentionally
-    # disabled; archive/trash/tags/cancel are not exposed via Composio).
+    # reports provider_name "composio_microsoft:mcp". Reads are execution-verified.
+    # Write slugs are catalog-verified but not execution-verified, so write
+    # capabilities stay False until a live write/cleanup probe proves them safe.
     "composio_microsoft": {
         "mail.search": True,
-        "mail.draft": True,
+        "mail.draft": False,
         "mail.send": False,
         "mail.archive": False,
         "mail.trash": False,
@@ -104,17 +102,19 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.tag": False,
         "mail.create_tag": False,
         "calendar.list": True,
-        "calendar.create": True,
-        "calendar.update": True,
+        "calendar.create": False,
+        "calendar.update": False,
         "calendar.cancel": False,
         "files.search": True,
-        "files.upload": True,
-        "files.download": True,
+        "files.upload": False,
+        "files.download": False,
         "files.trash": False,
     },
+    # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
+    # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
     "composio_microsoft:mcp": {
         "mail.search": True,
-        "mail.draft": True,
+        "mail.draft": False,
         "mail.send": False,
         "mail.archive": False,
         "mail.trash": False,
@@ -122,12 +122,12 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.tag": False,
         "mail.create_tag": False,
         "calendar.list": True,
-        "calendar.create": True,
-        "calendar.update": True,
+        "calendar.create": False,
+        "calendar.update": False,
         "calendar.cancel": False,
         "files.search": True,
-        "files.upload": True,
-        "files.download": True,
+        "files.upload": False,
+        "files.download": False,
         "files.trash": False,
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
@@ -201,6 +201,22 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("composio_microsoft:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio_microsoft", "mail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio_microsoft:mcp", "mail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio_microsoft", "gmail.draft"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "gmail.draft"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "mail.draft"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "mail.draft"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "calendar.create"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "calendar.create"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "calendar.update"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "calendar.update"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "drive.upload"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "drive.upload"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "drive.download"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "drive.download"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "files.upload"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "files.upload"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft", "files.download"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
+    ("composio_microsoft:mcp", "files.download"): "Composio Microsoft write slugs are catalog-verified but not execution-verified",
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "

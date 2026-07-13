@@ -25,6 +25,8 @@ _SHARED_SCRIPTS = _PLUGIN_ROOT / "shared" / "scripts"
 if str(_SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SHARED_SCRIPTS))
 
+from config_loader import is_default_assistant_name  # noqa: E402
+
 
 def _load_company_yaml() -> Optional[dict]:
     """Load company.yaml from default or env-var path."""
@@ -73,6 +75,20 @@ def _cos_skills_loaded(context: dict) -> bool:
         "chief-of-staff:todo-list", "chief-of-staff:calendar-manager",
     }
     return any(s in cos_skills for s in loaded)
+
+
+_CONTEXT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._&'()+,/-]{0,63}$")
+
+
+def _safe_context_name(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text or len(text) > 64:
+        return None
+    if "\n" in text or "\r" in text or '"' in text:
+        return None
+    if not _CONTEXT_NAME_RE.fullmatch(text):
+        return None
+    return text
 
 
 # ── 1. Company Context Primer (pre_llm_call) ────────────────────────────────
@@ -153,7 +169,8 @@ def company_context_primer(context: dict) -> Optional[str]:
         # an identity line so the agent answers as the named Chief of Staff.
         assistant = config.get("assistant", {})
         aname = assistant.get("name") if isinstance(assistant, dict) else None
-        if aname:
+        aname = _safe_context_name(aname)
+        if aname and not is_default_assistant_name(aname):
             strip = f"You are {aname}, the operator's Chief of Staff. {strip}"
         return strip
     return None

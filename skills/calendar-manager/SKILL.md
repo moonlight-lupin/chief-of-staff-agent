@@ -1,6 +1,6 @@
 ---
 name: calendar-manager
-description: "Calendar visibility and safe Google Calendar operations for the Chief of Staff plugin, including proactive pre-meeting prep reminders via one-shot Hermes cron jobs. When the user addresses '{assistant_name}' (the CoS assistant name) for calendar operations, use the company workspace account configured in company.yaml for {company_name}, NOT the agent's personal email."
+description: "Calendar visibility and safe Google Calendar operations for the Chief of Staff plugin, including proactive pre-meeting prep reminders via one-shot Hermes cron jobs. When the user addresses 'Chief of Staff' (the CoS assistant name) for calendar operations, use the company workspace account configured in company.yaml for your organization, NOT the agent's personal email."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0

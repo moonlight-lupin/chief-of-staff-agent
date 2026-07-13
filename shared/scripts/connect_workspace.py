@@ -23,26 +23,12 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-
-_MICROSOFT_TOOLKITS = {"outlook", "one_drive", "onedrive"}
+from composio_family import _resolve_composio_family  # noqa: E402
 
 
 def _composio_family(workspace: Mapping[str, Any]) -> str:
-    """Resolve the Composio toolkit family from config: explicit ``family`` wins,
-    else infer ``microsoft`` from outlook/one_drive toolkit names (mirrors
-    ComposioMCPWorkspaceClient._resolve_family)."""
-    if not isinstance(workspace, Mapping):
-        return "google"
-    explicit = workspace.get("family")
-    if explicit:
-        fam = str(explicit).strip().lower()
-        return fam if fam in ("google", "microsoft") else "google"
-    toolkits = workspace.get("toolkits", [])
-    if isinstance(toolkits, list) and any(
-        str(t).strip().lower() in _MICROSOFT_TOOLKITS for t in toolkits
-    ):
-        return "microsoft"
-    return "google"
+    """Resolve the Composio toolkit family from config (shared helper)."""
+    return _resolve_composio_family(workspace)
 
 
 def _composio_connect_toolkits(family: str) -> list[str]:
@@ -62,7 +48,12 @@ def _read_yaml_config(path: str) -> dict[str, Any]:
         return {}
 
 
-def _load_config(config_path: str | None) -> dict[str, Any]:
+def _debug_env_enabled() -> bool:
+    """Return true when connect_workspace debug logging is explicitly enabled."""
+    return os.getenv("CHIEF_OF_STAFF_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_config(config_path: str | None, verbose: bool = False) -> dict[str, Any]:
     """Resolve the workspace config through the standard discovery chain.
 
     Priority: explicit ``--config`` > ``CHIEF_OF_STAFF_CONFIG`` > plugin-root
@@ -71,7 +62,8 @@ def _load_config(config_path: str | None) -> dict[str, Any]:
     when neither ``--config`` nor ``CHIEF_OF_STAFF_CONFIG`` is supplied (the
     documented commands omit both). Also auto-loads the plugin-root ``.env`` so
     documented secrets are visible. When falling back to a discovered config
-    (i.e. no explicit ``--config``), the resolved path is logged to stderr.
+    (i.e. no explicit ``--config``), the resolved path is logged only when
+    ``verbose`` or ``CHIEF_OF_STAFF_DEBUG`` is enabled.
     """
     # Auto-load plugin-root .env (shell env always wins; values never logged).
     _default_config_path = None
@@ -101,7 +93,8 @@ def _load_config(config_path: str | None) -> dict[str, Any]:
             discovered = Path(env_path)
 
     if discovered is not None:
-        print(f"connect_workspace: loaded config from {discovered}", file=sys.stderr)
+        if verbose or _debug_env_enabled():
+            print(f"connect_workspace: loaded config from {discovered}", file=sys.stderr)
         return _read_yaml_config(str(discovered))
     return {}
 
@@ -417,7 +410,7 @@ def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
             for e in results[:3]:
                 subject = e.get("subject", e.get("Subject", "?"))[:60]
                 print(f"   {subject}")
-        elif toolkit in ("googlecalendar", "calendar"):
+        elif toolkit in ("googlecalendar", "calendar", "outlook_calendar"):
             from datetime import date, timedelta
             start = date.today().isoformat()
             end = (date.today() + timedelta(days=7)).isoformat()
@@ -626,11 +619,34 @@ def cmd_composio_debug_tool(config: dict[str, Any], toolkit: str) -> int:
             "time_max": "2026-12-31T23:59:59Z",
             "max_results": 2,
         })],
+        "calendar": [("GOOGLECALENDAR_FIND_EVENT", {
+            "time_min": "2026-01-01T00:00:00Z",
+            "time_max": "2026-12-31T23:59:59Z",
+            "max_results": 2,
+        })],
         "googledrive": [("GOOGLEDRIVE_FIND_FILE", {"query": "", "max_results": 3})],
+        "outlook": [
+            ("OUTLOOK_QUERY_EMAILS", {"top": 2}),
+            ("OUTLOOK_GET_CALENDAR_VIEW", {
+                "start_datetime": "2026-01-01T00:00:00Z",
+                "end_datetime": "2026-12-31T23:59:59Z",
+                "top": 2,
+            }),
+        ],
+        "outlook_calendar": [("OUTLOOK_GET_CALENDAR_VIEW", {
+            "start_datetime": "2026-01-01T00:00:00Z",
+            "end_datetime": "2026-12-31T23:59:59Z",
+            "top": 2,
+        })],
+        "one_drive": [("ONE_DRIVE_SEARCH_ITEMS", {"q": "", "top": 3})],
+        "onedrive": [("ONE_DRIVE_SEARCH_ITEMS", {"q": "", "top": 3})],
     }
 
     if toolkit not in tool_map:
-        print(f"❌ Unknown toolkit: {toolkit}. Use: gmail, googlecalendar, googledrive")
+        print(
+            f"❌ Unknown toolkit: {toolkit}. Use: gmail, googlecalendar, googledrive, "
+            "outlook, outlook_calendar, one_drive"
+        )
         return 1
 
     try:
@@ -787,6 +803,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Workspace provider onboarding and status"
     )
     parser.add_argument("--config", help="Path to company.yaml")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print diagnostic details such as discovered config path")
     parser.add_argument("--status", action="store_true", help="Print current provider status")
     parser.add_argument("--verify", action="store_true",
                         help="Run per-capability read verification of the workspace provider")
@@ -814,7 +832,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tools", action="store_true",
                         help="List available MCP tools")
     parser.add_argument("--test", metavar="TOOLKIT",
-                        help="Run a live test against a toolkit (gmail, googlecalendar, googledrive)")
+                        help="Run a live test against a toolkit (gmail, googlecalendar, "
+                             "googledrive, outlook, one_drive)")
     parser.add_argument("--debug-tool", metavar="TOOLKIT",
                         help="Debug: test all MCP meta-tools for a toolkit with full output")
     parser.add_argument("--capabilities", action="store_true",
@@ -826,7 +845,7 @@ def _main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    config = _load_config(args.config)
+    config = _load_config(args.config, verbose=args.verbose)
 
     if args.verify or args.verify_writes:
         # --provider overrides the configured workspace provider for this run.

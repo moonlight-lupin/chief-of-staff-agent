@@ -90,9 +90,13 @@ from workspace_client import get_workspace_client
 
 try:  # Structured operational logging (safe no-op with no active run).
     from runtime_log import log_event as _log_event
+    from runtime_log import sanitize_provider_error_detail as _sanitize_provider_error_detail
 except Exception:  # pragma: no cover - runtime_log always ships alongside this
     def _log_event(*_args: Any, **_kwargs: Any) -> None:  # type: ignore
         return None
+    def _sanitize_provider_error_detail(value: Any, limit: int = 240) -> str:  # type: ignore
+        text = str(value or "").replace("\n", " ").replace("\r", " ")
+        return text if len(text) <= limit else text[: limit - 3] + "..."
 
 # Exact, ordered public contract — other modules code against this list.
 CHECK_NAMES = [
@@ -188,6 +192,8 @@ def _self_address(config: Any) -> str:
         esign = config.get("esign") or {}
         if isinstance(esign, Mapping) and esign.get("provider_email"):
             return str(esign["provider_email"])
+        if isinstance(esign, Mapping) and esign.get("admin_email"):
+            return str(esign["admin_email"])
     return "operator@example.com"
 
 
@@ -371,9 +377,9 @@ def _emit_check_failures(provider: Any, checks: Mapping[str, dict[str, str]]) ->
     observed error counters and the log_analyser matchers).
 
     ``runtime_log.log_event`` redacts every value and silently no-ops when no
-    run is active, so this is safe for standalone/console use. The check ``detail``
-    (e.g. an msal credential error) is carried verbatim in ``message`` so the
-    analyser can classify it.
+    run is active, so this is safe for standalone/console use. Provider failure
+    details are classified/truncated before logging so raw auth blobs are not
+    written to support bundles.
     """
     for name, check in checks.items():
         if not isinstance(check, Mapping):
@@ -386,7 +392,7 @@ def _emit_check_failures(provider: Any, checks: Mapping[str, dict[str, str]]) ->
             component="workspace_verify",
             check=str(name),
             provider=str(provider),
-            message=str(check.get("detail", "") or ""),
+            message=_sanitize_provider_error_detail(check.get("detail", "") or ""),
         )
 
 

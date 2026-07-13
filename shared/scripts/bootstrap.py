@@ -22,6 +22,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for bootstrap.py") from exc
 
+from config_loader import is_default_assistant_name
 from doctor import run_checks
 from state_store import EMPTY_TEMPLATES
 
@@ -83,10 +84,23 @@ def _merge_preset(args: argparse.Namespace) -> dict[str, Any]:
 # --company / --operator / --operator-name and OVERRIDE the sample values. Any
 # field we cannot derive is written as an explicit placeholder and announced.
 
-FREEMAIL_DOMAINS = {"gmail.com", "outlook.com", "yahoo.com", "hotmail.com"}
+FREEMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "outlook.com", "yahoo.com", "hotmail.com",
+    "live.com", "icloud.com", "proton.me", "protonmail.com", "aol.com",
+}
 USER_NAME_PLACEHOLDER = "<operator-name>"
 USER_EMAIL_PLACEHOLDER = "<operator-email>"
+USER_ROLE_PLACEHOLDER = "<operator-role>"
+USER_PHONE_PLACEHOLDER = "<operator-phone>"
 WEBSITE_PLACEHOLDER = "<company-website>"
+REGISTRATION_PLACEHOLDER = "<registration-number>"
+TAX_REGISTRATION_PLACEHOLDER = "<tax-registration-number>"
+ADDRESS_PLACEHOLDER = "<company-address>"
+COMPANY_PHONE_PLACEHOLDER = "<company-phone>"
+GOOGLE_DOMAIN_PLACEHOLDER = "<workspace-domain>"
+GOOGLE_ALIAS_PLACEHOLDER = "<account-alias>"
+GOOGLE_SA_PATH_PLACEHOLDER = "~/.hermes/secrets/<account>-google-service-account.json"
+GOOGLE_DRIVE_ROOT_PLACEHOLDER = "<drive-root-folder-id>"
 
 
 def _slugify_company(name: str) -> str:
@@ -113,7 +127,7 @@ def _placeholder_notice(field: str, reason: str) -> str:
 def _identity_overlay(
     args: argparse.Namespace,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Derive company/user/paths identity from the flags and return
+    """Derive company/user/paths/google identity from the flags and return
     ``(overlay, notices)``. The overlay is deep-merged over the example so the
     canned Acme values never survive. ``notices`` announces any placeholder."""
     from config_loader import get_default_project_root
@@ -122,15 +136,17 @@ def _identity_overlay(
     notices: list[str] = []
     company: dict[str, Any] = {}
     user: dict[str, Any] = {}
+    google: dict[str, Any] = {}
 
     # paths.project_root: explicit flag > company slug > generic default.
     # wiki_path/staging follow the root so they never keep the Acme sample path.
     explicit_root = getattr(args, "project_root", None)
     company_name = getattr(args, "company", None)
+    company_slug = _slugify_company(company_name) if company_name else ""
     if explicit_root:
         root = str(Path(explicit_root).expanduser())
-    elif company_name and _slugify_company(company_name):
-        root = str(get_default_project_root(_slugify_company(company_name)))
+    elif company_slug:
+        root = str(get_default_project_root(company_slug))
     else:
         root = str(get_default_project_root("chief-of-staff"))
     overlay["paths"] = {
@@ -142,6 +158,7 @@ def _identity_overlay(
     # user block + company.website from --operator (and optional --operator-name).
     operator = getattr(args, "operator", None)
     operator_name = getattr(args, "operator_name", None)
+    domain = ""
     if operator:
         user["email"] = operator
         user["name"] = operator_name if operator_name else _name_from_email(operator)
@@ -155,17 +172,80 @@ def _identity_overlay(
                 else "operator email had no domain"
             )
             notices.append(_placeholder_notice("company.website", reason))
+        google["delegate_email"] = operator
     else:
         user["name"] = USER_NAME_PLACEHOLDER
         user["email"] = USER_EMAIL_PLACEHOLDER
         company["website"] = WEBSITE_PLACEHOLDER
+        google["delegate_email"] = USER_EMAIL_PLACEHOLDER
         notices.append(_placeholder_notice("user.name/user.email", "no --operator given"))
         notices.append(_placeholder_notice("company.website", "no --operator given"))
 
-    if company:
-        overlay["company"] = company
-    if user:
-        overlay["user"] = user
+    # Always scrub Acme legal IDs / phones / role — none of these are derivable
+    # from bootstrap flags, so leave explicit placeholders rather than leaking
+    # sample PII into a fresh install. Only overwrite if the current value is
+    # still the Acme sample or empty — preserve operator-edited values on re-bootstrap.
+    _ACME_SENTINELS = {"acme", "acme-advisory", "123456789", "acme-advisory.example"}
+    def _is_sample(value: Any) -> bool:
+        s = str(value or "").strip().lower()
+        return not s or s in _ACME_SENTINELS or "acme" in s
+
+    if _is_sample(company.get("registration_number")):
+        company["registration_number"] = REGISTRATION_PLACEHOLDER
+    if _is_sample(company.get("tax_registration_number")):
+        company["tax_registration_number"] = TAX_REGISTRATION_PLACEHOLDER
+    if _is_sample(company.get("address")):
+        company["address"] = ADDRESS_PLACEHOLDER
+    if _is_sample(company.get("phone")):
+        company["phone"] = COMPANY_PHONE_PLACEHOLDER
+    if _is_sample(user.get("phone")):
+        user["phone"] = USER_PHONE_PLACEHOLDER
+    if _is_sample(user.get("role")) or user.get("role") == "Managing Director":
+        user["role"] = USER_ROLE_PLACEHOLDER
+    notices.append(_placeholder_notice(
+        "company.registration_number/tax_registration_number/address/phone",
+        "not derived from flags — edit company.yaml",
+    ))
+    notices.append(_placeholder_notice(
+        "user.phone/user.role", "not derived from flags — edit company.yaml",
+    ))
+
+    # Google Workspace identity: derive domain/alias/SA path from operator when
+    # possible; always placeholder the Drive root (cannot be inferred).
+    usable_domain = domain if domain and domain not in FREEMAIL_DOMAINS else ""
+    if usable_domain:
+        google["domain"] = usable_domain
+        alias = company_slug or usable_domain.split(".", 1)[0]
+        google["account_alias"] = alias
+        google["service_account_path"] = (
+            f"~/.hermes/secrets/{alias}-google-service-account.json"
+        )
+    else:
+        google["domain"] = GOOGLE_DOMAIN_PLACEHOLDER
+        google["account_alias"] = company_slug or GOOGLE_ALIAS_PLACEHOLDER
+        if company_slug:
+            google["service_account_path"] = (
+                f"~/.hermes/secrets/{company_slug}-google-service-account.json"
+            )
+        else:
+            google["service_account_path"] = GOOGLE_SA_PATH_PLACEHOLDER
+        notices.append(_placeholder_notice(
+            "google.domain",
+            "freemail/no --operator — set your Workspace domain",
+        ))
+    google["drive_root_folder_id"] = GOOGLE_DRIVE_ROOT_PLACEHOLDER
+    notices.append(_placeholder_notice(
+        "google.drive_root_folder_id", "set your Drive root folder id",
+    ))
+
+    # delivery.home_chat_id: do not unconditionally wipe — preserve real values.
+    # The Acme sample sentinel (123456789) is scrubbed in _write_config only
+    # when the current value matches the known sample.
+    # (No overlay needed here — _deep_update would overwrite unconditionally.)
+
+    overlay["company"] = company
+    overlay["user"] = user
+    overlay["google"] = google
     return overlay, notices
 
 
@@ -426,6 +506,16 @@ def _write_config(preset: Mapping[str, Any]) -> Path:
     google = data.setdefault("google", {})
     paths = data.setdefault("paths", {})
     delivery = data.setdefault("delivery", {})
+    # Scrub the Acme sample home_chat_id sentinel only; preserve real values.
+    if str(delivery.get("home_chat_id", "")).strip() == "123456789":
+        delivery["home_chat_id"] = None
+    esign = data.get("esign")
+    if (
+        isinstance(esign, dict)
+        and esign.get("admin_email")
+        and (not esign.get("provider_email") or esign.get("provider_email") == "you@yourdomain.com")
+    ):
+        esign["provider_email"] = esign["admin_email"]
     company.setdefault("name", "Acme Pte Ltd")
     company.setdefault("jurisdiction", "SG")
     company.setdefault("incorporation_date", "2026-01-01")
@@ -467,23 +557,88 @@ ROUTING_SKILLS = [
 # a temporary copy — the test suite must NEVER write to the real SKILL.md files
 # (see tests/conftest.py, which patches this for every test).
 SKILLS_DIR = PLUGIN_ROOT / "skills"
+RENDERED_SKILLS_DIR = PLUGIN_ROOT / "skills.local"
+
+_ROUTING_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._&'()+,/-]{0,63}$")
+
+ROUTING_DESCRIPTION_TEMPLATES = {
+    "daily-briefing": (
+        "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, "
+        "deadlines, pipeline, to-dos, and bookkeeping sources. When the user addresses '{assistant_name}' "
+        "(the CoS assistant name), route all mail/calendar/file operations through the company workspace "
+        "account configured in company.yaml for {company_name}, NOT the agent's personal email."
+    ),
+    "drive-filer": (
+        "File email attachments and local project documents into the Chief of Staff Google Drive structure "
+        "using configurable drive-map.yaml rules. When the user addresses '{assistant_name}' (the CoS "
+        "assistant name) to file or sync documents, use the company workspace account configured in "
+        "company.yaml for {company_name} for all Gmail/Drive operations, NOT the agent's personal email."
+    ),
+    "email-organisation": (
+        "Use when inspecting Gmail labels, proposing or saving a label policy, or when the operator "
+        "addresses '{assistant_name}' (the CoS assistant name) to check email (e.g. 'Ask {assistant_name} "
+        "to check my email'). Route all Gmail operations through the company workspace account configured "
+        "in company.yaml for {company_name}, NOT the agent's personal email."
+    ),
+    "calendar-manager": (
+        "Calendar visibility and safe Google Calendar operations for the Chief of Staff plugin, including "
+        "proactive pre-meeting prep reminders via one-shot Hermes cron jobs. When the user addresses "
+        "'{assistant_name}' (the CoS assistant name) for calendar operations, use the company workspace "
+        "account configured in company.yaml for {company_name}, NOT the agent's personal email."
+    ),
+    "meeting-prep": (
+        "Use when preparing a concise pre-meeting intelligence brief from calendar event metadata, recent "
+        "Gmail threads, wiki notes, pipeline status, invoices, to-dos, and entity research. When the user "
+        "addresses '{assistant_name}' (the CoS assistant name) for meeting prep, use the company workspace "
+        "account configured in company.yaml for {company_name}, NOT the agent's personal email."
+    ),
+}
 
 
-def _inject_assistant_name_into_skills(config_path: Path, skills_dir: Path | None = None) -> list[str]:
-    """Render the description field of routing skills with the actual assistant
-    name and company from company.yaml — idempotently.
+def _validate_routing_name(value: str, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise BootstrapError(f"{field} cannot be blank")
+    if len(text) > 64:
+        raise BootstrapError(f"{field} must be 64 characters or fewer")
+    if "\n" in text or "\r" in text or '"' in text:
+        raise BootstrapError(f"{field} may not contain newlines or double quotes")
+    if not _ROUTING_NAME_RE.fullmatch(text):
+        raise BootstrapError(
+            f"{field} may contain only letters, numbers, spaces, and . _ & ' ( ) + , / -"
+        )
+    return text
 
-    The shipped SKILL.md files carry ``{assistant_name}`` / ``{company_name}``
-    placeholders in their ``description:`` line. On first injection the pristine
-    placeholder line is preserved as a ``description_template:`` frontmatter key
-    and ``description:`` is rendered from it. Every later run re-renders from the
-    template, so re-bootstrapping with a DIFFERENT assistant name updates the
-    descriptions instead of silently no-opping.
 
-    Note for git-cloned installs: this rewrites tracked files, so the plugin
-    checkout will show modified SKILL.md files. That is expected — stash or
-    commit them before pulling plugin updates, then re-run bootstrap to
-    re-render. Returns human-readable messages about what was rendered.
+def _yaml_quoted(value: str) -> str:
+    return yaml.safe_dump(
+        value,
+        default_style='"',
+        allow_unicode=True,
+        width=4096,
+        sort_keys=False,
+    ).strip()
+
+
+def _frontmatter_yaml(text: str) -> str:
+    if not text.startswith("---"):
+        raise BootstrapError("SKILL.md missing YAML frontmatter")
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        raise BootstrapError("SKILL.md has incomplete YAML frontmatter")
+    return parts[1]
+
+
+def _inject_assistant_name_into_skills(
+    config_path: Path,
+    skills_dir: Path | None = None,
+    rendered_dir: Path | None = None,
+) -> list[str]:
+    """Render custom routing-skill descriptions into an ignored overlay.
+
+    Shipped ``skills/*/SKILL.md`` files stay git-clean. When a non-default
+    assistant name is configured, rendered copies are written under
+    ``skills.local/`` (or a test-supplied overlay directory).
     """
     config = _load_yaml(config_path)
     assistant_name = (
@@ -492,10 +647,15 @@ def _inject_assistant_name_into_skills(config_path: Path, skills_dir: Path | Non
         else ""
     )
     company_name = config.get("company", {}).get("name", "") if isinstance(config.get("company"), dict) else ""
-    if not assistant_name or assistant_name == "Chief of Staff":
+    if is_default_assistant_name(assistant_name):
         return []  # nothing to inject — still using the default
+    assistant_name = _validate_routing_name(assistant_name, "assistant.name")
+    company_name = _validate_routing_name(company_name, "company.name") if company_name else "your organization"
 
     base = skills_dir if skills_dir is not None else SKILLS_DIR
+    overlay = rendered_dir if rendered_dir is not None else (
+        RENDERED_SKILLS_DIR if skills_dir is None else base.parent / "skills.local"
+    )
     messages: list[str] = []
     for skill_slug in ROUTING_SKILLS:
         skill_md = base / skill_slug / "SKILL.md"
@@ -503,42 +663,32 @@ def _inject_assistant_name_into_skills(config_path: Path, skills_dir: Path | Non
             continue
         lines = skill_md.read_text(encoding="utf-8").splitlines(keepends=True)
         desc_idx = None
-        template_idx = None
         for i, line in enumerate(lines):
             if line.startswith("description:") and desc_idx is None:
                 desc_idx = i
-            elif line.startswith("description_template:"):
-                template_idx = i
         if desc_idx is None:
             continue
 
-        if template_idx is not None:
-            template_line = lines[template_idx]
-            template_value = template_line.split(":", 1)[1]
-        else:
-            # First injection: the current description IS the template.
-            template_value = lines[desc_idx].split(":", 1)[1]
-            if "{assistant_name}" not in template_value:
-                continue  # no placeholder — nothing to render for this skill
+        template_value = ROUTING_DESCRIPTION_TEMPLATES[skill_slug]
+        rendered = (
+            template_value
+            .replace("{assistant_name}", assistant_name)
+            .replace("{company_name}", company_name)
+        )
+        new_desc_line = f"description: {_yaml_quoted(rendered)}\n"
 
-        rendered = template_value.replace("{assistant_name}", assistant_name)
-        if company_name:
-            rendered = rendered.replace("{company_name}", company_name)
-        new_desc_line = "description:" + rendered
-        if not new_desc_line.endswith("\n"):
-            new_desc_line += "\n"
-
-        changed = lines[desc_idx] != new_desc_line
+        out_dir = overlay / skill_slug
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_md = out_dir / "SKILL.md"
         lines[desc_idx] = new_desc_line
-        if template_idx is None:
-            template_line = "description_template:" + template_value
-            if not template_line.endswith("\n"):
-                template_line += "\n"
-            lines.insert(desc_idx + 1, template_line)
-            changed = True
-        if changed:
-            skill_md.write_text("".join(lines), encoding="utf-8")
-            messages.append(f"Rendered '{assistant_name}' into {skill_slug}/SKILL.md description")
+        rendered_text = "".join(lines)
+        fm = yaml.safe_load(_frontmatter_yaml(rendered_text)) or {}
+        if not isinstance(fm, dict) or fm.get("description") != rendered:
+            raise BootstrapError(f"Rendered {skill_slug}/SKILL.md failed YAML frontmatter validation")
+        previous = out_md.read_text(encoding="utf-8") if out_md.exists() else None
+        if previous != rendered_text:
+            out_md.write_text(rendered_text, encoding="utf-8")
+            messages.append(f"Rendered '{assistant_name}' into {out_md}")
     return messages
 
 

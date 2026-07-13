@@ -259,14 +259,67 @@ _RESERVED_KEYS = {"timestamp", "level", "run_id", "command", "component", "event
 
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+\S+")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
-_KV_SECRET_RE = re.compile(r"(?i)\b(client_secret|password|api_key)=\S+")
+_KV_SECRET_RE = re.compile(r"(?i)\b(client_secret|password|api_key|access_token|refresh_token|id_token|assertion|client_assertion)=\S+")
+_JSON_SECRET_RE = re.compile(
+    r"(?i)(['\"](?:access_token|refresh_token|id_token|client_secret|client_assertion|assertion|password|api_key)['\"]\s*:\s*['\"])[^'\"]+(['\"])",
+)
+_URL_SECRET_RE = re.compile(
+    r"(?i)([?&](?:access_token|refresh_token|id_token|client_secret|client_assertion|assertion|password|api_key)=)[^&\s]+",
+)
+_GOOGLE_TOKEN_RE = re.compile(r"\bya29\.[A-Za-z0-9._-]+")
+_MSAL_SECRET_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+_LONG_TOKENISH_RE = re.compile(r"\b[A-Za-z0-9_./+=-]{48,}\b")
+
+_AUTH_DETAIL_MARKERS = (
+    "aadsts",
+    "msal",
+    "invalid_client",
+    "unauthorized_client",
+    "invalid_grant",
+    "invalid credentials",
+    "credentials rejected",
+    "client secret",
+    "expired secret",
+    "check your tenant name",
+    "google.auth",
+    "refresherror",
+)
 
 
 def _scrub_string(value: str) -> str:
     scrubbed = _BEARER_RE.sub("Bearer " + REDACTED, value)
     scrubbed = _JWT_RE.sub(REDACTED, scrubbed)
     scrubbed = _KV_SECRET_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", scrubbed)
+    scrubbed = _JSON_SECRET_RE.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", scrubbed)
+    scrubbed = _URL_SECRET_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", scrubbed)
+    scrubbed = _GOOGLE_TOKEN_RE.sub(REDACTED, scrubbed)
+    scrubbed = _MSAL_SECRET_RE.sub(REDACTED, scrubbed)
+    scrubbed = _LONG_TOKENISH_RE.sub(REDACTED, scrubbed)
     return scrubbed
+
+
+def sanitize_provider_error_detail(value: Any, limit: int = 240) -> str:
+    """Return a short, redacted provider-auth failure detail for logs.
+
+    Provider libraries often raise structured MSAL/Google blobs whose string
+    form can include token-like fragments. Keep the classifier-friendly markers
+    operators need, but never write the full blob to runtime logs.
+    """
+    text = _scrub_string(str(value or "")).replace("\n", " ").replace("\r", " ")
+    lower = text.lower()
+    markers = [m for m in _AUTH_DETAIL_MARKERS if m in lower]
+    if markers:
+        aadsts = re.search(r"(?i)\baadsts\d+\b", text)
+        pieces = ["provider authentication failed", "credentials rejected"]
+        if aadsts:
+            pieces.append(aadsts.group(0).lower())
+        for marker in markers[:3]:
+            if marker not in ("aadsts", "credentials rejected"):
+                pieces.append(marker)
+        return "; ".join(dict.fromkeys(pieces))
+    if len(text) > limit:
+        return text[: max(0, limit - 3)] + "..."
+    return text
 
 
 def _should_drop(key: str) -> bool:
@@ -751,6 +804,7 @@ def add_cli_args(parser: argparse.ArgumentParser) -> None:
 __all__ = [
     "REDACTED",
     "redact",
+    "sanitize_provider_error_detail",
     "init_run",
     "log_event",
     "finish_run",

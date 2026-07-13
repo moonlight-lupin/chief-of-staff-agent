@@ -12,3 +12,6 @@ shared/config/company.yaml
 shared/config/drive-map.yaml
 shared/config/queries.yaml
 shared/templates/index.yaml
+
+# Bootstrap-rendered skill overlay for local assistant names
+skills.local/

@@ -58,6 +58,10 @@ _MANAGED_ENV_KEYS = [
     "COS_TEST_EXPORT",
     "COS_TEST_EXPORT_Q",
     "COS_TEST_EXPORT_TAB",
+    "COS_TEST_INLINE",
+    "COS_TEST_HASH",
+    "COS_TEST_QUOTED_HASH",
+    "CHIEF_OF_STAFF_DEBUG",
 ]
 
 
@@ -129,10 +133,25 @@ class TestConnectWorkspaceConfigDiscovery:
         monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(m365_config))
         config = cw._load_config(None)
         assert config.get("integrations", {}).get("workspace", {}).get("provider") == "m365"
-        # falls back audibly on stderr with the resolved path (not values)
+        # Auto-discovery is quiet by default to keep routine CLI output clean.
+        assert "loaded config from" not in capsys.readouterr().err
+
+    def test_env_var_discovery_logs_when_verbose(self, m365_config, monkeypatch, capsys):
+        """Verbose discovery logs the resolved path, never config values."""
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(m365_config))
+        config = cw._load_config(None, verbose=True)
+        assert config.get("integrations", {}).get("workspace", {}).get("provider") == "m365"
         err = capsys.readouterr().err
         assert str(m365_config) in err
         assert "loaded config from" in err
+
+    def test_env_var_discovery_logs_when_debug_env_set(self, m365_config, monkeypatch, capsys):
+        """Debug env var preserves an opt-in path log for troubleshooting."""
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(m365_config))
+        monkeypatch.setenv("CHIEF_OF_STAFF_DEBUG", "1")
+        config = cw._load_config(None)
+        assert config.get("integrations", {}).get("workspace", {}).get("provider") == "m365"
+        assert "loaded config from" in capsys.readouterr().err
 
     def test_default_path_auto_discovered(self, m365_config, monkeypatch, capsys):
         """No --config and no env var: falls back to the plugin default path."""
@@ -141,7 +160,7 @@ class TestConnectWorkspaceConfigDiscovery:
         monkeypatch.setattr(config_loader, "_default_config_path", lambda: m365_config)
         config = cw._load_config(None)
         assert config["integrations"]["workspace"]["provider"] == "m365"
-        assert "loaded config from" in capsys.readouterr().err
+        assert "loaded config from" not in capsys.readouterr().err
 
     def test_explicit_config_wins_over_env(self, m365_config, tmp_path, monkeypatch, capsys):
         """Explicit --config beats CHIEF_OF_STAFF_CONFIG; no discovery log."""
@@ -175,8 +194,8 @@ class TestConnectWorkspaceConfigDiscovery:
         assert data["user_principal"] == "operator@test.com"
         assert data["tenant_id_set"] is True
         assert data["client_id_set"] is True
-        # discovery is announced on stderr (path only)
-        assert "loaded config from" in result.stderr
+        # discovery is quiet unless --verbose/debug is explicitly enabled
+        assert "loaded config from" not in result.stderr
 
     def test_verify_cli_resolves_m365_via_env(self, m365_config, monkeypatch):
         """--verify sees provider m365 from the auto-discovered config."""
@@ -206,7 +225,8 @@ class TestConnectWorkspaceConfigDiscovery:
 class TestDotenvLoader:
     def test_parses_quotes_comments_blank_malformed(self, tmp_path, monkeypatch):
         for k in ("COS_TEST_FOO", "COS_TEST_QUOTED", "COS_TEST_SQUOTED",
-                  "COS_TEST_EMPTY", "COS_TEST_SPACED", "COMPOSIO_MCP_KEY"):
+                  "COS_TEST_EMPTY", "COS_TEST_SPACED", "COMPOSIO_MCP_KEY",
+                  "COS_TEST_INLINE", "COS_TEST_HASH", "COS_TEST_QUOTED_HASH"):
             monkeypatch.delenv(k, raising=False)
         env_file = tmp_path / ".env"
         env_file.write_text(
@@ -217,6 +237,9 @@ class TestDotenvLoader:
             'COS_TEST_QUOTED="double quoted"\n'
             "COS_TEST_SQUOTED='single quoted'\n"
             "COS_TEST_EMPTY=\n"
+            "COS_TEST_INLINE=value # stripped comment\n"
+            "COS_TEST_HASH=value#kept\n"
+            'COS_TEST_QUOTED_HASH="value # kept" # stripped comment\n'
             "  COMPOSIO_MCP_KEY = spaced_around_equals  \n"
             "this line has no equals sign\n"
             "=novalueforkey\n"
@@ -229,6 +252,9 @@ class TestDotenvLoader:
         assert os.environ["COS_TEST_QUOTED"] == "double quoted"
         assert os.environ["COS_TEST_SQUOTED"] == "single quoted"
         assert os.environ["COS_TEST_EMPTY"] == ""
+        assert os.environ["COS_TEST_INLINE"] == "value"
+        assert os.environ["COS_TEST_HASH"] == "value#kept"
+        assert os.environ["COS_TEST_QUOTED_HASH"] == "value # kept"
         # whitespace around key and value/equals is stripped
         assert os.environ["COMPOSIO_MCP_KEY"] == "spaced_around_equals"
         # malformed lines ignored: no-equals, empty-key, whitespace-in-key
@@ -252,6 +278,25 @@ class TestDotenvLoader:
         assert os.environ["COS_TEST_EXPORT_Q"] == "quoted export"
         assert os.environ["COS_TEST_EXPORT_TAB"] == "tabbed"
         assert applied["COS_TEST_EXPORT"] == "from_export"
+
+    def test_suspicious_process_keys_are_ignored(self, tmp_path, monkeypatch):
+        """Do not let project .env files alter process lookup/injection paths."""
+        monkeypatch.delenv("PATH", raising=False)
+        monkeypatch.delenv("LD_PRELOAD", raising=False)
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "PATH=/tmp/malicious\n"
+            "LD_PRELOAD=/tmp/preload.so\n"
+            "PYTHONPATH=/tmp/site\n"
+        )
+        applied = config_loader.load_dotenv_file(env_file)
+        assert "PATH" not in applied
+        assert "LD_PRELOAD" not in applied
+        assert "PYTHONPATH" not in applied
+        assert "PATH" not in os.environ
+        assert "LD_PRELOAD" not in os.environ
+        assert "PYTHONPATH" not in os.environ
 
     def test_shell_env_wins_over_dotenv(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COS_TEST_SHELL", "from_shell")

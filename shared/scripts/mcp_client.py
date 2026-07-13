@@ -74,7 +74,7 @@ class MCPClient:
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "chief-of-staff", "version": "0.1.7"},
+                "clientInfo": {"name": "chief-of-staff", "version": "0.3.8"},
             },
             "id": 1,
         }
