@@ -433,28 +433,35 @@ class TestUnknownToolError:
         assert "tool_slugs" in res["error"]
 
     def test_non_unknown_error_is_not_enriched(self, mcp_key, tmp_project):
-        # Soft failures (rate limits, etc.) must warn — never silent [] — but
-        # must NOT be enriched with the unknown-tool / tool_slugs override path.
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        # Soft failures (rate limits, etc.) must raise ComposioReadError — never
+        # silent [] — and must NOT be enriched with the unknown-tool /
+        # tool_slugs override path.
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
         mock.call_tool.return_value = _err("rate limited, try again")
         client._mcp_client = mock
-        with pytest.warns(UserWarning) as record:
-            result = client.mail_search("is:unread")
-        assert result == []
-        text = " ".join(str(w.message) for w in record)
+        with pytest.raises(ComposioReadError) as ei:
+            client.mail_search("is:unread")
+        text = str(ei.value)
         assert "rate limited" in text.lower()
         assert "tool_slugs" not in text
+        assert ei.value.operation == "mail_search"
 
-    def test_rate_limit_error_emits_warning(self, mcp_key, tmp_project):
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+    def test_rate_limit_error_raises_composio_read_error(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
         mock.call_tool.return_value = _err("rate limited, try again later")
         client._mcp_client = mock
-        with pytest.warns(UserWarning, match="rate limited"):
-            assert client.calendar_list("2026-07-01", "2026-07-02") == []
+        with pytest.raises(ComposioReadError) as ei:
+            client.calendar_list("2026-07-01", "2026-07-02")
+        assert ei.value.operation == "calendar_list"
+        assert "rate limited" in str(ei.value).lower()
 
 
 class TestErrorClassifierOrdering:

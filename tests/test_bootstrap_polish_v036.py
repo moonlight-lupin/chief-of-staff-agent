@@ -235,15 +235,19 @@ class TestIdentityWriteThrough:
             "delivery": {"home_chat_id": "chat-real-456"},
         }), encoding="utf-8")
 
-        result = bootstrap.bootstrap(_make_args(project_root=str(tmp_path / "proj")))
+        result = bootstrap.bootstrap(_make_args())
         data = _load(result["config"])
 
+        assert data["paths"]["project_root"] == str(tmp_path / "existing")
         assert data["company"]["registration_number"] == "202612345A"
         assert data["company"]["tax_registration_number"] == "M91234567X"
         assert data["company"]["address"] == "88 Market Street, Singapore 048948"
         assert data["company"]["phone"] == "+65 6999 0000"
         assert data["user"]["role"] == "Founder"
         assert data["user"]["phone"] == "+65 9888 7777"
+        assert data["google"]["domain"] == "real.example"
+        assert data["google"]["account_alias"] == "real"
+        assert data["google"]["service_account_path"] == "~/.hermes/secrets/real-google-service-account.json"
         assert data["google"]["drive_root_folder_id"] == "real-drive-root-123"
         assert data["delivery"]["home_chat_id"] == "chat-real-456"
 

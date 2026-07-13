@@ -113,7 +113,7 @@ def _get_workspace_client(config: Any):
     return get_workspace_client(config)
 
 
-def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
+def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]] | dict[str, Any]:
     ensure_workspace_config(config)
     queries_file = sibling_or_shared(config, "queries.yaml")
     queries_data = load_yaml(queries_file)
@@ -133,6 +133,7 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
     import re as _re
     client = _get_workspace_client(config)
     items: list[dict[str, Any]] = []
+    dropped_constraints: list[str] = []
     for query in queries:
         if not isinstance(query, dict):
             continue
@@ -143,7 +144,20 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]]:
         if _re.search(r'\{[a-z_]+\}', q):
             continue
         result = client.mail_search(q, max_results=int(query.get("max", 10)))
+        # Microsoft Composio Outlook may drop text-search terms; surface that
+        # honesty so the Gmail section is not reported as a clean success.
+        meta = getattr(client, "last_mail_search_meta", None) or {}
+        if isinstance(meta, dict) and meta.get("degraded"):
+            for constraint in meta.get("dropped_constraints") or []:
+                if constraint not in dropped_constraints:
+                    dropped_constraints.append(str(constraint))
         items.append({"name": query.get("name"), "query": q, "result": result})
+    if dropped_constraints:
+        note = (
+            "query degraded; dropped constraints: "
+            + ", ".join(dropped_constraints)
+        )
+        return {"status": "degraded", "items": items, "error": note}
     return items
 
 
@@ -294,12 +308,26 @@ def concise_error(exc: Exception) -> str:
 
 def wrap_source(name: str, collector: Callable[[Any, Path], list[dict[str, Any]]], config: Any, project_root: Path) -> dict[str, Any]:
     try:
-        items = collector(config, project_root)
+        result = collector(config, project_root)
+        # Collectors may return a rich envelope when a source is partially
+        # honest but degraded (e.g. Outlook dropped text-search constraints).
+        if isinstance(result, dict) and "items" in result and "status" in result:
+            items = result.get("items") or []
+            out: dict[str, Any] = {
+                "status": result["status"],
+                "hash": stable_hash(items),
+                "items": items,
+            }
+            if result.get("error"):
+                out["error"] = result["error"]
+            return out
+        items = result if isinstance(result, list) else [result]
         return {"status": "ok", "hash": stable_hash(items), "items": items}
     except Exception as exc:
         err = concise_error(exc)
-        # Hard Composio failures (disconnected toolkit, unknown slug) must not
-        # look like an empty successful read — mark the section unavailable.
+        # Hard Composio failures (disconnected toolkit, unknown slug, rate
+        # limits, auth errors, malformed responses) must not look like an
+        # empty successful read — mark the section unavailable.
         status = "failed"
         try:
             from providers.composio_mcp_workspace import ComposioReadError  # type: ignore

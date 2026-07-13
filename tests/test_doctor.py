@@ -352,12 +352,67 @@ def test_doctor_does_not_follow_redirects(monkeypatch, tmp_path):
         tmp_path / "company.yaml",
     )
 
-    assert result.status == "pass"
+    assert result.status == "warn"
+    assert "API key check failed (HTTP 302)" in result.detail
     assert [req.full_url for req in opened] == [
         "https://docuseal.example.com",
         "https://docuseal.example.com/api/templates?limit=1",
     ]
     assert opened[1].get_header("X-auth-token") == "secret"
+
+
+def test_doctor_pins_docuseal_dns_between_validation_and_open(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+    monkeypatch.delenv("DOCUSEAL_MCP_TOKEN", raising=False)
+    opened: list[urllib.request.Request] = []
+    resolver_calls = 0
+    resolved_during_open: list[str] = []
+
+    def rebinding_getaddrinfo(host, port, *args, **kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        if resolver_calls == 1:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeOpener:
+        def open(self, req, timeout=0):
+            opened.append(req)
+            infos = socket.getaddrinfo("docuseal.example.com", 443, type=socket.SOCK_STREAM)
+            resolved_during_open.append(infos[0][4][0])
+            return FakeResponse()
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+    monkeypatch.setattr(doctor, "_docuseal_opener", lambda: FakeOpener())
+    result = _check_docuseal(
+        False,
+        {
+            "esign": {
+                "provider": "docuseal",
+                "url": "https://docuseal.example.com",
+                "domain": "docuseal.example.com",
+                "auth_mode": "pro_api_only",
+            }
+        },
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "pass"
+    assert [req.full_url for req in opened] == [
+        "https://docuseal.example.com",
+        "https://docuseal.example.com/api/templates?limit=1",
+    ]
+    assert resolved_during_open == ["93.184.216.34", "93.184.216.34"]
+    assert resolver_calls == 1
 
 
 def test_doctor_microsoft_capability_key(tmp_path):

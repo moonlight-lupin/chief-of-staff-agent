@@ -108,6 +108,25 @@ class TestInjectionIdempotency:
         assert messages == []
         assert not overlay.exists()
 
+    def test_revert_does_not_delete_manual_overlay(self, tmp_path):
+        skills = _skills_copy(tmp_path)
+        overlay = tmp_path / "skills.local"
+        manual = overlay / "manual-skill" / "SKILL.md"
+        manual.parent.mkdir(parents=True)
+        manual.write_text("---\nname: manual-skill\ndescription: Manual override\n---\n", encoding="utf-8")
+
+        bootstrap._inject_assistant_name_into_skills(_write_config(tmp_path, "Ada"), skills_dir=skills)
+        assert (overlay / "daily-briefing" / "SKILL.md").exists()
+
+        messages = bootstrap._inject_assistant_name_into_skills(
+            _write_config(tmp_path, "Chief of Staff"),
+            skills_dir=skills,
+        )
+
+        assert messages == []
+        assert manual.exists()
+        assert not (overlay / "daily-briefing" / "SKILL.md").exists()
+
     def test_cos_alias_skips_injection(self, tmp_path):
         skills = _skills_copy(tmp_path)
         for alias in ("cos", "CoS", "chief-of-staff", "CHIEF OF STAFF"):

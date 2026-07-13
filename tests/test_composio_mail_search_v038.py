@@ -4,10 +4,13 @@
 P0: OUTLOOK_QUERY_EMAILS ignores ``search``. When a bundled Gmail-syntax query
 needs text search (often after the compiler folds filter+search into KQL),
 ``_ms_mail_search_args`` must prefer any recoverable OData filter and warn that
-text search was dropped — not silently emit top=N alone.
+text search was dropped — not silently emit top=N alone. Query-compilation
+meta ``{degraded, dropped_constraints}`` is returned so daily briefing can
+mark the Gmail section degraded.
 
-P1: ComposioConnectionError / ComposioToolError must propagate from public
-reads (not swallow to []), and daily briefing must mark the section unavailable.
+P1: ComposioConnectionError / ComposioToolError / ComposioReadError (rate
+limits, auth, malformed) must propagate from public reads (not swallow to []),
+and daily briefing must mark the section unavailable.
 """
 from __future__ import annotations
 
@@ -96,11 +99,13 @@ class TestBundledQueryTemplatesDropSearch:
         client = self._client()
         query = BUNDLED_QUERIES[name]
         with pytest.warns(UserWarning, match="does not support text search") as record:
-            args = client._ms_mail_search_args(query, max_results=10)
+            args, meta = client._ms_mail_search_args(query, max_results=10)
 
         assert "top" in args
         assert args["top"] == 10
         assert "search" not in args
+        assert meta.get("degraded") is True
+        assert "text_search" in (meta.get("dropped_constraints") or [])
 
         # Prefer filter when the template has filter-eligible clauses.
         assert "filter" in args, (
@@ -118,17 +123,19 @@ class TestBundledQueryTemplatesDropSearch:
         client = ComposioMCPWorkspaceClient(
             _ms_workspace(tool_slugs={"mail_search": "OUTLOOK_KQL_SEARCH"})
         )
-        args = client._ms_mail_search_args(BUNDLED_QUERIES["engagement_threads"], 5)
+        args, meta = client._ms_mail_search_args(BUNDLED_QUERIES["engagement_threads"], 5)
         assert "search" in args
         assert args["top"] == 5
+        assert meta.get("degraded") is False
 
     def test_explicit_supports_text_search_flag(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(
             _ms_workspace(mail_search_supports_text_search=True)
         )
-        args = client._ms_mail_search_args(BUNDLED_QUERIES["acra_iras"], 5)
+        args, meta = client._ms_mail_search_args(BUNDLED_QUERIES["acra_iras"], 5)
         assert "search" in args
+        assert meta.get("degraded") is False
 
 
 class TestHardReadFailuresPropagate:
@@ -151,14 +158,21 @@ class TestHardReadFailuresPropagate:
         # Must NOT be swallowed to [].
         assert client.mail_search  # sanity: method still bound
 
-    def test_soft_failure_still_returns_empty(self, mcp_key, tmp_project):
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+    def test_rate_limit_raises_composio_read_error(self, mcp_key, tmp_project):
+        """Soft failures (rate limits, auth, malformed) must propagate as
+        ComposioReadError — never warn+return [] (that looks like 'no mail')."""
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient,
+            ComposioReadError,
+        )
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
         mock.call_tool.return_value = _err("rate limited, try again")
         client._mcp_client = mock
-        with pytest.warns(UserWarning, match="rate limited"):
-            assert client.mail_search("is:unread") == []
+        with pytest.raises(ComposioReadError) as ei:
+            client.mail_search("is:unread")
+        assert ei.value.operation == "mail_search"
+        assert "rate limited" in str(ei.value).lower()
 
 
 class TestDailyBriefingUnavailable:
@@ -180,3 +194,78 @@ class TestDailyBriefingUnavailable:
         lines = db.render_source("Gmail", "📧", src, lambda i: str(i))
         assert "unavailable" in lines[0]
         assert "failed" not in lines[0]
+
+    def test_wrap_source_marks_rate_limit_unavailable(self, tmp_project):
+        import daily_briefing as db
+        from providers.composio_mcp_workspace import ComposioReadError
+
+        def boom(_config, _root):
+            raise ComposioReadError(
+                "mail_search",
+                RuntimeError("rate limited, try again"),
+            )
+
+        src = db.wrap_source("gmail", boom, {}, tmp_project)
+        assert src["status"] == "unavailable"
+        assert "rate limited" in src["error"].lower()
+
+    def test_wrap_source_marks_query_degradation(self, tmp_project):
+        import daily_briefing as db
+
+        def degraded(_config, _root):
+            return {
+                "status": "degraded",
+                "items": [{"name": "q1", "query": "x", "result": []}],
+                "error": "query degraded; dropped constraints: text_search",
+            }
+
+        src = db.wrap_source("gmail", degraded, {}, tmp_project)
+        assert src["status"] == "degraded"
+        assert "text_search" in src["error"]
+        assert len(src["items"]) == 1
+
+        lines = db.render_source("Gmail", "📧", src, lambda i: str(i))
+        assert "degraded" in lines[0]
+
+
+class TestCollectGmailDegradation:
+    def test_collect_gmail_marks_degraded_when_text_search_dropped(
+        self, mcp_key, tmp_project, monkeypatch,
+    ):
+        import daily_briefing as db
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        queries_path = tmp_project / "queries.yaml"
+        queries_path.write_text(
+            "queries:\n"
+            "  - name: engagement\n"
+            "    query: 'subject:(proposal OR NDA) newer_than:14d'\n"
+            "    max: 5\n",
+            encoding="utf-8",
+        )
+
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"value": []})
+        client._mcp_client = mock
+
+        config = {
+            "integrations": {"workspace": _ms_workspace()["integrations"]["workspace"]},
+            "paths": {"project_root": str(tmp_project), "shared_config": str(tmp_project)},
+            "google": {},
+        }
+
+        monkeypatch.setattr(db, "_get_workspace_client", lambda _cfg: client)
+        monkeypatch.setattr(db, "ensure_workspace_config", lambda _cfg: None)
+        monkeypatch.setattr(
+            db, "sibling_or_shared", lambda _cfg, _name: queries_path,
+        )
+
+        with pytest.warns(UserWarning, match="does not support text search"):
+            result = db.collect_gmail(config, tmp_project)
+
+        assert isinstance(result, dict)
+        assert result["status"] == "degraded"
+        assert "text_search" in result["error"]
+        assert len(result["items"]) == 1
+        assert client.last_mail_search_meta.get("degraded") is True

@@ -102,6 +102,7 @@ GOOGLE_DOMAIN_PLACEHOLDER = "<workspace-domain>"
 GOOGLE_ALIAS_PLACEHOLDER = "<account-alias>"
 GOOGLE_SA_PATH_PLACEHOLDER = "~/.hermes/secrets/<account>-google-service-account.json"
 GOOGLE_DRIVE_ROOT_PLACEHOLDER = "<drive-root-folder-id>"
+ROUTING_OVERLAY_MANIFEST = ".routing-overlays.json"
 
 
 def _slugify_company(name: str) -> str:
@@ -150,13 +151,18 @@ def _identity_overlay(
     current_user = current.get("user", {}) if isinstance(current.get("user"), Mapping) else {}
     current_google = current.get("google", {}) if isinstance(current.get("google"), Mapping) else {}
 
-    # paths.project_root: explicit flag > company slug > generic default.
-    # wiki_path/staging follow the root so they never keep the Acme sample path.
+    current_paths = current.get("paths", {}) if isinstance(current.get("paths"), Mapping) else {}
+
+    # paths.project_root: explicit flag > existing real config > company slug >
+    # generic default. wiki_path/staging follow the root so they never keep the
+    # Acme sample path.
     explicit_root = getattr(args, "project_root", None)
     company_name = getattr(args, "company", None)
     company_slug = _slugify_company(company_name) if company_name else ""
     if explicit_root:
         root = str(Path(explicit_root).expanduser())
+    elif not _is_identity_sample(current_paths.get("project_root")):
+        root = str(Path(str(current_paths["project_root"])).expanduser())
     elif company_slug:
         root = str(get_default_project_root(company_slug))
     else:
@@ -224,22 +230,23 @@ def _identity_overlay(
     # Google Workspace identity: derive domain/alias/SA path from operator when
     # possible; always placeholder the Drive root (cannot be inferred).
     usable_domain = domain if domain and domain not in FREEMAIL_DOMAINS else ""
+    explicit_company_or_operator = bool(company_name or operator)
     if usable_domain:
         if operator or _is_identity_sample(current_google.get("domain")):
             google["domain"] = usable_domain
         alias = company_slug or usable_domain.split(".", 1)[0]
-        if operator or company_slug or _is_identity_sample(current_google.get("account_alias")):
+        if explicit_company_or_operator or _is_identity_sample(current_google.get("account_alias")):
             google["account_alias"] = alias
-        if operator or company_slug or _is_identity_sample(current_google.get("service_account_path")):
+        if explicit_company_or_operator or _is_identity_sample(current_google.get("service_account_path")):
             google["service_account_path"] = (
                 f"~/.hermes/secrets/{alias}-google-service-account.json"
             )
     else:
-        if operator or _is_identity_sample(current_google.get("domain")):
+        if _is_identity_sample(current_google.get("domain")):
             google["domain"] = GOOGLE_DOMAIN_PLACEHOLDER
-        if company_slug or _is_identity_sample(current_google.get("account_alias")):
+        if explicit_company_or_operator or _is_identity_sample(current_google.get("account_alias")):
             google["account_alias"] = company_slug or GOOGLE_ALIAS_PLACEHOLDER
-        if company_slug or _is_identity_sample(current_google.get("service_account_path")):
+        if explicit_company_or_operator or _is_identity_sample(current_google.get("service_account_path")):
             if company_slug:
                 google["service_account_path"] = (
                     f"~/.hermes/secrets/{company_slug}-google-service-account.json"
@@ -701,6 +708,49 @@ def _frontmatter_yaml(text: str) -> str:
     return parts[1]
 
 
+def _routing_overlay_manifest_path(overlay: Path) -> Path:
+    return overlay / ROUTING_OVERLAY_MANIFEST
+
+
+def _load_routing_overlay_manifest(overlay: Path) -> list[str]:
+    path = _routing_overlay_manifest_path(overlay)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, list):
+        return []
+    return [str(skill) for skill in skills if str(skill) in ROUTING_SKILLS]
+
+
+def _write_routing_overlay_manifest(overlay: Path, skills: list[str]) -> None:
+    if not skills:
+        return
+    path = _routing_overlay_manifest_path(overlay)
+    path.write_text(
+        json.dumps({"skills": sorted(set(skills))}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _cleanup_routing_overlays(overlay: Path) -> None:
+    generated_skills = _load_routing_overlay_manifest(overlay)
+    if not generated_skills:
+        return
+    for skill_slug in generated_skills:
+        shutil.rmtree(overlay / skill_slug, ignore_errors=True)
+    manifest = _routing_overlay_manifest_path(overlay)
+    if manifest.exists():
+        manifest.unlink()
+    try:
+        next(overlay.iterdir())
+    except StopIteration:
+        overlay.rmdir()
+
+
 def _inject_assistant_name_into_skills(
     config_path: Path,
     skills_dir: Path | None = None,
@@ -725,12 +775,13 @@ def _inject_assistant_name_into_skills(
     )
     if is_default_assistant_name(assistant_name):
         if overlay.exists():
-            shutil.rmtree(overlay)
+            _cleanup_routing_overlays(overlay)
         return []  # nothing to inject — still using the default
     assistant_name = _validate_routing_name(assistant_name, "assistant.name")
     company_name = _validate_routing_name(company_name, "company.name") if company_name else "your organization"
 
     messages: list[str] = []
+    rendered_skills: list[str] = []
     for skill_slug in ROUTING_SKILLS:
         skill_md = base / skill_slug / "SKILL.md"
         if not skill_md.exists():
@@ -763,6 +814,8 @@ def _inject_assistant_name_into_skills(
         if previous != rendered_text:
             out_md.write_text(rendered_text, encoding="utf-8")
             messages.append(f"Rendered '{assistant_name}' into {out_md}")
+        rendered_skills.append(skill_slug)
+    _write_routing_overlay_manifest(overlay, rendered_skills)
     return messages
 
 

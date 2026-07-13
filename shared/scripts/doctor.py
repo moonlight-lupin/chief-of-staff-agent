@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import os
@@ -24,7 +25,7 @@ import urllib.error
 from urllib.parse import urlparse
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 try:
     import yaml  # type: ignore
@@ -433,15 +434,17 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     auth_mode = str(esign.get("auth_mode", "auto")).lower()
     if not url or not (api_key or mcp_token):
         return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
-    unsafe_reason = _unsafe_docuseal_url_reason(url, esign)
+    unsafe_reason, pinned_dns = _validated_docuseal_url_resolution(url, esign)
     if unsafe_reason:
         return CheckResult("docuseal", "fail", unsafe_reason)
     opener = _docuseal_opener()
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "chief-of-staff-doctor/1.0"})
-        with opener.open(req, timeout=10) as resp:  # nosec - configured URL health check
+        with _docuseal_pinned_dns(pinned_dns), opener.open(req, timeout=10) as resp:  # nosec - configured URL health check
             ok = resp.status < 500
         detail = f"HTTP {resp.status}"
+        api_key_required = auth_mode in ("auto", "mcp_and_api", "pro_api_only")
+        api_key_verified = False
         # Check credential completeness based on auth_mode.
         missing_creds = []
         if auth_mode in ("auto", "mcp_and_api"):
@@ -462,14 +465,22 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
                     f"{url}/api/templates?limit=1",
                     headers={"X-Auth-Token": api_key, "User-Agent": "chief-of-staff-doctor/1.0"},
                 )
-                with opener.open(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
+                with _docuseal_pinned_dns(pinned_dns), opener.open(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
+                    api_key_verified = api_resp.status < 400
+                if not api_key_verified:
+                    return CheckResult("docuseal", "warn", f"{detail}, API key check failed (HTTP {api_resp.status})")
+                else:
                     detail += f", API key OK"
             except urllib.error.HTTPError as api_exc:
                 if api_exc.code in (401, 403):
                     return CheckResult("docuseal", "fail", f"HTTP {resp.status}, API key invalid (HTTP {api_exc.code})")
-                detail += f", API key check failed (HTTP {api_exc.code})"
+                return CheckResult("docuseal", "warn", f"{detail}, API key check failed (HTTP {api_exc.code})")
+            except Exception as api_exc:
+                return CheckResult("docuseal", "warn", f"{detail}, API key check failed: {api_exc}")
         else:
             detail += ", no API key (PATCH fields unavailable)"
+        if api_key_required and not api_key_verified:
+            return CheckResult("docuseal", "warn", f"{detail}, API key not verified")
         return CheckResult("docuseal", "pass" if ok else "warn", detail)
     except urllib.error.HTTPError as exc:
         return CheckResult("docuseal", "warn", f"DocuSeal HTTP {exc.code}: {exc.reason}")
@@ -487,34 +498,64 @@ def _docuseal_opener() -> urllib.request.OpenerDirector:
 
 
 def _unsafe_docuseal_url_reason(url: str, esign: Mapping[str, Any]) -> str | None:
+    reason, _pinned_dns = _validated_docuseal_url_resolution(url, esign)
+    return reason
+
+
+def _validated_docuseal_url_resolution(url: str, esign: Mapping[str, Any]) -> tuple[str | None, tuple[str, int, tuple[Any, ...]] | None]:
     parsed = urlparse(url)
     if parsed.scheme.lower() != "https":
-        return "refusing DocuSeal probe: esign.url must use https"
+        return "refusing DocuSeal probe: esign.url must use https", None
     if not parsed.hostname:
-        return "refusing DocuSeal probe: esign.url host is missing"
+        return "refusing DocuSeal probe: esign.url host is missing", None
 
     host = parsed.hostname.strip().lower().rstrip(".")
     domain = _normalise_docuseal_domain(str(esign.get("domain") or ""))
     if domain and host != domain:
-        return "refusing DocuSeal probe: esign.url host must match esign.domain"
+        return "refusing DocuSeal probe: esign.url host must match esign.domain", None
 
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
         address = None
     if address and _is_blocked_docuseal_address(address):
-        return "refusing DocuSeal probe: esign.url points to link-local or metadata address"
+        return "refusing DocuSeal probe: esign.url points to link-local or metadata address", None
     if address is None:
         try:
-            resolved = {
-                ipaddress.ip_address(info[4][0])
-                for info in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
-            }
+            infos = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
         except OSError as exc:
-            return f"refusing DocuSeal probe: could not resolve esign.url host: {exc}"
+            return f"refusing DocuSeal probe: could not resolve esign.url host: {exc}", None
+        resolved = [ipaddress.ip_address(info[4][0]) for info in infos]
         if any(_is_blocked_docuseal_address(addr) for addr in resolved):
-            return "refusing DocuSeal probe: esign.url host resolves to link-local or metadata address"
-    return None
+            return "refusing DocuSeal probe: esign.url host resolves to link-local or metadata address", None
+        if infos:
+            return None, (host, parsed.port or 443, infos[0])
+        return "refusing DocuSeal probe: could not resolve esign.url host", None
+    return None, None
+
+
+@contextlib.contextmanager
+def _docuseal_pinned_dns(pinned_dns: tuple[str, int, tuple[Any, ...]] | None) -> Iterator[None]:
+    if pinned_dns is None:
+        yield
+        return
+
+    pinned_host, pinned_port, pinned_info = pinned_dns
+    original_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # noqa: A002 - socket API name
+        normalised_host = str(host).strip().lower().rstrip(".")
+        if normalised_host == pinned_host and int(port) == pinned_port:
+            sockaddr = pinned_info[4]
+            pinned_sockaddr = (sockaddr[0], port, *sockaddr[2:])
+            return [(pinned_info[0], pinned_info[1], pinned_info[2], pinned_info[3], pinned_sockaddr)]
+        return original_getaddrinfo(host, port, family, type, proto, flags)
+
+    socket.getaddrinfo = getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 def _is_blocked_docuseal_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

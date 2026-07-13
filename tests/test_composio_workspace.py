@@ -119,11 +119,15 @@ class TestComposioFactory:
 class TestComposioMissingKey:
     def test_missing_mcp_key_gives_clear_error(self, composio_config, tmp_project_dir):
         os.environ.pop("COMPOSIO_MCP_KEY", None)
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
         client = ComposioMCPWorkspaceClient(composio_config)
-        # Error occurs when MCP client tries to initialize (uses _get_key)
-        result = client.gmail_search("test")
-        assert result == []  # graceful failure, warning emitted
+        # Missing key must not look like an empty successful read.
+        with pytest.warns(DeprecationWarning, match="gmail_search"):
+            with pytest.raises(ComposioReadError, match="COMPOSIO_MCP_KEY") as ei:
+                client.gmail_search("test")
+        assert ei.value.operation == "mail_search"
 
     def test_composio_api_key_not_required(self, composio_config, mcp_key, tmp_project_dir):
         """COMPOSIO_API_KEY should not be needed for MCP mode."""
@@ -151,15 +155,23 @@ class TestComposioMCPGmail:
         mock_mcp.call_tool.assert_called_once()
         assert mock_mcp.call_tool.call_args[0][0] == "COMPOSIO_MULTI_EXECUTE_TOOL"
 
-    def test_gmail_search_returns_empty_on_error(self, composio_config, mcp_key, tmp_project_dir):
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+    def test_gmail_search_raises_composio_read_error_on_failure(
+        self, composio_config, mcp_key, tmp_project_dir,
+    ):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
         client = ComposioMCPWorkspaceClient(composio_config)
 
         mock_mcp = MagicMock()
         mock_mcp.call_tool.side_effect = Exception("Connection failed")
         client._mcp_client = mock_mcp
 
-        assert client.gmail_search("is:unread") == []
+        with pytest.warns(DeprecationWarning, match="gmail_search"):
+            with pytest.raises(ComposioReadError) as ei:
+                client.gmail_search("is:unread")
+        assert ei.value.operation == "mail_search"
+        assert "Connection failed" in str(ei.value)
 
 
 class TestComposioMCPCalendar:

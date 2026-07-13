@@ -183,15 +183,19 @@ class TestComposioMCPDrive:
 class TestComposioMCPMissingKey:
     def test_missing_mcp_key_raises(self, mcp_config, tmp_project):
         os.environ.pop("COMPOSIO_MCP_KEY", None)
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
         client = ComposioMCPWorkspaceClient(mcp_config)
 
         mock_mcp = MagicMock()
         mock_mcp.call_tool.side_effect = ValueError("COMPOSIO_MCP_KEY not set")
         client._mcp_client = mock_mcp
 
-        result = client.gmail_search("test")
-        assert result == []  # graceful failure
+        with pytest.warns(DeprecationWarning, match="gmail_search"):
+            with pytest.raises(ComposioReadError, match="COMPOSIO_MCP_KEY") as ei:
+                client.gmail_search("test")
+        assert ei.value.operation == "mail_search"
 
 
 class TestComposioMCPKeyNotStored:

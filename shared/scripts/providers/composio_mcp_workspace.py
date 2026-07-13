@@ -618,9 +618,11 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
     def mail_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
         slug = self._slug_for("mail_search")
+        self.last_mail_search_meta: dict[str, Any] = {"degraded": False}
         try:
             if self.family == "microsoft":
-                args = self._ms_mail_search_args(query, max_results)
+                args, meta = self._ms_mail_search_args(query, max_results)
+                self.last_mail_search_meta = meta
             else:
                 args = {"query": query, "max_results": max_results}
             data = self._execute_composio_tool(slug, args, operation="mail_search")
@@ -628,8 +630,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         except (ComposioConnectionError, ComposioToolError):
             raise
         except Exception as exc:
-            warnings.warn(f"Composio MCP mail_search failed: {exc}")
-            return []
+            # Rate limits, auth errors, malformed payloads, etc. must NOT look
+            # like an empty successful read — wrap and propagate so callers
+            # (daily briefing) can mark the section unavailable.
+            raise ComposioReadError("mail_search", exc) from exc
 
     def _mail_search_supports_text_search(self) -> bool:
         """Whether the active Outlook mail_search slug accepts a KQL/search arg.
@@ -646,9 +650,16 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             return bool(workspace.get("mail_search_supports_text_search"))
         return self._slug_for("mail_search") not in _MS_MAIL_SLUGS_WITHOUT_TEXT_SEARCH
 
-    def _ms_mail_search_args(self, query: Any, max_results: int) -> dict[str, Any]:
+    def _ms_mail_search_args(
+        self, query: Any, max_results: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Map an incoming query through the m365 query compiler and lay the
         {folder, filter, search} result into the Outlook slug's arguments.
+
+        Returns ``(args, meta)`` where ``meta`` carries query-compilation honesty
+        flags for callers (daily briefing). When text search is dropped under
+        OUTLOOK_QUERY_EMAILS, meta is
+        ``{"degraded": True, "dropped_constraints": ["text_search"]}``.
 
         The query compiler already supports a per-dialect raw override
         (dict model with ``raw={"m365": {...}}``), which passes through here as an
@@ -661,6 +672,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         ``mail_search_supports_text_search: true``).
         """
         args: dict[str, Any] = {"top": max_results}
+        ok_meta: dict[str, Any] = {"degraded": False}
         slug = self._slug_for("mail_search")
         supports_search = self._mail_search_supports_text_search()
         try:
@@ -679,9 +691,12 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 UserWarning,
                 stacklevel=2,
             )
-            return args
+            return args, {
+                "degraded": True,
+                "dropped_constraints": ["uncompiled_query"],
+            }
         if not isinstance(compiled, Mapping):
-            return args
+            return args, ok_meta
 
         has_filter = bool(compiled.get("filter"))
         has_search = bool(compiled.get("search"))
@@ -708,7 +723,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 args["filter"] = compiled["filter"]
             if compiled.get("folder"):
                 args["folder"] = compiled["folder"]
-            return args
+            return args, {
+                "degraded": True,
+                "dropped_constraints": ["text_search"],
+            }
 
         if compiled.get("filter"):
             args["filter"] = compiled["filter"]
@@ -716,7 +734,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             args["search"] = compiled["search"]
         if compiled.get("folder"):
             args["folder"] = compiled["folder"]
-        return args
+        return args, ok_meta
 
     @guarded("gmail.draft", target_arg="to", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("mail_create_draft"),
@@ -764,8 +782,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         except (ComposioConnectionError, ComposioToolError):
             raise
         except Exception as exc:
-            warnings.warn(f"Composio MCP calendar_list failed: {exc}")
-            return []
+            raise ComposioReadError("calendar_list", exc) from exc
 
     @guarded("calendar.create", target_arg="title", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("calendar_create"),
@@ -836,8 +853,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         except (ComposioConnectionError, ComposioToolError):
             raise
         except Exception as exc:
-            warnings.warn(f"Composio MCP files_search failed: {exc}")
-            return []
+            raise ComposioReadError("files_search", exc) from exc
 
     @guarded("drive.upload", target_arg="file_path", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("files_upload"),

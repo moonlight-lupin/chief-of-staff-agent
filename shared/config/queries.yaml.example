@@ -7,6 +7,15 @@
 # configured workspace provider is Microsoft 365, they are AUTO-TRANSLATED to
 # Graph $filter/$search by shared/scripts/query_compiler.py (parse_gmail_query
 # -> compile_query(..., "m365")); no separate m365 query file is needed.
+#
+# COMPOSIO OUTLOOK LIMITATION: the default Microsoft Composio mail_search slug
+# (OUTLOOK_QUERY_EMAILS) does NOT support text search / KQL. Queries that
+# include text constraints (subject:, from: domain phrases, free-text OR
+# groups, etc.) are broadened to filter-only OData (folder + recoverable
+# filters). The daily briefing marks the Gmail section as status: degraded
+# when this happens. Override integrations.workspace.tool_slugs.mail_search to
+# a KQL-capable Composio slug (or set mail_search_supports_text_search: true)
+# when one becomes available.
 
 queries:
   - name: "unread_priority"
