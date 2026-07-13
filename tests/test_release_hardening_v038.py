@@ -169,5 +169,7 @@ def test_docuseal_opener_disables_environment_proxies(monkeypatch):
         handler for handler in opener.handlers
         if isinstance(handler, urllib.request.ProxyHandler)
     ]
-    assert proxy_handlers
-    assert proxy_handlers[0].proxies == {}
+    # build_opener intentionally omits an empty ProxyHandler. Its absence, plus
+    # the lack of proxy_open methods, proves environment proxies are disabled.
+    assert proxy_handlers == []
+    assert not any(hasattr(handler, "proxy_open") for handler in opener.handlers)
