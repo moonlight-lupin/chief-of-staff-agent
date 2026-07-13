@@ -442,16 +442,27 @@ ROUTING_SKILLS = [
 ]
 
 
-def _inject_assistant_name_into_skills(config_path: Path) -> list[str]:
-    """Rewrite the description field of routing skills to include the actual
-    assistant name and company from company.yaml.
+# Default location of the routing skills; module-level so tests can point it at
+# a temporary copy — the test suite must NEVER write to the real SKILL.md files
+# (see tests/conftest.py, which patches this for every test).
+SKILLS_DIR = PLUGIN_ROOT / "skills"
 
-    The skill SKILL.md files ship with ``{assistant_name}`` and ``{company_name}``
-    placeholders in their description lines.  This function replaces them with
-    the concrete values from the just-written company.yaml so the agent's
-    skill-list prompt contains the real name.
 
-    Returns a list of human-readable messages about what was patched.
+def _inject_assistant_name_into_skills(config_path: Path, skills_dir: Path | None = None) -> list[str]:
+    """Render the description field of routing skills with the actual assistant
+    name and company from company.yaml — idempotently.
+
+    The shipped SKILL.md files carry ``{assistant_name}`` / ``{company_name}``
+    placeholders in their ``description:`` line. On first injection the pristine
+    placeholder line is preserved as a ``description_template:`` frontmatter key
+    and ``description:`` is rendered from it. Every later run re-renders from the
+    template, so re-bootstrapping with a DIFFERENT assistant name updates the
+    descriptions instead of silently no-opping.
+
+    Note for git-cloned installs: this rewrites tracked files, so the plugin
+    checkout will show modified SKILL.md files. That is expected — stash or
+    commit them before pulling plugin updates, then re-run bootstrap to
+    re-render. Returns human-readable messages about what was rendered.
     """
     config = _load_yaml(config_path)
     assistant_name = (
@@ -463,21 +474,50 @@ def _inject_assistant_name_into_skills(config_path: Path) -> list[str]:
     if not assistant_name or assistant_name == "Chief of Staff":
         return []  # nothing to inject — still using the default
 
-    skills_dir = PLUGIN_ROOT / "skills"
+    base = skills_dir if skills_dir is not None else SKILLS_DIR
     messages: list[str] = []
     for skill_slug in ROUTING_SKILLS:
-        skill_md = skills_dir / skill_slug / "SKILL.md"
+        skill_md = base / skill_slug / "SKILL.md"
         if not skill_md.exists():
             continue
-        text = skill_md.read_text(encoding="utf-8")
-        original = text
-        # Replace placeholders in the description line only
-        text = text.replace("{assistant_name}", assistant_name)
+        lines = skill_md.read_text(encoding="utf-8").splitlines(keepends=True)
+        desc_idx = None
+        template_idx = None
+        for i, line in enumerate(lines):
+            if line.startswith("description:") and desc_idx is None:
+                desc_idx = i
+            elif line.startswith("description_template:"):
+                template_idx = i
+        if desc_idx is None:
+            continue
+
+        if template_idx is not None:
+            template_line = lines[template_idx]
+            template_value = template_line.split(":", 1)[1]
+        else:
+            # First injection: the current description IS the template.
+            template_value = lines[desc_idx].split(":", 1)[1]
+            if "{assistant_name}" not in template_value:
+                continue  # no placeholder — nothing to render for this skill
+
+        rendered = template_value.replace("{assistant_name}", assistant_name)
         if company_name:
-            text = text.replace("{company_name}", company_name)
-        if text != original:
-            skill_md.write_text(text, encoding="utf-8")
-            messages.append(f"Injected '{assistant_name}' into {skill_slug}/SKILL.md")
+            rendered = rendered.replace("{company_name}", company_name)
+        new_desc_line = "description:" + rendered
+        if not new_desc_line.endswith("\n"):
+            new_desc_line += "\n"
+
+        changed = lines[desc_idx] != new_desc_line
+        lines[desc_idx] = new_desc_line
+        if template_idx is None:
+            template_line = "description_template:" + template_value
+            if not template_line.endswith("\n"):
+                template_line += "\n"
+            lines.insert(desc_idx + 1, template_line)
+            changed = True
+        if changed:
+            skill_md.write_text("".join(lines), encoding="utf-8")
+            messages.append(f"Rendered '{assistant_name}' into {skill_slug}/SKILL.md description")
     return messages
 
 

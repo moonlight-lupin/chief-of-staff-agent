@@ -16,6 +16,26 @@ if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_skill_mutation(monkeypatch, tmp_path):
+    """The test suite must NEVER write to the real skills/ tree.
+
+    bootstrap._inject_assistant_name_into_skills renders assistant names into
+    tracked SKILL.md files; tests that drive bootstrap() end-to-end would
+    otherwise bake test-fixture values ("Ada", "Acme Advisory Pte Ltd") into
+    the repository. Point the module at an empty per-test directory by default;
+    injection-specific tests copy real SKILL.md files into it explicitly.
+    """
+    try:
+        import bootstrap as _bootstrap_mod
+    except ImportError:
+        yield
+        return
+    if hasattr(_bootstrap_mod, "SKILLS_DIR"):
+        monkeypatch.setattr(_bootstrap_mod, "SKILLS_DIR", tmp_path / "skills-sandbox")
+    yield
+
+
 @pytest.fixture
 def tmp_project_dir():
     """Create a temporary project directory with sample YAML data files."""

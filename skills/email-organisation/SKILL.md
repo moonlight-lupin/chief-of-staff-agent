@@ -1,6 +1,6 @@
 ---
 name: email-organisation
-description: "Use when inspecting Gmail labels, proposing or saving a label policy, or when the operator addresses '{assistant_name}' (the CoS assistant name) to check email (e.g. 'Ask {assistant_name} to check my email'). Route all Gmail operations through the company service account configured in company.yaml for {company_name}, NOT the agent's personal email."
+description: "Use when inspecting Gmail labels, proposing or saving a label policy, or when the operator addresses '{assistant_name}' (the CoS assistant name) to check email (e.g. 'Ask {assistant_name} to check my email'). Route all Gmail operations through the company workspace account configured in company.yaml for {company_name}, NOT the agent's personal email."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0

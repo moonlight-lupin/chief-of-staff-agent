@@ -1,6 +1,6 @@
 ---
 name: meeting-prep
-description: "Use when preparing a concise pre-meeting intelligence brief from calendar event metadata, recent Gmail threads, wiki notes, pipeline status, invoices, to-dos, and entity research. When the user addresses '{assistant_name}' (the CoS assistant name) for meeting prep, use the company service account configured in company.yaml for {company_name}, NOT the agent's personal email."
+description: "Use when preparing a concise pre-meeting intelligence brief from calendar event metadata, recent Gmail threads, wiki notes, pipeline status, invoices, to-dos, and entity research. When the user addresses '{assistant_name}' (the CoS assistant name) for meeting prep, use the company workspace account configured in company.yaml for {company_name}, NOT the agent's personal email."
 version: 0.1.0
 author: "moonlight-lupin"
 license: Apache-2.0
