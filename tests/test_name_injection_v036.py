@@ -110,9 +110,12 @@ class TestInjectionIdempotency:
 
 class TestSuiteNeverMutatesRealSkills:
     def test_conftest_guard_points_bootstrap_at_sandbox(self):
-        """The autouse conftest fixture must redirect SKILLS_DIR for every test."""
+        """The autouse conftest fixture must redirect SKILLS_DIR away from the
+        real skills/ tree. (Note: on CI, TMPDIR lives under the workspace, so the
+        sandbox path CAN be under PLUGIN_ROOT — the invariant is that it is not
+        the real skills directory, not where tmp happens to live.)"""
         assert "skills-sandbox" in str(bootstrap.SKILLS_DIR)
-        assert not str(bootstrap.SKILLS_DIR).startswith(str(PLUGIN_ROOT))
+        assert bootstrap.SKILLS_DIR != PLUGIN_ROOT / "skills"
 
     def test_end_to_end_default_dir_is_sandboxed(self, tmp_path):
         """Calling the function WITHOUT skills_dir (as bootstrap() does) must hit
