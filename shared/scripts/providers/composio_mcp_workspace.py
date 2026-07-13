@@ -49,18 +49,23 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "files_upload": "GOOGLEDRIVE_UPLOAD_FILE",
         "files_download": "GOOGLEDRIVE_DOWNLOAD_FILE",
     },
-    # Microsoft (Outlook + OneDrive) slugs are best-effort against Composio's
-    # current catalog — see the confidence notes in docs/SETUP.md. Any slug can
-    # be corrected via integrations.workspace.tool_slugs without a code change.
+    # Microsoft (Outlook + OneDrive) slugs corrected against Composio's LIVE
+    # catalog (v0.3.7 acceptance test, 2026-07). The reads (mail_search,
+    # calendar_list) were execution-verified against an active Outlook connection;
+    # the writes and files_search were confirmed to exist in the catalog via
+    # COMPOSIO_SEARCH_TOOLS / COMPOSIO_GET_TOOL_SCHEMAS. The earlier defaults used
+    # a doubled toolkit prefix (OUTLOOK_OUTLOOK_*, ONE_DRIVE_ONE_DRIVE_*) that no
+    # real slug carries. Any slug is still overridable per-operation via
+    # integrations.workspace.tool_slugs without a code change.
     "microsoft": {
-        "mail_search": "OUTLOOK_OUTLOOK_LIST_MESSAGES",
-        "mail_create_draft": "OUTLOOK_OUTLOOK_CREATE_DRAFT",
-        "calendar_list": "OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW",
-        "calendar_create": "OUTLOOK_OUTLOOK_CREATE_EVENT",
-        "calendar_update": "OUTLOOK_OUTLOOK_UPDATE_EVENT",
-        "files_search": "ONE_DRIVE_ONE_DRIVE_FIND_FILE",
-        "files_upload": "ONE_DRIVE_ONE_DRIVE_UPLOAD_FILE",
-        "files_download": "ONE_DRIVE_ONE_DRIVE_DOWNLOAD_FILE",
+        "mail_search": "OUTLOOK_QUERY_EMAILS",
+        "mail_create_draft": "OUTLOOK_CREATE_DRAFT",
+        "calendar_list": "OUTLOOK_GET_CALENDAR_VIEW",
+        "calendar_create": "OUTLOOK_CALENDAR_CREATE_EVENT",
+        "calendar_update": "OUTLOOK_UPDATE_CALENDAR_EVENT",
+        "files_search": "ONE_DRIVE_SEARCH_ITEMS",
+        "files_upload": "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
+        "files_download": "ONE_DRIVE_DOWNLOAD_FILE",
     },
 }
 
@@ -79,6 +84,17 @@ class ComposioToolError(RuntimeError):
     """
 
 
+class ComposioConnectionError(RuntimeError):
+    """Raised when Composio reports the toolkit has no active connection.
+
+    A missing connection is a HARD, persistent operator problem (unlike a
+    transient rate-limit), so it must NOT be swallowed into an empty successful
+    read — that would falsely certify a capability the mailbox/drive cannot serve.
+    Reads warn with it (so verification honestly fails the check); guarded writes
+    surface it as the ActionResult error.
+    """
+
+
 def _is_unknown_tool_error(err: Any) -> bool:
     """True if a Composio error payload/string looks like an unknown-tool error."""
     text = str(err).lower()
@@ -88,6 +104,27 @@ def _is_unknown_tool_error(err: Any) -> bool:
         "not a valid tool", "invalid tool_slug", "unknown slug",
     )
     return any(n in text for n in needles)
+
+
+def _is_connection_error(err: Any) -> bool:
+    """True if a Composio error payload/string looks like a no-active-connection
+    error (the toolkit was never connected / the OAuth link is still pending)."""
+    text = str(err).lower()
+    needles = (
+        "no active connection", "no connection found", "connection not found",
+        "not connected", "establish a connection", "no connected account",
+    )
+    return any(n in text for n in needles)
+
+
+def _connection_error_message(operation: str, slug: str, err: Any) -> str:
+    op = operation or "<operation>"
+    return (
+        f"Composio reports no active connection for the toolkit backing slug "
+        f"{slug!r} (operation {op!r}): {err}. Connect the toolkit "
+        f"(connect_workspace.py --provider composio --connect <toolkit>) and wait "
+        f"for it to become active, then retry."
+    )
 
 
 def _unknown_tool_message(operation: str, slug: str, err: Any) -> str:
@@ -397,15 +434,32 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         # Extract the actual tool response from results array
         results = result.get("data", {}).get("results", [])
         if results:
-            resp = results[0].get("response", {})
-            if resp.get("successful"):
+            first = results[0] if isinstance(results[0], Mapping) else {}
+            resp = first.get("response", {})
+            if isinstance(resp, Mapping) and resp.get("successful"):
                 return resp.get("data", {})
-            err = resp.get("error", "tool execution failed")
-            # A wrong/renamed slug (a real risk for the best-effort Microsoft
-            # slugs) is surfaced with the slug + override path instead of being
+            # The error can live in results[0]["response"]["error"] (a per-tool
+            # failure) OR directly at results[0]["error"] with NO "response"
+            # wrapper (a batch-level failure envelope — e.g. a tool whose toolkit
+            # has no active connection). Read whichever is present, then fall back
+            # to the batch-level message, so a real failure is never masked as an
+            # empty successful read.
+            err = (
+                (resp.get("error") if isinstance(resp, Mapping) else None)
+                or first.get("error")
+                or result.get("error")
+                or "tool execution failed"
+            )
+            # A wrong/renamed slug (a real risk for the Microsoft slugs) is
+            # surfaced with the slug + override path; a missing connection is a
+            # hard blocker surfaced with the connect guidance — neither is
             # swallowed into an empty read.
             if _is_unknown_tool_error(err):
                 raise ComposioToolError(_unknown_tool_message(operation, tool_slug, err))
+            if _is_connection_error(err):
+                raise ComposioConnectionError(
+                    _connection_error_message(operation, tool_slug, err)
+                )
             return {"error": err, "successful": False}
         return result
 
@@ -516,10 +570,12 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         The query compiler already supports a per-dialect raw override
         (dict model with ``raw={"m365": {...}}``), which passes through here as an
         exact folder/filter/search — the documented raw-passthrough escape hatch.
-        Argument NAMES here are best-effort against Composio's Outlook tool and
-        are the primary thing to confirm on a live connection.
+        Argument NAMES here are live-verified against OUTLOOK_QUERY_EMAILS, which
+        accepts ``folder`` (default inbox), OData ``filter`` and ``top``; a
+        ``search`` key is carried through for slug overrides that support Graph
+        ``$search`` (QUERY_EMAILS ignores it harmlessly).
         """
-        args: dict[str, Any] = {"max_results": max_results, "top": max_results}
+        args: dict[str, Any] = {"top": max_results}
         try:
             compiled = compile_query(query, "m365")
         except Exception:
@@ -562,11 +618,12 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         slug = self._slug_for("calendar_list")
         try:
             if self.family == "microsoft":
+                # OUTLOOK_GET_CALENDAR_VIEW requires snake_case start_datetime/
+                # end_datetime (ISO 8601) and paginates via ``top`` — live-verified.
                 args = {
-                    "startDateTime": f"{start}T00:00:00Z" if "T" not in start else start,
-                    "endDateTime": f"{end}T23:59:59Z" if "T" not in end else end,
+                    "start_datetime": f"{start}T00:00:00Z" if "T" not in start else start,
+                    "end_datetime": f"{end}T23:59:59Z" if "T" not in end else end,
                     "top": 50,
-                    "max_results": 50,
                 }
             else:
                 args = {
@@ -622,10 +679,13 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def files_search(self, query: str, max_results: int = 10) -> list[dict[str, Any]]:
         slug = self._slug_for("files_search")
         try:
-            data = self._execute_composio_tool(
-                slug, {"query": query, "max_results": max_results},
-                operation="files_search",
-            )
+            if self.family == "microsoft":
+                # ONE_DRIVE_SEARCH_ITEMS requires ``q`` (the search text) and
+                # paginates via ``top`` — NOT query/max_results.
+                args = {"q": query, "top": max_results}
+            else:
+                args = {"query": query, "max_results": max_results}
+            data = self._execute_composio_tool(slug, args, operation="files_search")
             return self._normalize_records("files_search", slug, data)
         except Exception as exc:
             warnings.warn(f"Composio MCP files_search failed: {exc}")

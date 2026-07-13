@@ -212,12 +212,15 @@ class TestMicrosoftMailSearch:
         client._mcp_client = mock
         result = client.mail_search("in:inbox is:unread", max_results=7)
         tools = mock.call_tool.call_args[0][1]["tools"]
-        assert tools[0]["tool_slug"] == "OUTLOOK_OUTLOOK_LIST_MESSAGES"
+        # Live-verified slug (OUTLOOK_QUERY_EMAILS): folder-scoped OData query.
+        assert tools[0]["tool_slug"] == "OUTLOOK_QUERY_EMAILS"
         args = tools[0]["arguments"]
         # compile_query('in:inbox is:unread','m365') -> folder inbox + isRead filter
         assert args.get("folder") == "inbox"
         assert "isRead eq false" in (args.get("filter") or "")
         assert args.get("top") == 7
+        # 'max_results' is NOT a real OUTLOOK_QUERY_EMAILS argument — 'top' is.
+        assert "max_results" not in args
         # Records are normalized to the canonical schema shape.
         assert len(result) == 1
         assert result[0]["sender"] == "billing@acme.com"
@@ -250,13 +253,13 @@ class TestUnknownToolError:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
-        mock.call_tool.return_value = _err("Tool not found: OUTLOOK_OUTLOOK_LIST_MESSAGES")
+        mock.call_tool.return_value = _err("Tool not found: OUTLOOK_QUERY_EMAILS")
         client._mcp_client = mock
         with pytest.warns(UserWarning) as record:
             result = client.mail_search("is:unread")
         assert result == []
         text = " ".join(str(w.message) for w in record)
-        assert "OUTLOOK_OUTLOOK_LIST_MESSAGES" in text
+        assert "OUTLOOK_QUERY_EMAILS" in text
         assert "tool_slugs" in text
         assert "mail_search" in text
 
@@ -264,11 +267,11 @@ class TestUnknownToolError:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
-        mock.call_tool.return_value = _err("unknown tool OUTLOOK_OUTLOOK_CREATE_DRAFT")
+        mock.call_tool.return_value = _err("unknown tool OUTLOOK_CREATE_DRAFT")
         client._mcp_client = mock
         res = client.mail_create_draft("a@b.com", "S", "B")
         assert res["success"] is False
-        assert "OUTLOOK_OUTLOOK_CREATE_DRAFT" in res["error"]
+        assert "OUTLOOK_CREATE_DRAFT" in res["error"]
         assert "tool_slugs" in res["error"]
 
     def test_non_unknown_error_is_not_enriched(self, mcp_key, tmp_project):
@@ -282,6 +285,57 @@ class TestUnknownToolError:
         # No warning expected (data returns an error dict, normalized to []).
         result = client.mail_search("is:unread")
         assert result == []
+
+
+class TestNoActiveConnection:
+    """A no-active-connection failure arrives as a BATCH-level envelope
+    (results[0]['error'] with NO 'response' wrapper) — the real shape observed
+    live when one_drive is not connected. It must be surfaced, not swallowed
+    into an empty successful read (which would falsely certify files_read)."""
+
+    @staticmethod
+    def _conn_err(toolkit):
+        return {
+            "data": {
+                "results": [{
+                    "error": (f"No active connection found for toolkit(s) "
+                              f"'{toolkit}' in this session. To fix this, call "
+                              f"COMPOSIO_MANAGE_CONNECTIONS with toolkits=['{toolkit}']"
+                              f" to establish a connection, then retry this tool call."),
+                    "tool_slug": "ONE_DRIVE_SEARCH_ITEMS",
+                    "index": 0,
+                }],
+                "total_count": 1, "success_count": 0, "error_count": 1,
+            },
+            "error": "1 out of 1 tools failed",
+            "successful": False,
+        }
+
+    def test_read_warns_and_returns_empty_on_missing_connection(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = self._conn_err("one_drive")
+        client._mcp_client = mock
+        with pytest.warns(UserWarning) as record:
+            result = client.files_search("a")
+        assert result == []
+        text = " ".join(str(w.message) for w in record)
+        assert "no active connection" in text.lower()
+        assert "one_drive" in text
+
+    def test_execute_raises_connection_error(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioConnectionError,
+        )
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = self._conn_err("one_drive")
+        client._mcp_client = mock
+        with pytest.raises(ComposioConnectionError):
+            client._execute_composio_tool(
+                "ONE_DRIVE_SEARCH_ITEMS", {"q": "a", "top": 1}, operation="files_search"
+            )
 
 
 # ── microsoft normalizers conform to schemas.py ──────────────────────────────
@@ -346,13 +400,22 @@ class TestMicrosoftNormalizers:
         events = client.calendar_list("2026-07-10", "2026-07-11")
         assert events[0]["source"] == "outlook"
         schemas.validate_event(events[0])
-        assert mock.call_tool.call_args[0][1]["tools"][0]["tool_slug"] == "OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW"
+        cal_call = mock.call_tool.call_args[0][1]["tools"][0]
+        # Live-verified slug + snake_case ISO datetime args (NOT camelCase).
+        assert cal_call["tool_slug"] == "OUTLOOK_GET_CALENDAR_VIEW"
+        assert cal_call["arguments"].get("start_datetime")
+        assert cal_call["arguments"].get("end_datetime")
+        assert "startDateTime" not in cal_call["arguments"]
 
         mock.call_tool.return_value = _ok({"value": [GRAPH_FILE]})
         files = client.files_search("NDA")
         assert files[0]["source"] == "onedrive"
         schemas.validate_file(files[0])
-        assert mock.call_tool.call_args[0][1]["tools"][0]["tool_slug"] == "ONE_DRIVE_ONE_DRIVE_FIND_FILE"
+        files_call = mock.call_tool.call_args[0][1]["tools"][0]
+        # Live-catalog slug (ONE_DRIVE_SEARCH_ITEMS) requires 'q', not 'query'.
+        assert files_call["tool_slug"] == "ONE_DRIVE_SEARCH_ITEMS"
+        assert files_call["arguments"].get("q") == "NDA"
+        assert "query" not in files_call["arguments"]
 
 
 # ── capabilities honesty ─────────────────────────────────────────────────────
