@@ -1,5 +1,11 @@
 # Live Verify Results — Composio Microsoft 365 (Outlook + OneDrive)
 
+> **Update (2026-07-13, run 2):** OneDrive has since been connected. All target
+> reads now pass live — `files_read` ✅ and **`read_ready: true`** (exit 0). The
+> OneDrive slug/args fixed in run 1 (`ONE_DRIVE_SEARCH_ITEMS` + `q`/`top`) are now
+> **execution-verified**, not just catalog-verified. Sections below reflect run 2;
+> run-1 history is noted inline where it changed.
+
 **Date:** 2026-07-13
 **Provider:** `composio_microsoft:mcp` (family `microsoft`, mode `mcp`)
 **Endpoint:** `https://connect.composio.dev/mcp`
@@ -23,14 +29,16 @@ nothing created/modified in Outlook or OneDrive.
 | mail_read           | ✅ pass | live Outlook data (count-only below) |
 | mail_folder_scoped  | ✅ pass | `in:inbox` folder scope honored |
 | calendar_read       | ✅ pass | live Outlook calendar data |
-| files_read          | ⛔ fail | **hard blocker** — OneDrive not connected |
+| files_read          | ✅ pass | live OneDrive data (run 1: ⛔ hard blocker — OneDrive was not connected) |
 | mail_tags_list      | ⚠️ fail (optional) | provider has no Outlook categories/tags op; does NOT block read_ready |
 | mail_draft / mail_tag_write / files_write | — not_tested | writes not requested (read-only run) |
 | mail_send / calendar_write | — not_tested | verification never sends/creates |
 
-`read_ready: false` **solely** because of the OneDrive hard blocker. The three target
-read checks the task asked to get passing: **mail_search ✅, calendar_read ✅, files_read
-⛔ (hard blocker, not a code defect)**. `write_ready: partial` (writes not requested).
+**`read_ready: true`** (exit 0). All three target read checks the task asked to get
+passing now pass live: **mail_search ✅, calendar_read ✅, files_read ✅**.
+`write_ready: partial` (writes not requested). In run 1, `files_read` was the sole
+hard blocker (OneDrive unconnected); connecting OneDrive cleared it with no further code
+change — confirming the run-1 slug/arg fixes were correct.
 
 ---
 
@@ -39,7 +47,7 @@ read checks the task asked to get passing: **mail_search ✅, calendar_read ✅,
 | Toolkit    | Active connection? | State |
 |------------|--------------------|-------|
 | `outlook`  | ✅ **yes**         | 1 default account `ACTIVE` (owner identity redacted); a couple of extra accounts left in `initiated`/`initializing` from prior link attempts |
-| `one_drive`| ❌ **no**          | all accounts `initiated` / `initializing` (OAuth link pending — never completed); `active_connections: 0` |
+| `one_drive`| ✅ **yes** (run 2) | now `connected`/`ACTIVE`. In run 1 it was `initiated`/`initializing` only (`active_connections: 0`) and was the sole hard blocker. |
 
 `connect_workspace.py --status` (redacted):
 
@@ -48,10 +56,11 @@ read checks the task asked to get passing: **mail_search ✅, calendar_read ✅,
   "provider": "composio", "mode": "mcp", "mcp_key_set": true,
   "user_id": "serio-vealer", "family": "microsoft",
   "connections": { "outlook": {"status": "connected"},
-                   "one_drive": {"status": "pending"} },
+                   "one_drive": {"status": "connected"} },
   "healthy": true
 }
 ```
+(Run 1 showed `one_drive: {"status": "pending"}` before it was connected.)
 
 `user_id` was resolved by probing `COMPOSIO_MANAGE_CONNECTIONS` and taking the entity
 behind the **active** Outlook connection (account handle `outlook_serio-vealer`).
@@ -73,7 +82,7 @@ Outlook connection.
 |--------------------|-------------------------------------|---------------------------------|--------------|
 | `mail_search`      | `OUTLOOK_OUTLOOK_LIST_MESSAGES`     | `OUTLOOK_QUERY_EMAILS`          | **executed** ✅ returned live messages |
 | `calendar_list`    | `OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW` | `OUTLOOK_GET_CALENDAR_VIEW`     | **executed** ✅ returned live events |
-| `files_search`     | `ONE_DRIVE_ONE_DRIVE_FIND_FILE`     | `ONE_DRIVE_SEARCH_ITEMS`        | catalog (SEARCH_TOOLS primary); exec blocked by no OneDrive conn |
+| `files_search`     | `ONE_DRIVE_ONE_DRIVE_FIND_FILE`     | `ONE_DRIVE_SEARCH_ITEMS`        | **executed** ✅ (run 2) returned live OneDrive item; run 1 was catalog-only |
 | `mail_create_draft`| `OUTLOOK_OUTLOOK_CREATE_DRAFT`      | `OUTLOOK_CREATE_DRAFT`          | schema (GET_TOOL_SCHEMAS) — not executed (read-only) |
 | `calendar_create`  | `OUTLOOK_OUTLOOK_CREATE_EVENT`      | `OUTLOOK_CALENDAR_CREATE_EVENT` | catalog (SEARCH_TOOLS primary) — not executed |
 | `calendar_update`  | `OUTLOOK_OUTLOOK_UPDATE_EVENT`      | `OUTLOOK_UPDATE_CALENDAR_EVENT` | catalog (SEARCH_TOOLS related) — not executed |
@@ -129,37 +138,42 @@ Fix:
   Today→tomorrow window → **6** events. Records Graph-shaped (`id, subject, start, end,
   attendees, organizer, location, onlineMeeting, showAs, isCancelled, ...`) → normalized to
   canonical `schemas.validate_event` shape.
+- **files_read** (`ONE_DRIVE_SEARCH_ITEMS`, run 2): response envelope `{ "@odata.context",
+  "next_page_token", "value": [ ... ] }`. `q="a", top=1` → **1** item. Records Graph
+  DriveItem-shaped (fields: `id, name, file, fileSystemInfo, size, createdDateTime,
+  lastModifiedDateTime, webUrl, parentReference, searchResult, ...`) → normalized to
+  canonical `schemas.validate_file` shape (`id, name, mime_type, modified, link, parents,
+  source="onedrive"`).
 - The `_ms_extract_records` extractor already handled the Graph `value` array, so no
-  extractor change was needed for the two working reads.
+  extractor change was needed for any of the three reads (mail, calendar, files).
 
 ---
 
 ## 5. Remaining failures (raw error text)
 
-### 5a. `files_read` — HARD BLOCKER (OneDrive not connected)
+### 5a. `files_read` — RESOLVED in run 2 (was a hard blocker in run 1)
 
-Raw error surfaced by the fixed code:
+Now passes with live OneDrive data (**1** item, normalized `source="onedrive"`). No code
+change was needed between runs — connecting OneDrive alone cleared it, which confirms the
+run-1 slug (`ONE_DRIVE_SEARCH_ITEMS`) and args (`q`, `top`) were already correct.
+
+For the record, the run-1 hard-blocker error surfaced by the envelope fix was:
 
 ```
 Composio MCP files_search failed: Composio reports no active connection for the toolkit
 backing slug 'ONE_DRIVE_SEARCH_ITEMS' (operation 'files_search'): No active connection
-found for toolkit(s) 'one_drive' in this session. To fix this, call
-COMPOSIO_MANAGE_CONNECTIONS with toolkits=['one_drive'] to establish a connection, then
-retry this tool call.. Connect the toolkit (connect_workspace.py --provider composio
---connect <toolkit>) and wait for it to become active, then retry.
+found for toolkit(s) 'one_drive' in this session. ...
 ```
 
-Underlying batch envelope observed live:
+with the underlying batch envelope:
 
 ```json
 {"data":{"results":[{"error":"No active connection found for toolkit(s) 'one_drive' in this session. ...","tool_slug":"ONE_DRIVE_SEARCH_ITEMS","index":0}],"total_count":1,"success_count":0,"error_count":1},"error":"1 out of 1 tools failed","successful":false}
 ```
 
-**This is not a code defect.** The OneDrive slug (`ONE_DRIVE_SEARCH_ITEMS`) and args
-(`q`, `top`) are now correct; the check will pass once OneDrive has an **active**
-connection. Completing that requires the operator to finish the OAuth link
-(`connect_workspace.py --provider composio --connect one_drive`, then complete the browser
-flow) — outside the scope of a read-only, credential-only run.
+The envelope/`ComposioConnectionError` fix remains valuable: it turns a *future*
+OneDrive/Outlook disconnect into an honest `files_read`/`mail_read` failure instead of a
+false empty-but-clean pass.
 
 ### 5b. `mail_tags_list` — OPTIONAL, does not block read_ready
 
@@ -207,11 +221,16 @@ python -m pytest tests/test_composio_microsoft_v037.py tests/test_composio_mcp_w
   slugs/args + new no-active-connection coverage.
 - `LIVE_VERIFY_RESULTS.md` — this report.
 
-## 8. Handoff / next step for the operator
+## 8. Handoff / status for the operator
 
-1. Connect OneDrive: `CHIEF_OF_STAFF_CONFIG=/tmp/live/company.yaml python
-   shared/scripts/connect_workspace.py --provider composio --connect one_drive`, open the
-   returned link, finish OAuth, wait for `active`.
-2. Re-run `--verify`; `files_read` should then pass (slug/args are already correct) and
-   `read_ready` should flip to `true`.
-3. Outlook mail + calendar reads are already live-verified and require no further action.
+- **All read capabilities are live-verified and passing** (`read_ready: true`): Outlook
+  mail (whole-mailbox + folder-scoped), Outlook calendar, and OneDrive files. Outlook and
+  OneDrive both show `ACTIVE` connections. No further action needed for reads.
+- **Writes were intentionally not exercised** (read-only run). The write slugs/args were
+  corrected to the real catalog names but only schema/catalog-verified, not executed. To
+  certify writes non-destructively, run
+  `CHIEF_OF_STAFF_CONFIG=/tmp/live/company.yaml python
+  shared/scripts/connect_workspace.py --verify-writes` (creates a self-addressed draft +
+  a temp OneDrive file, each cleaned up; never sends mail or creates calendar events).
+- **`mail_tags_list`** remains an expected optional gap (no Outlook categories/tags op in
+  the Composio Microsoft provider); it does not block `read_ready`.
