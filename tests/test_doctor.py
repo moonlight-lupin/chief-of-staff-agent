@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 import urllib.request
@@ -16,7 +17,8 @@ SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from doctor import _check_docuseal, run_checks  # noqa: E402
+import doctor  # noqa: E402
+from doctor import _check_docuseal, _check_skills, _check_workspace_provider, run_checks  # noqa: E402
 
 
 def minimal_config(tmp_path: Path, project_root: Path | None = None) -> Path:
@@ -209,6 +211,63 @@ def test_doctor_refuses_private_ip(monkeypatch, tmp_path):
     assert "link-local" in result.detail.lower() or "metadata" in result.detail.lower()
 
 
+def test_doctor_refuses_hostname_resolving_to_metadata(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+
+    def fake_getaddrinfo(*args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))]
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("metadata-resolving DocuSeal URL must not be opened")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    result = _check_docuseal(
+        False,
+        {
+            "esign": {
+                "provider": "docuseal",
+                "url": "https://docuseal.example.com",
+                "domain": "docuseal.example.com",
+            }
+        },
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "fail"
+    assert "resolves" in result.detail.lower()
+
+
+def test_doctor_refuses_dns_rebinding(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+
+    def fake_getaddrinfo(*args, **kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.10", 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+        ]
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("DNS-rebinding DocuSeal URL must not be opened")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    result = _check_docuseal(
+        False,
+        {
+            "esign": {
+                "provider": "docuseal",
+                "url": "https://docuseal.example.com",
+                "domain": "docuseal.example.com",
+            }
+        },
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "fail"
+    assert "resolves" in result.detail.lower()
+
+
 def test_doctor_probes_https_matching_domain(monkeypatch, tmp_path):
     monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
     monkeypatch.delenv("DOCUSEAL_MCP_TOKEN", raising=False)
@@ -223,11 +282,13 @@ def test_doctor_probes_https_matching_domain(monkeypatch, tmp_path):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(req, timeout=0):
-        opened.append(req)
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, req, timeout=0):
+            opened.append(req)
+            return FakeResponse()
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    monkeypatch.setattr(doctor, "_docuseal_opener", lambda: FakeOpener())
     result = _check_docuseal(
         False,
         {
@@ -247,3 +308,107 @@ def test_doctor_probes_https_matching_domain(monkeypatch, tmp_path):
         "https://docuseal.example.com/api/templates?limit=1",
     ]
     assert opened[1].get_header("X-auth-token") == "secret"
+
+
+def test_doctor_does_not_follow_redirects(monkeypatch, tmp_path):
+    monkeypatch.setenv("DOCUSEAL_API_KEY", "secret")
+    monkeypatch.delenv("DOCUSEAL_MCP_TOKEN", raising=False)
+    opened: list[urllib.request.Request] = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeOpener:
+        def open(self, req, timeout=0):
+            opened.append(req)
+            if req.full_url.endswith("/api/templates?limit=1"):
+                raise urllib.error.HTTPError(
+                    req.full_url,
+                    302,
+                    "Found",
+                    {"Location": "https://evil.example.com/api/templates?limit=1"},
+                    None,
+                )
+            return FakeResponse()
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    monkeypatch.setattr(doctor, "_docuseal_opener", lambda: FakeOpener())
+    result = _check_docuseal(
+        False,
+        {
+            "esign": {
+                "provider": "docuseal",
+                "url": "https://docuseal.example.com",
+                "domain": "docuseal.example.com",
+                "auth_mode": "pro_api_only",
+            }
+        },
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "pass"
+    assert [req.full_url for req in opened] == [
+        "https://docuseal.example.com",
+        "https://docuseal.example.com/api/templates?limit=1",
+    ]
+    assert opened[1].get_header("X-auth-token") == "secret"
+
+
+def test_doctor_microsoft_capability_key(tmp_path):
+    result = _check_workspace_provider(
+        False,
+        {
+            "integrations": {
+                "workspace": {
+                    "provider": "composio",
+                    "mode": "mcp",
+                    "family": "microsoft",
+                }
+            }
+        },
+        tmp_path / "company.yaml",
+    )
+
+    assert result.status == "pass"
+    assert "composio_microsoft:mcp" in result.detail
+    supported = result.detail.split("supported:", 1)[1].split("; unsupported:", 1)[0]
+    unsupported = result.detail.split("; unsupported:", 1)[1]
+    assert "mail.draft" not in supported
+    assert "calendar.create" not in supported
+    assert "mail.draft" in unsupported
+    assert "calendar.create" in unsupported
+
+
+def test_doctor_validates_overlay_when_present(monkeypatch, tmp_path):
+    plugin_root = tmp_path / "plugin"
+    shipped = plugin_root / "skills" / "daily-briefing"
+    overlay = plugin_root / "skills.local" / "daily-briefing"
+    shipped.mkdir(parents=True)
+    overlay.mkdir(parents=True)
+    (plugin_root / "plugin.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "chief-of-staff",
+                "skill_profiles": {"default": {"registered": ["daily-briefing"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (shipped / "SKILL.md").write_text(
+        "---\nname: daily-briefing\ndescription: ok\n---\n# Daily Briefing\n",
+        encoding="utf-8",
+    )
+    (overlay / "SKILL.md").write_text("---\nname: [broken\n---\n# Broken\n", encoding="utf-8")
+
+    monkeypatch.setattr(doctor, "PLUGIN_ROOT", plugin_root)
+    result = _check_skills(False, {}, tmp_path / "company.yaml")
+
+    assert result.status == "fail"
+    assert "daily-briefing" in result.detail
+    assert "invalid" in result.detail

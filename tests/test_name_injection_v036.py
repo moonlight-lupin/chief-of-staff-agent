@@ -94,6 +94,20 @@ class TestInjectionIdempotency:
         for s in bootstrap.ROUTING_SKILLS:
             assert (skills / s / "SKILL.md").read_text() == before[s]
 
+    def test_custom_name_to_default_removes_overlay(self, tmp_path):
+        skills = _skills_copy(tmp_path)
+        bootstrap._inject_assistant_name_into_skills(_write_config(tmp_path, "Ada"), skills_dir=skills)
+        overlay = tmp_path / "skills.local"
+        assert (overlay / "daily-briefing" / "SKILL.md").exists()
+
+        messages = bootstrap._inject_assistant_name_into_skills(
+            _write_config(tmp_path, "Chief of Staff"),
+            skills_dir=skills,
+        )
+
+        assert messages == []
+        assert not overlay.exists()
+
     def test_cos_alias_skips_injection(self, tmp_path):
         skills = _skills_copy(tmp_path)
         for alias in ("cos", "CoS", "chief-of-staff", "CHIEF OF STAFF"):

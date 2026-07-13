@@ -703,7 +703,12 @@ def _m365_fold_to_kql(model: dict[str, Any], now: datetime) -> str:
     return " ".join(tokens)
 
 
-def _compile_m365(model: dict[str, Any], now: datetime) -> dict[str, str | None]:
+def _compile_m365(
+    model: dict[str, Any],
+    now: datetime,
+    *,
+    fold_filter_search: bool = True,
+) -> dict[str, str | None]:
     raw = model.get("raw")
     if isinstance(raw, dict) and "m365" in raw:
         m = raw["m365"]
@@ -722,7 +727,10 @@ def _compile_m365(model: dict[str, Any], now: datetime) -> dict[str, str | None]
 
     # Graph forbids combining $filter + $search on /messages -> fold to KQL.
     # Folder scope is out-of-band, so it is preserved across the fold.
-    if filter_parts and search_parts:
+    # Callers that cannot issue $search (e.g. Composio OUTLOOK_QUERY_EMAILS)
+    # pass fold_filter_search=False so both components remain visible and the
+    # filter-only subset can be preferred.
+    if fold_filter_search and filter_parts and search_parts:
         return {"folder": folder, "filter": None,
                 "search": _m365_fold_to_kql(model, now)}
 
@@ -771,6 +779,8 @@ def compile_query(
     model: str | dict[str, Any],
     dialect: str,
     now: datetime | None = None,
+    *,
+    fold_filter_search: bool = True,
 ) -> Any:
     """Compile a neutral query model into a provider dialect.
 
@@ -778,6 +788,11 @@ def compile_query(
         model: a Gmail-syntax string or a neutral query dict.
         dialect: ``"gmail"`` or ``"m365"``.
         now: reference time for relative-date math (defaults to UTC now).
+        fold_filter_search: when True (default), an m365 compile that would
+            produce both ``$filter`` and ``$search`` folds into a single KQL
+            ``$search`` string (Graph forbids combining them on ``/messages``).
+            Pass False to keep both components so a caller that cannot issue
+            ``$search`` can prefer the filter-only subset.
 
     Returns:
         ``str`` for the gmail dialect; ``{"folder": .., "filter": .., "search": ..}``
@@ -808,7 +823,9 @@ def compile_query(
                 # Empty input -> empty result (allowed; not a translation loss).
                 return _emit({"filter": None, "search": None})
             parsed = parse_gmail_query(model)
-            result = _compile_m365(parsed, now)
+            result = _compile_m365(
+                parsed, now, fold_filter_search=fold_filter_search,
+            )
             if (result.get("folder") is None
                     and result.get("filter") is None
                     and result.get("search") is None):
@@ -817,7 +834,9 @@ def compile_query(
                 )
             return _emit(result)
         if isinstance(model, dict):
-            return _emit(_compile_m365(model, now))
+            return _emit(_compile_m365(
+                model, now, fold_filter_search=fold_filter_search,
+            ))
         raise TypeError(f"query model must be str or dict, got {type(model).__name__}")
 
     raise ValueError(f"unknown dialect: {dialect!r} (expected 'gmail' or 'm365')")

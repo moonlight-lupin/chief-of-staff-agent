@@ -76,7 +76,26 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
 }
 
 
-class ComposioToolError(RuntimeError):
+class ComposioReadError(RuntimeError):
+    """Hard failure on a Composio workspace read (mail/calendar/files).
+
+    Carries the neutral ``operation`` name and the ``original`` error so callers
+    (daily briefing, weekly review) can mark a section unavailable instead of
+    treating an empty list as "no data".
+    """
+
+    def __init__(
+        self,
+        operation: str,
+        original: BaseException,
+        message: str | None = None,
+    ) -> None:
+        self.operation = operation
+        self.original = original
+        super().__init__(message or f"Composio {operation} failed: {original}")
+
+
+class ComposioToolError(ComposioReadError):
     """Raised when Composio reports an unknown/invalid tool slug for an operation.
 
     The message names the failing slug AND the tool_slugs config override path so
@@ -84,16 +103,34 @@ class ComposioToolError(RuntimeError):
     it as the ActionResult error).
     """
 
+    def __init__(self, message: str, *, operation: str = "", original: BaseException | None = None) -> None:
+        # Tool errors are raised with a fully-formed message; stash a sentinel
+        # original so ComposioReadError's contract (operation + original) holds.
+        err = original if original is not None else RuntimeError(message)
+        super().__init__(operation or "<operation>", err, message=message)
 
-class ComposioConnectionError(RuntimeError):
+
+class ComposioConnectionError(ComposioReadError):
     """Raised when Composio reports the toolkit has no active connection.
 
     A missing connection is a HARD, persistent operator problem (unlike a
     transient rate-limit), so it must NOT be swallowed into an empty successful
     read — that would falsely certify a capability the mailbox/drive cannot serve.
-    Reads warn with it (so verification honestly fails the check); guarded writes
+    Reads propagate it (so verification honestly fails the check); guarded writes
     surface it as the ActionResult error.
     """
+
+    def __init__(self, message: str, *, operation: str = "", original: BaseException | None = None) -> None:
+        err = original if original is not None else RuntimeError(message)
+        super().__init__(operation or "<operation>", err, message=message)
+
+
+# Composio Outlook slugs known to ignore Graph ``$search`` / KQL. When the active
+# mail_search slug is in this set, text-search components are dropped (with a
+# warning) and any recoverable OData filter is preferred. Override
+# integrations.workspace.tool_slugs.mail_search to a KQL-capable slug when
+# Composio adds one, or set mail_search_supports_text_search: true.
+_MS_MAIL_SLUGS_WITHOUT_TEXT_SEARCH = frozenset({"OUTLOOK_QUERY_EMAILS"})
 
 
 def _is_connection_error(err: Any) -> bool:
@@ -476,10 +513,16 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             # "connection not found" is not mis-tagged as a slug error.
             if _is_connection_error(err):
                 raise ComposioConnectionError(
-                    _connection_error_message(operation, tool_slug, err)
+                    _connection_error_message(operation, tool_slug, err),
+                    operation=operation or "<operation>",
+                    original=RuntimeError(str(err)),
                 )
             if _is_unknown_tool_error(err):
-                raise ComposioToolError(_unknown_tool_message(operation, tool_slug, err))
+                raise ComposioToolError(
+                    _unknown_tool_message(operation, tool_slug, err),
+                    operation=operation or "<operation>",
+                    original=RuntimeError(str(err)),
+                )
             raise RuntimeError(
                 f"Composio tool execution failed for slug {tool_slug!r} "
                 f"(operation {(operation or '<operation>')!r}): {err}"
@@ -582,9 +625,26 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 args = {"query": query, "max_results": max_results}
             data = self._execute_composio_tool(slug, args, operation="mail_search")
             return self._normalize_records("mail_search", slug, data)
+        except (ComposioConnectionError, ComposioToolError):
+            raise
         except Exception as exc:
             warnings.warn(f"Composio MCP mail_search failed: {exc}")
             return []
+
+    def _mail_search_supports_text_search(self) -> bool:
+        """Whether the active Outlook mail_search slug accepts a KQL/search arg.
+
+        Default OUTLOOK_QUERY_EMAILS ignores ``search``. Operators can:
+          * override ``integrations.workspace.tool_slugs.mail_search`` to a
+            KQL-capable Composio slug (any slug outside the known-ignore set), or
+          * set ``integrations.workspace.mail_search_supports_text_search: true``
+            when the active slug gains search support without a rename.
+        """
+        integrations = self.config.get("integrations", {}) if isinstance(self.config, Mapping) else {}
+        workspace = integrations.get("workspace", {}) if isinstance(integrations, Mapping) else {}
+        if isinstance(workspace, Mapping) and "mail_search_supports_text_search" in workspace:
+            return bool(workspace.get("mail_search_supports_text_search"))
+        return self._slug_for("mail_search") not in _MS_MAIL_SLUGS_WITHOUT_TEXT_SEARCH
 
     def _ms_mail_search_args(self, query: Any, max_results: int) -> dict[str, Any]:
         """Map an incoming query through the m365 query compiler and lay the
@@ -594,13 +654,21 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         (dict model with ``raw={"m365": {...}}``), which passes through here as an
         exact folder/filter/search — the documented raw-passthrough escape hatch.
         Argument NAMES here are live-verified against OUTLOOK_QUERY_EMAILS, which
-        accepts ``folder`` (default inbox), OData ``filter`` and ``top``; a
-        ``search`` key is carried through for slug overrides that support Graph
-        ``$search`` (QUERY_EMAILS ignores it harmlessly).
+        accepts ``folder`` (default inbox), OData ``filter`` and ``top``. That
+        slug ignores ``search``; when text search is required we prefer any
+        recoverable OData filter and warn, unless the operator has pointed
+        ``tool_slugs.mail_search`` at a KQL-capable slug (or set
+        ``mail_search_supports_text_search: true``).
         """
         args: dict[str, Any] = {"top": max_results}
+        slug = self._slug_for("mail_search")
+        supports_search = self._mail_search_supports_text_search()
         try:
-            compiled = compile_query(query, "m365")
+            # When the slug cannot search, disable the filter+search KQL fold so
+            # filter-eligible clauses remain visible and can be preferred.
+            compiled = compile_query(
+                query, "m365", fold_filter_search=supports_search,
+            )
         except Exception as exc:
             # Untranslatable free-text (compiler raises) -> fall back to a plain
             # recent-messages listing, but warn so the operator knows the query
@@ -612,13 +680,42 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 stacklevel=2,
             )
             return args
-        if isinstance(compiled, Mapping):
+        if not isinstance(compiled, Mapping):
+            return args
+
+        has_filter = bool(compiled.get("filter"))
+        has_search = bool(compiled.get("search"))
+
+        if has_search and not supports_search:
+            warnings.warn(
+                f"Composio mail_search slug {slug!r} does not support text "
+                f"search; query will be broadened. Override via "
+                f"integrations.workspace.tool_slugs.mail_search (KQL-capable "
+                f"slug) or set mail_search_supports_text_search: true when "
+                f"available.",
+                UserWarning,
+                stacklevel=2,
+            )
+            if has_filter:
+                warnings.warn(
+                    "text search dropped; keeping OData filter (more specific)",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            # Prefer filter when both are present; otherwise drop search and keep
+            # folder/top only (broadened listing).
             if compiled.get("filter"):
                 args["filter"] = compiled["filter"]
-            if compiled.get("search"):
-                args["search"] = compiled["search"]
             if compiled.get("folder"):
                 args["folder"] = compiled["folder"]
+            return args
+
+        if compiled.get("filter"):
+            args["filter"] = compiled["filter"]
+        if compiled.get("search"):
+            args["search"] = compiled["search"]
+        if compiled.get("folder"):
+            args["folder"] = compiled["folder"]
         return args
 
     @guarded("gmail.draft", target_arg="to", audit_provider="composio",
@@ -664,6 +761,8 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 }
             data = self._execute_composio_tool(slug, args, operation="calendar_list")
             return self._normalize_records("calendar_list", slug, data)
+        except (ComposioConnectionError, ComposioToolError):
+            raise
         except Exception as exc:
             warnings.warn(f"Composio MCP calendar_list failed: {exc}")
             return []
@@ -734,6 +833,8 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 args = {"query": query, "max_results": max_results}
             data = self._execute_composio_tool(slug, args, operation="files_search")
             return self._normalize_records("files_search", slug, data)
+        except (ComposioConnectionError, ComposioToolError):
+            raise
         except Exception as exc:
             warnings.warn(f"Composio MCP files_search failed: {exc}")
             return []

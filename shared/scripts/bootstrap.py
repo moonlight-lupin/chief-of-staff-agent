@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import shutil
@@ -67,8 +68,8 @@ def _merge_preset(args: argparse.Namespace) -> dict[str, Any]:
         preset.setdefault("paths", {})["project_root"] = args.project_root
     if args.business_type:
         preset.setdefault("company", {})["business_type"] = args.business_type
-    # Assistant identity — always written (argparse defaults to "Chief of Staff").
-    # Existing unit tests build args without this attribute, so guard with getattr.
+    # Assistant identity is only written when explicitly provided; otherwise an
+    # existing custom assistant name must survive re-bootstrap.
     assistant_name = getattr(args, "assistant_name", None)
     if assistant_name:
         preset.setdefault("assistant", {})["name"] = assistant_name
@@ -126,10 +127,17 @@ def _placeholder_notice(field: str, reason: str) -> str:
 
 def _identity_overlay(
     args: argparse.Namespace,
+    current_config: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Derive company/user/paths/google identity from the flags and return
     ``(overlay, notices)``. The overlay is deep-merged over the example so the
-    canned Acme values never survive. ``notices`` announces any placeholder."""
+    canned Acme values never survive. ``notices`` announces any placeholder.
+
+    On re-bootstrap, ``current_config`` is the existing company.yaml with CLI /
+    preset values already merged over it. Non-derivable identity fields are only
+    replaced when they still contain the shipped Acme sample, an empty value, or
+    an explicit placeholder; real operator-edited values are preserved.
+    """
     from config_loader import get_default_project_root
 
     overlay: dict[str, Any] = {}
@@ -137,6 +145,10 @@ def _identity_overlay(
     company: dict[str, Any] = {}
     user: dict[str, Any] = {}
     google: dict[str, Any] = {}
+    current = current_config or {}
+    current_company = current.get("company", {}) if isinstance(current.get("company"), Mapping) else {}
+    current_user = current.get("user", {}) if isinstance(current.get("user"), Mapping) else {}
+    current_google = current.get("google", {}) if isinstance(current.get("google"), Mapping) else {}
 
     # paths.project_root: explicit flag > company slug > generic default.
     # wiki_path/staging follow the root so they never keep the Acme sample path.
@@ -174,10 +186,14 @@ def _identity_overlay(
             notices.append(_placeholder_notice("company.website", reason))
         google["delegate_email"] = operator
     else:
-        user["name"] = USER_NAME_PLACEHOLDER
-        user["email"] = USER_EMAIL_PLACEHOLDER
-        company["website"] = WEBSITE_PLACEHOLDER
-        google["delegate_email"] = USER_EMAIL_PLACEHOLDER
+        if _is_identity_sample(current_user.get("name")):
+            user["name"] = USER_NAME_PLACEHOLDER
+        if _is_identity_sample(current_user.get("email")):
+            user["email"] = USER_EMAIL_PLACEHOLDER
+        if _is_identity_sample(current_company.get("website")):
+            company["website"] = WEBSITE_PLACEHOLDER
+        if _is_identity_sample(current_google.get("delegate_email")):
+            google["delegate_email"] = USER_EMAIL_PLACEHOLDER
         notices.append(_placeholder_notice("user.name/user.email", "no --operator given"))
         notices.append(_placeholder_notice("company.website", "no --operator given"))
 
@@ -185,22 +201,17 @@ def _identity_overlay(
     # from bootstrap flags, so leave explicit placeholders rather than leaking
     # sample PII into a fresh install. Only overwrite if the current value is
     # still the Acme sample or empty — preserve operator-edited values on re-bootstrap.
-    _ACME_SENTINELS = {"acme", "acme-advisory", "123456789", "acme-advisory.example"}
-    def _is_sample(value: Any) -> bool:
-        s = str(value or "").strip().lower()
-        return not s or s in _ACME_SENTINELS or "acme" in s
-
-    if _is_sample(company.get("registration_number")):
+    if _is_identity_sample(current_company.get("registration_number")):
         company["registration_number"] = REGISTRATION_PLACEHOLDER
-    if _is_sample(company.get("tax_registration_number")):
+    if _is_identity_sample(current_company.get("tax_registration_number")):
         company["tax_registration_number"] = TAX_REGISTRATION_PLACEHOLDER
-    if _is_sample(company.get("address")):
+    if _is_identity_sample(current_company.get("address")):
         company["address"] = ADDRESS_PLACEHOLDER
-    if _is_sample(company.get("phone")):
+    if _is_identity_sample(current_company.get("phone")):
         company["phone"] = COMPANY_PHONE_PLACEHOLDER
-    if _is_sample(user.get("phone")):
+    if _is_identity_sample(current_user.get("phone")):
         user["phone"] = USER_PHONE_PLACEHOLDER
-    if _is_sample(user.get("role")) or user.get("role") == "Managing Director":
+    if _is_identity_sample(current_user.get("role")):
         user["role"] = USER_ROLE_PLACEHOLDER
     notices.append(_placeholder_notice(
         "company.registration_number/tax_registration_number/address/phone",
@@ -214,29 +225,36 @@ def _identity_overlay(
     # possible; always placeholder the Drive root (cannot be inferred).
     usable_domain = domain if domain and domain not in FREEMAIL_DOMAINS else ""
     if usable_domain:
-        google["domain"] = usable_domain
+        if operator or _is_identity_sample(current_google.get("domain")):
+            google["domain"] = usable_domain
         alias = company_slug or usable_domain.split(".", 1)[0]
-        google["account_alias"] = alias
-        google["service_account_path"] = (
-            f"~/.hermes/secrets/{alias}-google-service-account.json"
-        )
-    else:
-        google["domain"] = GOOGLE_DOMAIN_PLACEHOLDER
-        google["account_alias"] = company_slug or GOOGLE_ALIAS_PLACEHOLDER
-        if company_slug:
+        if operator or company_slug or _is_identity_sample(current_google.get("account_alias")):
+            google["account_alias"] = alias
+        if operator or company_slug or _is_identity_sample(current_google.get("service_account_path")):
             google["service_account_path"] = (
-                f"~/.hermes/secrets/{company_slug}-google-service-account.json"
+                f"~/.hermes/secrets/{alias}-google-service-account.json"
             )
-        else:
-            google["service_account_path"] = GOOGLE_SA_PATH_PLACEHOLDER
+    else:
+        if operator or _is_identity_sample(current_google.get("domain")):
+            google["domain"] = GOOGLE_DOMAIN_PLACEHOLDER
+        if company_slug or _is_identity_sample(current_google.get("account_alias")):
+            google["account_alias"] = company_slug or GOOGLE_ALIAS_PLACEHOLDER
+        if company_slug or _is_identity_sample(current_google.get("service_account_path")):
+            if company_slug:
+                google["service_account_path"] = (
+                    f"~/.hermes/secrets/{company_slug}-google-service-account.json"
+                )
+            else:
+                google["service_account_path"] = GOOGLE_SA_PATH_PLACEHOLDER
         notices.append(_placeholder_notice(
             "google.domain",
             "freemail/no --operator — set your Workspace domain",
         ))
-    google["drive_root_folder_id"] = GOOGLE_DRIVE_ROOT_PLACEHOLDER
-    notices.append(_placeholder_notice(
-        "google.drive_root_folder_id", "set your Drive root folder id",
-    ))
+    if _is_identity_sample(current_google.get("drive_root_folder_id")):
+        google["drive_root_folder_id"] = GOOGLE_DRIVE_ROOT_PLACEHOLDER
+        notices.append(_placeholder_notice(
+            "google.drive_root_folder_id", "set your Drive root folder id",
+        ))
 
     # delivery.home_chat_id: do not unconditionally wipe — preserve real values.
     # The Acme sample sentinel (123456789) is scrubbed in _write_config only
@@ -247,6 +265,47 @@ def _identity_overlay(
     overlay["user"] = user
     overlay["google"] = google
     return overlay, notices
+
+
+_IDENTITY_SAMPLE_VALUES = {
+    "123456789",
+    "202400001a",
+    "m90000001a",
+    "1 raffles place, #20-01, singapore 048616",
+    "+65 6123 4567",
+    "+65 9123 4567",
+    "https://www.acme-advisory.example",
+    "acme-advisory.example",
+    "alicia tan",
+    "alicia@acme-advisory.example",
+    "managing director",
+    "~/.hermes/secrets/acme-google-service-account.json",
+    "acme-advisory",
+    "1a2b3c4d5e6f_example_root_id",
+    USER_NAME_PLACEHOLDER.lower(),
+    USER_EMAIL_PLACEHOLDER.lower(),
+    USER_ROLE_PLACEHOLDER.lower(),
+    USER_PHONE_PLACEHOLDER.lower(),
+    WEBSITE_PLACEHOLDER.lower(),
+    REGISTRATION_PLACEHOLDER.lower(),
+    TAX_REGISTRATION_PLACEHOLDER.lower(),
+    ADDRESS_PLACEHOLDER.lower(),
+    COMPANY_PHONE_PLACEHOLDER.lower(),
+    GOOGLE_DOMAIN_PLACEHOLDER.lower(),
+    GOOGLE_ALIAS_PLACEHOLDER.lower(),
+    GOOGLE_SA_PATH_PLACEHOLDER.lower(),
+    GOOGLE_DRIVE_ROOT_PLACEHOLDER.lower(),
+}
+
+
+def _is_identity_sample(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered.startswith("<") and lowered.endswith(">"):
+        return True
+    return lowered in _IDENTITY_SAMPLE_VALUES or "acme-advisory" in lowered
 
 
 def _next_steps(provider: str | None) -> list[str]:
@@ -492,6 +551,17 @@ def _deep_update(base: dict[str, Any], updates: Mapping[str, Any]) -> dict[str, 
     return base
 
 
+def _current_config_with_preset(preset: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the current live/example config with explicit preset values merged."""
+    path = CONFIG_DIR / "company.yaml"
+    if path.exists():
+        data = _load_yaml(path)
+    else:
+        example = CONFIG_DIR / "company.yaml.example"
+        data = _load_yaml(example) if example.exists() else {}
+    return _deep_update(data, copy.deepcopy(dict(preset)))
+
+
 def _write_config(preset: Mapping[str, Any]) -> Path:
     path = CONFIG_DIR / "company.yaml"
     if not path.exists():
@@ -506,6 +576,7 @@ def _write_config(preset: Mapping[str, Any]) -> Path:
     google = data.setdefault("google", {})
     paths = data.setdefault("paths", {})
     delivery = data.setdefault("delivery", {})
+    assistant = data.setdefault("assistant", {})
     # Scrub the Acme sample home_chat_id sentinel only; preserve real values.
     if str(delivery.get("home_chat_id", "")).strip() == "123456789":
         delivery["home_chat_id"] = None
@@ -522,6 +593,7 @@ def _write_config(preset: Mapping[str, Any]) -> Path:
     company.setdefault("financial_year_end", "31 Dec")
     company.setdefault("currency", "SGD")
     company.setdefault("business_type", "professional_services")
+    assistant.setdefault("name", "Chief of Staff")
     from config_loader import get_hermes_home, get_default_project_root
     _home = str(get_hermes_home())
     google.setdefault("service_account_path", f"{_home}/google_service_account.json")
@@ -647,15 +719,17 @@ def _inject_assistant_name_into_skills(
         else ""
     )
     company_name = config.get("company", {}).get("name", "") if isinstance(config.get("company"), dict) else ""
-    if is_default_assistant_name(assistant_name):
-        return []  # nothing to inject — still using the default
-    assistant_name = _validate_routing_name(assistant_name, "assistant.name")
-    company_name = _validate_routing_name(company_name, "company.name") if company_name else "your organization"
-
     base = skills_dir if skills_dir is not None else SKILLS_DIR
     overlay = rendered_dir if rendered_dir is not None else (
         RENDERED_SKILLS_DIR if skills_dir is None else base.parent / "skills.local"
     )
+    if is_default_assistant_name(assistant_name):
+        if overlay.exists():
+            shutil.rmtree(overlay)
+        return []  # nothing to inject — still using the default
+    assistant_name = _validate_routing_name(assistant_name, "assistant.name")
+    company_name = _validate_routing_name(company_name, "company.name") if company_name else "your organization"
+
     messages: list[str] = []
     for skill_slug in ROUTING_SKILLS:
         skill_md = base / skill_slug / "SKILL.md"
@@ -736,7 +810,8 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     initial = run_checks(fix=True, config=None)
     copied = _copy_examples()
     preset = _merge_preset(args)
-    identity_overlay, identity_notices = _identity_overlay(args)
+    current_config = _current_config_with_preset(preset)
+    identity_overlay, identity_notices = _identity_overlay(args, current_config)
     if identity_overlay:
         _deep_update(preset, identity_overlay)
     overlay, required_env, provider_notices, provider_next = _provider_overlay(args)
@@ -792,9 +867,9 @@ def _main(argv: list[str] | None = None) -> int:
         help="Operator's display name (default: derived from the operator email local-part)",
     )
     parser.add_argument(
-        "--assistant-name", default="Chief of Staff",
+        "--assistant-name", default=None,
         help="Name for this assistant, written to assistant.name in company.yaml "
-             "(default: 'Chief of Staff'). Address it by name so requests route to "
+             "when provided. Defaults to 'Chief of Staff' on first install. Address it by name so requests route to "
              "these skills instead of generic handlers.",
     )
     parser.add_argument("--project-root", help="Project root directory")

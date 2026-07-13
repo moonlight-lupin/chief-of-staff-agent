@@ -271,7 +271,22 @@ class TestMicrosoftMailSearch:
         assert mock.call_tool.call_args[0][1]["tools"][0]["tool_slug"] == "OUTLOOK_CUSTOM_SEARCH"
 
     def test_raw_passthrough_via_dict_model(self, mcp_key, tmp_project):
+        # OUTLOOK_QUERY_EMAILS ignores search — raw search is dropped with a
+        # warning; folder is still applied.
         client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"value": []})
+        client._mcp_client = mock
+        query = {"raw": {"m365": {"folder": "sentitems", "filter": None,
+                                  "search": "subject:contract"}}}
+        with pytest.warns(UserWarning, match="does not support text search"):
+            client.mail_search(query)
+        args = mock.call_tool.call_args[0][1]["tools"][0]["arguments"]
+        assert args["folder"] == "sentitems"
+        assert "search" not in args
+
+    def test_raw_passthrough_keeps_search_when_slug_supports_kql(self, mcp_key, tmp_project):
+        client = self._client(tool_slugs={"mail_search": "OUTLOOK_KQL_SEARCH"})
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"value": []})
         client._mcp_client = mock
@@ -391,16 +406,17 @@ class TestMicrosoftWriteArgs:
 
 
 class TestUnknownToolError:
-    def test_read_warns_with_slug_and_override_path(self, mcp_key, tmp_project):
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+    def test_read_propagates_unknown_tool_error(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioToolError,
+        )
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
         mock.call_tool.return_value = _err("Tool not found: OUTLOOK_QUERY_EMAILS")
         client._mcp_client = mock
-        with pytest.warns(UserWarning) as record:
-            result = client.mail_search("is:unread")
-        assert result == []
-        text = " ".join(str(w.message) for w in record)
+        with pytest.raises(ComposioToolError) as ei:
+            client.mail_search("is:unread")
+        text = str(ei.value)
         assert "OUTLOOK_QUERY_EMAILS" in text
         assert "tool_slugs" in text
         assert "mail_search" in text
@@ -502,17 +518,18 @@ class TestNoActiveConnection:
             "successful": False,
         }
 
-    def test_read_warns_and_returns_empty_on_missing_connection(self, mcp_key, tmp_project):
-        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+    def test_read_propagates_connection_error(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioConnectionError,
+        )
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
         mock.call_tool.return_value = self._conn_err("one_drive")
         client._mcp_client = mock
-        with pytest.warns(UserWarning) as record:
-            result = client.files_search("a")
-        assert result == []
-        text = " ".join(str(w.message) for w in record)
-        assert "no active connection" in text.lower()
+        with pytest.raises(ComposioConnectionError) as ei:
+            client.files_search("a")
+        text = str(ei.value).lower()
+        assert "no active connection" in text
         assert "one_drive" in text
 
     def test_execute_raises_connection_error(self, mcp_key, tmp_project):

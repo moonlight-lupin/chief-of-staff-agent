@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import socket
 import sys
 import urllib.error
 from pathlib import Path
@@ -208,6 +209,11 @@ class TestEsignMainMessaging:
 # ── Doctor _check_docuseal tests ─────────────────────────────────────────
 
 class TestCheckDocuseal:
+    @pytest.fixture(autouse=True)
+    def _mock_dns(self, monkeypatch):
+        """Mock DNS resolution so _unsafe_docuseal_url_reason doesn't fail on example.com."""
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+
     def _config(self, **esign_overrides):
         esign = {
             "provider": "docuseal",
@@ -236,75 +242,95 @@ class TestCheckDocuseal:
         assert result.status == "warn"
 
     @patch("os.getenv")
-    @patch("urllib.request.urlopen")
-    def test_pass_with_both_tokens_and_valid_api_key(self, mock_urlopen, mock_getenv):
+    @patch("doctor._docuseal_opener")
+    def test_pass_with_both_tokens_and_valid_api_key(self, mock_opener, mock_getenv):
         mock_getenv.side_effect = lambda k, d="": {
             "DOCUSEAL_API_KEY": "valid-key",
             "DOCUSEAL_MCP_TOKEN": "valid-mcp",
         }.get(k, d)
-        mock_urlopen.return_value = self._mock_response(200)
+        class _FakeOpen:
+            def open(self, req, timeout=0):
+                resp = MagicMock()
+                resp.status = 200
+                resp.__enter__ = lambda s: s
+                resp.__exit__ = lambda *a: False
+                return resp
+        mock_opener.return_value = _FakeOpen()
         data = self._config()
         result = doctor._check_docuseal(False, data, Path("/tmp"))
         assert result.status == "pass"
         assert "API key OK" in result.detail
 
     @patch("os.getenv")
-    @patch("urllib.request.urlopen")
-    def test_fail_on_invalid_api_key_401(self, mock_urlopen, mock_getenv):
+    @patch("doctor._docuseal_opener")
+    def test_fail_on_invalid_api_key_401(self, mock_opener, mock_getenv):
         mock_getenv.side_effect = lambda k, d="": {
             "DOCUSEAL_API_KEY": "bad-key",
             "DOCUSEAL_MCP_TOKEN": "valid-mcp",
         }.get(k, d)
 
         call_count = [0]
+        class _FakeOpen:
+            def open(self, req, timeout=0):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    resp = MagicMock(); resp.status = 200
+                    resp.__enter__ = lambda s: s; resp.__exit__ = lambda *a: False
+                    return resp
+                raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b""))
 
-        def fake_urlopen(req, timeout=None):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return self._mock_response(200)
-            raise urllib.error.HTTPError(
-                req.full_url, 401, "Unauthorized", {}, io.BytesIO(b"")
-            )
-
-        mock_urlopen.side_effect = fake_urlopen
+        mock_opener.return_value = _FakeOpen()
         data = self._config()
         result = doctor._check_docuseal(False, data, Path("/tmp"))
         assert result.status == "fail"
         assert "401" in result.detail
 
     @patch("os.getenv")
-    @patch("urllib.request.urlopen")
-    def test_fail_missing_mcp_token_in_auto_mode(self, mock_urlopen, mock_getenv):
+    @patch("doctor._docuseal_opener")
+    def test_fail_missing_mcp_token_in_auto_mode(self, mock_opener, mock_getenv):
         mock_getenv.side_effect = lambda k, d="": {
             "DOCUSEAL_API_KEY": "valid-key",
             "DOCUSEAL_MCP_TOKEN": "",  # missing
         }.get(k, d)
-        mock_urlopen.return_value = self._mock_response(200)
+        class _FakeOpen:
+            def open(self, req, timeout=0):
+                resp = MagicMock(); resp.status = 200
+                resp.__enter__ = lambda s: s; resp.__exit__ = lambda *a: False
+                return resp
+        mock_opener.return_value = _FakeOpen()
         data = self._config(auth_mode="auto")
         result = doctor._check_docuseal(False, data, Path("/tmp"))
         assert result.status == "fail"
         assert "DOCUSEAL_MCP_TOKEN" in result.detail
 
     @patch("os.getenv")
-    @patch("urllib.request.urlopen")
-    def test_pro_api_only_mode_only_needs_api_key(self, mock_urlopen, mock_getenv):
+    @patch("doctor._docuseal_opener")
+    def test_pro_api_only_mode_only_needs_api_key(self, mock_opener, mock_getenv):
         mock_getenv.side_effect = lambda k, d="": {
             "DOCUSEAL_API_KEY": "valid-key",
             "DOCUSEAL_MCP_TOKEN": "",  # not required in pro_api_only
         }.get(k, d)
-        mock_urlopen.return_value = self._mock_response(200)
+        class _FakeOpen:
+            def open(self, req, timeout=0):
+                resp = MagicMock(); resp.status = 200
+                resp.__enter__ = lambda s: s; resp.__exit__ = lambda *a: False
+                return resp
+        mock_opener.return_value = _FakeOpen()
         data = self._config(auth_mode="pro_api_only")
         result = doctor._check_docuseal(False, data, Path("/tmp"))
         assert result.status == "pass"
 
     @patch("os.getenv")
-    @patch("urllib.request.urlopen")
-    def test_warn_on_network_error(self, mock_urlopen, mock_getenv):
+    @patch("doctor._docuseal_opener")
+    def test_warn_on_network_error(self, mock_opener, mock_getenv):
         mock_getenv.side_effect = lambda k, d="": {
             "DOCUSEAL_API_KEY": "valid-key",
             "DOCUSEAL_MCP_TOKEN": "valid-mcp",
         }.get(k, d)
-        mock_urlopen.side_effect = ConnectionError("refused")
+        class _FakeOpen:
+            def open(self, req, timeout=0):
+                raise ConnectionError("refused")
+        mock_opener.return_value = _FakeOpen()
         data = self._config()
         result = doctor._check_docuseal(False, data, Path("/tmp"))
         assert result.status == "warn"

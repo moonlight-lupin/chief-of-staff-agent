@@ -298,7 +298,37 @@ def wrap_source(name: str, collector: Callable[[Any, Path], list[dict[str, Any]]
         return {"status": "ok", "hash": stable_hash(items), "items": items}
     except Exception as exc:
         err = concise_error(exc)
-        return {"status": "failed", "hash": stable_hash({"error": err}), "items": [], "error": err}
+        # Hard Composio failures (disconnected toolkit, unknown slug) must not
+        # look like an empty successful read — mark the section unavailable.
+        status = "failed"
+        try:
+            from providers.composio_mcp_workspace import ComposioReadError  # type: ignore
+            if isinstance(exc, ComposioReadError):
+                status = "unavailable"
+        except Exception:
+            pass
+        return {"status": status, "hash": stable_hash({"error": err}), "items": [], "error": err}
+
+
+def render_source(title: str, icon: str, source: dict[str, Any], item_formatter: Callable[[dict[str, Any]], str], limit: int = 8) -> list[str]:
+    status = source.get("status")
+    if status == "unavailable":
+        return [f"{icon} {title}: unavailable (error: {source.get('error')})"]
+    if status == "degraded":
+        return [f"{icon} {title}: degraded (error: {source.get('error')})"]
+    if status != "ok":
+        return [f"{icon} {title}: failed (error: {source.get('error')})"]
+    items = source.get("items", [])
+    suffix = " — no material change" if source.get("no_material_change") else ""
+    lines = [f"{icon} {title}: {len(items)} item(s){suffix}"]
+    for item in items[:limit]:
+        if isinstance(item, dict):
+            lines.append(f"  - {item_formatter(item)}")
+        else:
+            lines.append(f"  - {item}")
+    if len(items) > limit:
+        lines.append(f"  - … {len(items) - limit} more")
+    return lines
 
 
 def build_urgent(sources: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -385,22 +415,6 @@ def collect(config_path: str | None, workspace_input: dict[str, Any] | None = No
         "urgent": build_urgent(sources),
         "no_change": bool(previous_hashes) and all(previous_hashes.get(n) == current_hashes.get(n) for n in SOURCE_NAMES),
     }
-
-
-def render_source(title: str, icon: str, source: dict[str, Any], item_formatter: Callable[[dict[str, Any]], str], limit: int = 8) -> list[str]:
-    if source.get("status") != "ok":
-        return [f"{icon} {title}: failed (error: {source.get('error')})"]
-    items = source.get("items", [])
-    suffix = " — no material change" if source.get("no_material_change") else ""
-    lines = [f"{icon} {title}: {len(items)} item(s){suffix}"]
-    for item in items[:limit]:
-        if isinstance(item, dict):
-            lines.append(f"  - {item_formatter(item)}")
-        else:
-            lines.append(f"  - {item}")
-    if len(items) > limit:
-        lines.append(f"  - … {len(items) - limit} more")
-    return lines
 
 
 def render(briefing: dict[str, Any]) -> str:

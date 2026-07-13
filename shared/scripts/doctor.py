@@ -16,6 +16,7 @@ import os
 import ipaddress
 import py_compile
 import shutil
+import socket
 import subprocess
 import sys
 import urllib.request
@@ -164,8 +165,45 @@ def _check_plugin_root(fix: bool, data: dict[str, Any] | None, config_path: Path
 
 def _check_skills(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     skills = get_all_skills()
-    missing = [s for s in skills if not (PLUGIN_ROOT / "skills" / s / "SKILL.md").exists()]
-    return CheckResult("skills", "fail" if missing else "pass", f"missing: {missing}" if missing else f"all {len(skills)} skills present")
+    missing: list[str] = []
+    invalid: list[str] = []
+    for skill in skills:
+        path = _effective_skill_path(skill)
+        if not path.exists():
+            missing.append(skill)
+            continue
+        try:
+            _load_skill_frontmatter(path)
+        except Exception as exc:
+            invalid.append(f"{skill}: {exc}")
+    if missing or invalid:
+        detail_parts = []
+        if missing:
+            detail_parts.append(f"missing: {missing}")
+        if invalid:
+            detail_parts.append(f"invalid: {invalid}")
+        return CheckResult("skills", "fail", "; ".join(detail_parts))
+    return CheckResult("skills", "pass", f"all {len(skills)} effective skills present")
+
+
+def _effective_skill_path(skill: str) -> Path:
+    overlay = PLUGIN_ROOT / "skills.local" / skill / "SKILL.md"
+    if overlay.exists():
+        return overlay
+    return PLUGIN_ROOT / "skills" / skill / "SKILL.md"
+
+
+def _load_skill_frontmatter(path: Path) -> Mapping[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        raise ValueError("missing YAML frontmatter")
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        raise ValueError("malformed YAML frontmatter")
+    loaded = yaml.safe_load(parts[1])
+    if not isinstance(loaded, Mapping):
+        raise ValueError("frontmatter is not a mapping")
+    return loaded
 
 
 def _check_company_yaml(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
@@ -398,9 +436,10 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     unsafe_reason = _unsafe_docuseal_url_reason(url, esign)
     if unsafe_reason:
         return CheckResult("docuseal", "fail", unsafe_reason)
+    opener = _docuseal_opener()
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "chief-of-staff-doctor/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec - configured URL health check
+        with opener.open(req, timeout=10) as resp:  # nosec - configured URL health check
             ok = resp.status < 500
         detail = f"HTTP {resp.status}"
         # Check credential completeness based on auth_mode.
@@ -423,7 +462,7 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
                     f"{url}/api/templates?limit=1",
                     headers={"X-Auth-Token": api_key, "User-Agent": "chief-of-staff-doctor/1.0"},
                 )
-                with urllib.request.urlopen(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
+                with opener.open(api_req, timeout=10) as api_resp:  # nosec - configured URL health check
                     detail += f", API key OK"
             except urllib.error.HTTPError as api_exc:
                 if api_exc.code in (401, 403):
@@ -436,6 +475,15 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
         return CheckResult("docuseal", "warn", f"DocuSeal HTTP {exc.code}: {exc.reason}")
     except Exception as exc:
         return CheckResult("docuseal", "warn", f"DocuSeal ping failed: {exc}")
+
+
+class _NoDocuSealRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _docuseal_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_NoDocuSealRedirectHandler)
 
 
 def _unsafe_docuseal_url_reason(url: str, esign: Mapping[str, Any]) -> str | None:
@@ -456,6 +504,16 @@ def _unsafe_docuseal_url_reason(url: str, esign: Mapping[str, Any]) -> str | Non
         address = None
     if address and _is_blocked_docuseal_address(address):
         return "refusing DocuSeal probe: esign.url points to link-local or metadata address"
+    if address is None:
+        try:
+            resolved = {
+                ipaddress.ip_address(info[4][0])
+                for info in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            }
+        except OSError as exc:
+            return f"refusing DocuSeal probe: could not resolve esign.url host: {exc}"
+        if any(_is_blocked_docuseal_address(addr) for addr in resolved):
+            return "refusing DocuSeal probe: esign.url host resolves to link-local or metadata address"
     return None
 
 
@@ -535,22 +593,34 @@ def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_pat
     try:
         sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
         from workspace_capabilities import get_capabilities, unsupported_actions
-        if provider == "composio":
-            cap_provider = f"composio:{mode}"
-        else:
-            cap_provider = provider
+        cap_provider = _capability_provider_for_workspace(workspace)
         caps = get_capabilities(cap_provider)
         # Fallback to bare provider if mode-specific caps not found
         if not caps:
             caps = get_capabilities(provider)
         supported = [k for k, v in caps.items() if v]
         unsupported = unsupported_actions(cap_provider) or unsupported_actions(provider)
-        detail = f"{provider} {mode} — supported: {', '.join(supported)}"
+        detail = f"{provider} {mode} ({cap_provider}) — supported: {', '.join(supported)}"
         if unsupported:
             detail += f"; unsupported: {', '.join(unsupported)}"
     except Exception:
         detail = f"{provider} {mode}"
     return CheckResult("workspace_provider", "pass", detail)
+
+
+def _capability_provider_for_workspace(workspace: Mapping[str, Any]) -> str:
+    provider = str(workspace.get("provider", "google_api") or "google_api")
+    mode = str(workspace.get("mode", "direct") or "direct")
+    if provider != "composio":
+        return provider
+    try:
+        from composio_family import _resolve_composio_family
+        family = _resolve_composio_family(workspace, warn=False)
+    except Exception:
+        family = "google"
+    if family == "microsoft":
+        return f"composio_microsoft:{mode}"
+    return f"composio:{mode}"
 
 
 def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
@@ -854,11 +924,12 @@ def _check_capability_report(fix: bool, data: dict[str, Any] | None, config_path
     provider = str(workspace.get("provider", "google_api") or "google_api")
     try:
         from workspace_capabilities import get_capabilities, unsupported_actions, all_actions
-        caps = get_capabilities(provider)
-        unsupported = unsupported_actions(provider)
+        cap_provider = _capability_provider_for_workspace(workspace)
+        caps = get_capabilities(cap_provider)
+        unsupported = unsupported_actions(cap_provider)
         total = len(all_actions())
         supported = total - len(unsupported)
-        details = [f"provider: {provider}", f"capabilities: {supported}/{total} supported"]
+        details = [f"provider: {cap_provider}", f"capabilities: {supported}/{total} supported"]
         if unsupported:
             details.append(f"unsupported: {', '.join(unsupported[:5])}{'…' if len(unsupported) > 5 else ''}")
         return CheckResult("capabilities", "pass", "; ".join(details))

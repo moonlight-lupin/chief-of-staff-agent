@@ -215,6 +215,13 @@ integrations:
     #   files_search: ONE_DRIVE_SEARCH_ITEMS
     #   files_upload: ONE_DRIVE_ONEDRIVE_UPLOAD_FILE
     #   files_download: ONE_DRIVE_DOWNLOAD_FILE
+    #
+    # OUTLOOK_QUERY_EMAILS ignores Graph $search / KQL. When a Composio Outlook
+    # slug that supports KQL search becomes available, point mail_search at it
+    # (and optionally set mail_search_supports_text_search: true). Until then,
+    # bundled queries that need text search keep any recoverable OData filter
+    # and warn that search was dropped.
+    # mail_search_supports_text_search: false
     tools_allowlist:
       gmail:
         read:

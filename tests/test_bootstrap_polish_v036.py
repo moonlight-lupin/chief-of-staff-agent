@@ -47,7 +47,7 @@ def _make_args(**overrides):
     including the new --operator-name / --assistant-name flags."""
     base = dict(
         company=None, jurisdiction=None, operator=None, operator_name=None,
-        assistant_name="Chief of Staff", project_root=None,
+        assistant_name=None, project_root=None,
         business_type=None, config=None, json=False,
         workspace_provider=None, m365_auth="client_credentials",
         tenant_id=None, client_id=None, user_principal=None,
@@ -204,6 +204,48 @@ class TestIdentityWriteThrough:
         result = bootstrap.bootstrap(_make_args(project_root=str(tmp_path / "proj")))
         joined = " ".join(result["identity_notices"])
         assert "placeholder — edit company.yaml" in joined
+
+    def test_re_bootstrap_preserves_real_config(self, tmp_config_dir, tmp_path):
+        live = tmp_config_dir / "company.yaml"
+        live.write_text(yaml.safe_dump({
+            "company": {
+                "name": "Real Ops Pte Ltd",
+                "jurisdiction": "SG",
+                "registration_number": "202612345A",
+                "tax_registration_number": "M91234567X",
+                "address": "88 Market Street, Singapore 048948",
+                "phone": "+65 6999 0000",
+                "website": "https://real.example",
+            },
+            "user": {
+                "name": "Rina Tan",
+                "role": "Founder",
+                "email": "rina@real.example",
+                "phone": "+65 9888 7777",
+            },
+            "assistant": {"name": "Ada"},
+            "google": {
+                "domain": "real.example",
+                "delegate_email": "rina@real.example",
+                "account_alias": "real",
+                "service_account_path": "~/.hermes/secrets/real-google-service-account.json",
+                "drive_root_folder_id": "real-drive-root-123",
+            },
+            "paths": {"project_root": str(tmp_path / "existing")},
+            "delivery": {"home_chat_id": "chat-real-456"},
+        }), encoding="utf-8")
+
+        result = bootstrap.bootstrap(_make_args(project_root=str(tmp_path / "proj")))
+        data = _load(result["config"])
+
+        assert data["company"]["registration_number"] == "202612345A"
+        assert data["company"]["tax_registration_number"] == "M91234567X"
+        assert data["company"]["address"] == "88 Market Street, Singapore 048948"
+        assert data["company"]["phone"] == "+65 6999 0000"
+        assert data["user"]["role"] == "Founder"
+        assert data["user"]["phone"] == "+65 9888 7777"
+        assert data["google"]["drive_root_folder_id"] == "real-drive-root-123"
+        assert data["delivery"]["home_chat_id"] == "chat-real-456"
 
 # ── Provider-gated Next steps (audit #3) ────────────────────────────────────
 
