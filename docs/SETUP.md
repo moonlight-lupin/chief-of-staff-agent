@@ -198,16 +198,18 @@ python shared/scripts/connect_workspace.py --verify          # per-capability go
 python shared/scripts/connect_workspace.py --provider composio --capabilities
 ```
 
-> **Honesty note (mirrors the Graph provider's history).** The Composio Microsoft
-> tool slugs (`OUTLOOK_OUTLOOK_LIST_MESSAGES`, `OUTLOOK_OUTLOOK_CREATE_DRAFT`,
-> `OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW`, `OUTLOOK_OUTLOOK_CREATE_EVENT` /
-> `..._UPDATE_EVENT`, `ONE_DRIVE_ONE_DRIVE_FIND_FILE` / `..._UPLOAD_FILE` /
-> `..._DOWNLOAD_FILE`) are **best-effort against Composio's current catalog**.
-> Every slug is **config-overridable** via `integrations.workspace.tool_slugs`
-> (a flat `{operation: slug}` map) — and a wrong slug reports *itself*: the error
-> names the failing slug and the exact `tool_slugs` key to fix. `--verify` on a
-> live Composio Microsoft connection is the real acceptance test; run it before
-> relying on writes. Gmail-syntax queries are translated to Outlook automatically
+> **Verification note.** The Composio Microsoft tool slugs were **verified against
+> Composio's live catalog (2026-07-13)**, and the three reads — `mail_search`
+> (`OUTLOOK_QUERY_EMAILS`), `calendar_list` (`OUTLOOK_GET_CALENDAR_VIEW`), and
+> `files_search` (`ONE_DRIVE_SEARCH_ITEMS`) — are **execution-verified** against a
+> live Outlook + OneDrive connection (`read_ready: true`). The write slugs
+> (`OUTLOOK_CREATE_DRAFT`, `OUTLOOK_CALENDAR_CREATE_EVENT`,
+> `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE`, …) are catalog/schema-verified but not yet
+> executed — run `--verify-writes` on your own connection before relying on them.
+> Every slug remains **config-overridable** via `integrations.workspace.tool_slugs`
+> in case Composio renames one: a wrong slug reports *itself*, naming the failing
+> slug and the exact `tool_slugs` key to fix. Gmail-syntax queries are translated
+> to Outlook automatically
 > (`in:inbox`, `is:unread`, `from:`, `newer_than:` …); a dict query with a
 > `raw: {m365: {...}}` override is passed through verbatim. `mail.send` is
 > intentionally disabled; archive/trash/categories/cancel are not exposed via

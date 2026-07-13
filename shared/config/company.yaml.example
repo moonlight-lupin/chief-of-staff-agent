@@ -200,16 +200,17 @@ integrations:
     # Each operation has a built-in default per family (see
     # providers/composio_mcp_workspace.py FAMILY_SLUGS). Override an entry ONLY if
     # Composio renames a tool in their catalog — a wrong slug reports itself with
-    # this exact override path. Microsoft-family defaults shown below for reference:
+    # this exact override path. Microsoft-family defaults (verified against
+    # Composio's live catalog 2026-07-13; reads execution-verified) for reference:
     # tool_slugs:
-    #   mail_search: OUTLOOK_OUTLOOK_LIST_MESSAGES
-    #   mail_create_draft: OUTLOOK_OUTLOOK_CREATE_DRAFT
-    #   calendar_list: OUTLOOK_OUTLOOK_GET_CALENDAR_VIEW
-    #   calendar_create: OUTLOOK_OUTLOOK_CREATE_EVENT
-    #   calendar_update: OUTLOOK_OUTLOOK_UPDATE_EVENT
-    #   files_search: ONE_DRIVE_ONE_DRIVE_FIND_FILE
-    #   files_upload: ONE_DRIVE_ONE_DRIVE_UPLOAD_FILE
-    #   files_download: ONE_DRIVE_ONE_DRIVE_DOWNLOAD_FILE
+    #   mail_search: OUTLOOK_QUERY_EMAILS
+    #   mail_create_draft: OUTLOOK_CREATE_DRAFT
+    #   calendar_list: OUTLOOK_GET_CALENDAR_VIEW
+    #   calendar_create: OUTLOOK_CALENDAR_CREATE_EVENT
+    #   calendar_update: OUTLOOK_UPDATE_CALENDAR_EVENT
+    #   files_search: ONE_DRIVE_SEARCH_ITEMS
+    #   files_upload: ONE_DRIVE_ONEDRIVE_UPLOAD_FILE
+    #   files_download: ONE_DRIVE_DOWNLOAD_FILE
     tools_allowlist:
       gmail:
         read:
