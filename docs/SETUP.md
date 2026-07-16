@@ -244,9 +244,25 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > slug and the exact `tool_slugs` key to fix. Gmail-syntax queries are translated
 > to Outlook automatically
 > (`in:inbox`, `is:unread`, `from:`, `newer_than:` …); a dict query with a
-> `raw: {m365: {...}}` override is passed through verbatim. `mail.send` is
-> intentionally disabled; categories/cancel are not yet exposed via Composio
-> (capabilities report them honestly as unsupported).
+> `raw: {m365: {...}}` override is passed through verbatim.
+>
+> **Phase 3 organise (execution-verified 2026-07-16):** `mail_list_folders` /
+> `mail_move_to_folder` let you file into custom Outlook folders (use folder
+> **ids** from the list — display names are not valid `destination_id`s).
+> Well-known names (`inbox`, `archive`, …) still work. Verified live: 26 folders
+> listed, and a draft moved into a real custom folder id and cleaned up.
+>
+> **`mail.send` is approval-gated (destructive) — execution-verified 2026-07-16**
+> (`OUTLOOK_SEND_EMAIL` executed and the message was actually received). Prefer:
+> ```bash
+> python skills/document-preparer/scripts/send_email.py prepare \
+>   --to someone@example.com --subject "…" --body "…"
+> python skills/document-preparer/scripts/send_email.py approve --action-id <id>
+> python skills/document-preparer/scripts/send_email.py execute --action-id <id>
+> ```
+> Direct `mail_send` still requires `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1` after
+> explicit user confirmation. Categories (`mail.tag*`) and `calendar.cancel`
+> remain unsupported via Composio.
 
 ### Option 3: Microsoft 365 (Graph API)
 

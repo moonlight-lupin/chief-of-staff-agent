@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.3.11 — Composio Microsoft Phase 3 folders + approval-gated mail.send
+
+### Features
+
+- **Folder-first Outlook organise (Phase 3)**:
+  - `mail_list_folders` → `OUTLOOK_LIST_MAIL_FOLDERS` (also native m365
+    `GET /mailFolders`)
+  - `mail_move_to_folder` → `OUTLOOK_MOVE_MESSAGE` / Graph move with any folder
+    id or well-known name
+  - `mail_resolve_folder` helper (well-known names + display-name lookup)
+  - Capabilities: `mail.list_folders` / `mail.move` True for
+    `composio_microsoft` / `:mcp` and `m365`
+- **Approval-gated `mail.send`** for Composio Microsoft via `OUTLOOK_SEND_EMAIL`:
+  - Capability True (still destructive)
+  - Preferred path: `send_email.py prepare → approve → execute` (works for any
+    provider that supports `mail.send`, including m365 / google_api /
+    composio_microsoft)
+  - Direct calls require `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1` (plus
+    `CHIEF_OF_STAFF_AUTO_APPROVE=1` when approval already happened via the queue)
+  - Guardrail messaging names the approve→execute path
+- Google Composio `mail.send` remains intentionally disabled.
+
+### Docs
+
+- `docs/SETUP.md` updated for Phase 3 folders and approved send.
+
 ## v0.3.10 — Composio OneDrive FileUploadable staging + mail-move verify
 
 ### Features

@@ -11,7 +11,8 @@ Verifies:
 - execute fails if not approved
 - no direct send path (must go through prepare → approve → execute)
 - all state transitions are audited
-- gmail.send capability check blocks composio provider
+- mail.send capability check blocks Google Composio (still disabled);
+  Composio Microsoft / google_api / m365 can prepare
 """
 
 import sys
@@ -74,10 +75,10 @@ def google_mock():
 
 @pytest.fixture
 def composio_mock():
-    """Mock client that does NOT support gmail.send (composio:mcp)."""
+    """Mock client that does NOT support mail.send (Google Composio MCP)."""
     mock = MagicMock()
     mock.provider_name = "composio:mcp"
-    mock.supports.side_effect = lambda action: action != "gmail.send"
+    mock.supports.side_effect = lambda action: action not in ("gmail.send", "mail.send")
     return mock
 
 
@@ -211,10 +212,10 @@ class TestSendEmailCLI:
         assert rc == 0
         data = json.loads(buf.getvalue())
         assert data["state"] == "requested"
-        assert data["type"] == "gmail.send"
+        assert data["type"] == "mail.send"
         assert data["target"] == "client@test.com"
 
-    def test_prepare_blocked_for_composio(self, temp_project, composio_mock, auto_approve):
+    def test_prepare_blocked_for_google_composio(self, temp_project, composio_mock, auto_approve):
         config, project = temp_project
         with patch("send_email.load_config", return_value=config), \
              patch("send_email.get_client", return_value=composio_mock):
@@ -226,6 +227,22 @@ class TestSendEmailCLI:
         data = json.loads(buf.getvalue())
         assert data["success"] is False
         assert "not supported" in data["error"].lower()
+
+    def test_prepare_allowed_for_composio_microsoft(self, temp_project, auto_approve):
+        config, project = temp_project
+        ms_mock = MagicMock()
+        ms_mock.provider_name = "composio_microsoft:mcp"
+        ms_mock.supports.side_effect = lambda action: action in ("mail.send", "gmail.send")
+        with patch("send_email.load_config", return_value=config), \
+             patch("send_email.get_client", return_value=ms_mock):
+            import send_email
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = send_email.main(["prepare", "--to", "client@test.com", "--subject", "Test", "--body", "Body"])
+        assert rc == 0
+        data = json.loads(buf.getvalue())
+        assert data["type"] == "mail.send"
+        assert data["provider"] == "composio_microsoft:mcp"
 
     def test_list_shows_pending_actions(self, temp_project, google_mock, auto_approve):
         config, project = temp_project

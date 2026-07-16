@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gated Gmail send — prepare, preview, approve, execute.
+"""Gated mail send — prepare, preview, approve, execute.
 
 No user-facing workflow should call mail_send() directly.
 Everything goes through: prepare → preview → pending action → explicit confirm → send.
@@ -14,7 +14,9 @@ Commands:
     send_email.py summary
 
 Core rule: execute requires an approved action ID. No direct send.
-Provider: google_api only (Composio MCP does not support gmail.send).
+Works with any provider that supports ``mail.send`` (google_api, m365,
+composio_microsoft). The approve step is the clear user approval gate;
+execute then sets the destructive guardrail envs for that call only.
 """
 from __future__ import annotations
 
@@ -52,17 +54,17 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         return 1
     client = get_client(cfg)
 
-    # Check capability — gmail.send is google_api only
+    # Neutral mail.send (gmail.send is a legacy alias in the capability matrix).
     from workspace_capabilities import require_capability
-    unsupported = require_capability(client, "gmail.send", target=args.to)
+    unsupported = require_capability(client, "mail.send", target=args.to)
     if unsupported:
-        print_result(unsupported, args.summary, "Gmail send")
+        print_result(unsupported, args.summary, "Mail send")
         return 1
 
     from pending_actions import create_pending_action
     action = create_pending_action(
         config=cfg,
-        action_type="gmail.send",
+        action_type="mail.send",
         provider=client.provider_name,
         target=args.to,
         payload={
@@ -73,7 +75,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         },
         summary=f"Send email to {args.to}: {args.subject}",
     )
-    print_result(action, args.summary, "Gmail send prepared")
+    print_result(action, args.summary, "Mail send prepared")
     return 0
 
 
@@ -156,7 +158,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if not action:
         print(f"Action not found, not in 'requested' state, or expired: {args.action_id}", file=sys.stderr)
         return 1
-    print_result(action, args.summary, "Gmail send approved")
+    print_result(action, args.summary, "Mail send approved")
     return 0
 
 
@@ -170,19 +172,21 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     if not action:
         print(f"Action not found or already terminal: {args.action_id}", file=sys.stderr)
         return 1
-    print_result(action, args.summary, "Gmail send cancelled")
+    print_result(action, args.summary, "Mail send cancelled")
     return 0
 
 
 def cmd_execute(args: argparse.Namespace) -> int:
-    """Execute an approved Gmail send — requires approved action ID.
+    """Execute an approved mail send — requires approved action ID.
 
     Uses mark_executing() BEFORE the provider call to prevent the race where
     a provider action succeeds but the approval has lapsed. The state machine
     is: approved → executing → executed | failed (back to approved for retry).
 
-    The explicit approval IS the confirmation. CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1
-    is set because the user has already consciously approved the send.
+    The explicit approve step IS the user confirmation. For the provider
+    guardrail we set both CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1 and
+    CHIEF_OF_STAFF_AUTO_APPROVE=1 for this call only (same dual-gate as
+    webhook_events execute).
     """
     cfg = load_config(args.config)
     if cfg is None:
@@ -208,8 +212,12 @@ def cmd_execute(args: argparse.Namespace) -> int:
     client = get_client(cfg)
     payload = action["payload"]
 
-    # The approval queue IS the confirmation — set destructive flag for this call
+    # Approval queue already recorded human consent — unlock the destructive gate
+    # for this call only, then restore prior env.
+    prev_destr = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
+    prev_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
+    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
 
     # Execute the send
     try:
@@ -223,10 +231,19 @@ def cmd_execute(args: argparse.Namespace) -> int:
         mark_failed(cfg, args.action_id, str(exc))
         print(f"Send failed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if prev_destr is None:
+            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = prev_destr
+        if prev_auto is None:
+            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
+        else:
+            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = prev_auto
 
     # Mark as executed with result
     mark_executed(cfg, args.action_id, result)
-    print_result(result, args.summary, f"Gmail sent to {payload['to']}")
+    print_result(result, args.summary, f"Mail sent to {payload['to']}")
     return 0 if result.get("success") else 1
 
 

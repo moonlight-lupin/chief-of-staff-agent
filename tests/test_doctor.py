@@ -434,15 +434,16 @@ def test_doctor_microsoft_capability_key(tmp_path):
     assert "composio_microsoft:mcp" in result.detail
     supported = result.detail.split("supported:", 1)[1].split("; unsupported:", 1)[0]
     unsupported = result.detail.split("; unsupported:", 1)[1]
-    # v0.3.10: draft/calendar/mail-move writes are advertised supported;
-    # mail.send stays unsupported by policy; OneDrive file writes stay
-    # unsupported until COMPOSIO_API_KEY execution-verifies an upload.
+    # v0.3.11: draft/calendar/mail-move/send/folders advertised supported;
+    # OneDrive file writes stay unsupported until COMPOSIO_API_KEY verifies upload.
     assert "mail.draft" in supported
     assert "calendar.create" in supported
     assert "mail.archive" in supported
+    assert "mail.send" in supported
+    assert "mail.list_folders" in supported
     assert "mail.draft" not in unsupported
     assert "calendar.create" not in unsupported
-    assert "mail.send" in unsupported
+    assert "mail.send" not in unsupported
     assert "files.upload" in unsupported
 
 

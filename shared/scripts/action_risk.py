@@ -9,6 +9,7 @@ from __future__ import annotations
 
 HIGH_RISK_TYPES: set[str] = {
     "gmail.send",
+    "mail.send",
     "gmail.trash",
     "drive.trash",
     "calendar.cancel",
@@ -22,6 +23,7 @@ MEDIUM_RISK_TYPES: set[str] = {
     "calendar.update",
     "drive.upload",
     "gmail.archive",
+    "mail.move",
     "bookkeeper.invoice.record",
     "bookkeeper.invoice.update",
     "pipeline.deal.add",
@@ -60,6 +62,8 @@ _RISK_EXPLANATIONS: dict[str, str] = {
 
 _ACTION_EXPLANATIONS: dict[str, str] = {
     "gmail.send": "Sending email can contact external recipients and cannot be fully undone.",
+    "mail.send": "Sending email can contact external recipients and cannot be fully undone.",
+    "mail.move": "Moving mail to another folder changes mailbox organisation and may hide messages from the inbox.",
     "gmail.trash": "Trashing email removes it from normal mailbox views and may hide important correspondence.",
     "drive.trash": "Trashing Drive files removes them from normal file views and can disrupt shared work.",
     "calendar.cancel": "Cancelling calendar events can notify attendees and remove scheduled commitments.",

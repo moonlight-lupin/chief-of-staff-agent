@@ -54,6 +54,7 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "mail.unarchive",    # m365 move -> Inbox
     "mail.trash",        # m365 move -> Deleted Items (30-day recoverable)
     "mail.untrash",      # m365 move -> Inbox
+    "mail.move",         # move to an arbitrary folder id / well-known name
     "mail.tag",          # m365 append Outlook category (trivially undoable)
     "mail.create_tag",   # m365 create Outlook master category
 })
@@ -86,6 +87,7 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "mail.unarchive",
     "mail.trash",       # reversible: 30-day Deleted Items recovery
     "mail.untrash",
+    "mail.move",        # reversible: move back to previous folder
     "mail.tag",         # reversible: remove the category
     "mail.create_tag",  # reversible: delete the category
 })
@@ -151,11 +153,20 @@ def confirm_action(action: str, **details: Any) -> bool:
 
     if action in DESTRUCTIVE_ACTIONS:
         if os.getenv("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", "").strip() not in ("1", "true", "yes"):
-            print(f"⚠️  Destructive action '{action}' requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1", file=sys.stderr)
+            print(
+                f"⚠️  Destructive action '{action}' needs explicit user approval.\n"
+                f"   Preferred: send_email.py prepare → approve → execute\n"
+                f"   Or set CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1 after the user confirms,",
+                file=sys.stderr,
+            )
             _log_guardrail_blocked(action, "destructive_not_allowed")
             return False
-        # If destructive is allowed, still print warning
+        # Dual-gate: ALLOW_DESTRUCTIVE means the operator opted in; when
+        # AUTO_APPROVE is also set (pending-action execute path), a human already
+        # approved via the queue — skip a second interactive prompt.
         print(f"⚠️  Proceeding with destructive action: {action}", file=sys.stderr)
+        if _is_auto_approved():
+            return True
 
     if not requires_confirmation(action):
         return True

@@ -68,6 +68,8 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
     "microsoft": {
         "mail_search": "OUTLOOK_QUERY_EMAILS",
         "mail_create_draft": "OUTLOOK_CREATE_DRAFT",
+        "mail_send": "OUTLOOK_SEND_EMAIL",
+        "mail_list_folders": "OUTLOOK_LIST_MAIL_FOLDERS",
         "mail_move": "OUTLOOK_MOVE_MESSAGE",
         "calendar_list": "OUTLOOK_GET_CALENDAR_VIEW",
         "calendar_create": "OUTLOOK_CALENDAR_CREATE_EVENT",
@@ -79,6 +81,14 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "files_trash": "ONE_DRIVE_DELETE_ITEM",
     },
 }
+
+# Graph / Composio well-known mail folder names (valid as destination_id).
+_MS_WELL_KNOWN_FOLDERS = frozenset({
+    "inbox", "drafts", "sentitems", "deleteditems", "junkemail", "archive",
+    "outbox", "clutter", "conflicts", "conversationhistory", "localfailures",
+    "msgfolderroot", "recoverableitemsdeletions", "scheduled", "searchfolders",
+    "serverfailures", "syncissues",
+})
 
 
 class ComposioReadError(RuntimeError):
@@ -303,10 +313,24 @@ def _ms_normalize_file(f: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ms_normalize_folder(f: Mapping[str, Any]) -> dict[str, Any]:
+    """Graph mailFolder → compact folder dict for organise workflows."""
+    return {
+        "id": f.get("id"),
+        "name": f.get("displayName") or f.get("name") or "",
+        "parent_id": f.get("parentFolderId"),
+        "unread": f.get("unreadItemCount"),
+        "total": f.get("totalItemCount"),
+        "child_count": f.get("childFolderCount"),
+        "hidden": bool(f.get("isHidden")) if f.get("isHidden") is not None else None,
+    }
+
+
 _MS_NORMALIZERS = {
     "mail_search": _ms_normalize_message,
     "calendar_list": _ms_normalize_event,
     "files_search": _ms_normalize_file,
+    "mail_list_folders": _ms_normalize_folder,
 }
 
 
@@ -807,6 +831,32 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             data if isinstance(data, dict) else {}
         )
 
+    @guarded("mail.send", target_arg="to", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_send"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_send"),
+             block_error=(
+                 "cancelled by guardrail (requires explicit user approval; "
+                 "use send_email.py prepare→approve→execute or set "
+                 "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)"
+             ))
+    def mail_send(self, to: str, subject: str, body: str,
+                  cc: str | None = None) -> dict[str, Any]:
+        """Send email via OUTLOOK_SEND_EMAIL (destructive / approval-gated)."""
+        self._require_microsoft_cleanup("mail_send")
+        slug = self._slug_for("mail_send")
+        # Catalog shape: to/subject/body strings; cc_emails is a string array.
+        args: dict[str, Any] = {
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "is_html": False,
+            "save_to_sent_items": True,
+        }
+        if cc:
+            args["cc_emails"] = [part.strip() for part in cc.split(",") if part.strip()]
+        self._execute_composio_tool(slug, args, operation="mail_send")
+        return {"status": "sent", "to": to}
+
     def _require_microsoft_cleanup(self, operation: str) -> None:
         """Cleanup/organise mail+file mutations are Microsoft-family only today.
 
@@ -820,13 +870,59 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 f"(Outlook/OneDrive); current family is {self.family!r}"
             )
 
-    def _ms_mail_move(self, message_id: str, destination: str) -> dict[str, Any]:
-        """Move an Outlook message via OUTLOOK_MOVE_MESSAGE (well-known folder).
+    def mail_list_folders(self, include_hidden: bool = False,
+                          max_results: int = 100) -> list[dict[str, Any]]:
+        """List top-level Outlook mail folders (OUTLOOK_LIST_MAIL_FOLDERS)."""
+        self._require_microsoft_cleanup("mail_list_folders")
+        slug = self._slug_for("mail_list_folders")
+        try:
+            args: dict[str, Any] = {"top": max_results}
+            if include_hidden:
+                args["include_hidden_folders"] = True
+            data = self._execute_composio_tool(
+                slug, args, operation="mail_list_folders",
+            )
+            return self._normalize_records("mail_list_folders", slug, data)
+        except (ComposioConnectionError, ComposioToolError):
+            raise
+        except Exception as exc:
+            raise ComposioReadError("mail_list_folders", exc) from exc
 
-        Destinations match Graph well-known names used by the native m365
-        provider: ``inbox``, ``archive``, ``deleteditems``. Some tenants prefer
-        folder IDs over well-known names — override ``tool_slugs.mail_move`` or
-        pass a folder id once Phase 3 folder listing lands.
+    def mail_resolve_folder(self, name_or_id: str) -> dict[str, Any] | None:
+        """Resolve a folder display name or id to ``{id, name, ...}``.
+
+        Resolution order: well-known names (``inbox``, ``archive``, …) →
+        case-insensitive display-name match against ``mail_list_folders`` →
+        otherwise assume the token is already an opaque folder id. The
+        display-name lookup runs BEFORE the id fallback so a long, space-free
+        folder name (e.g. ``Newsletters_and_Promotions``) is not mistaken for
+        an opaque id and silently turned into an invalid destination.
+        """
+        token = (name_or_id or "").strip()
+        if not token:
+            return None
+        lower = token.lower()
+        if lower in _MS_WELL_KNOWN_FOLDERS:
+            return {"id": lower, "name": lower, "well_known": True}
+        matches = [
+            f for f in self.mail_list_folders(max_results=200)
+            if str(f.get("name", "")).lower() == lower
+        ]
+        if matches:
+            return matches[0]
+        # Not a visible display name — assume it is already a folder id. Opaque
+        # Graph/Composio ids are long, space-free strings; a short token with
+        # spaces is neither a name we can see nor a plausible id.
+        if len(token) >= 20 and " " not in token:
+            return {"id": token, "name": token, "well_known": False}
+        return None
+
+    def _ms_mail_move(self, message_id: str, destination: str) -> dict[str, Any]:
+        """Move an Outlook message via OUTLOOK_MOVE_MESSAGE.
+
+        ``destination`` may be a well-known name (``inbox``, ``archive``,
+        ``deleteditems``, …) or a folder id from ``mail_list_folders``. Prefer
+        folder ids for custom folders — display names are not valid destinations.
         """
         self._require_microsoft_cleanup("mail_move")
         slug = self._slug_for("mail_move")
@@ -842,6 +938,13 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             "restore_target": moved_id,
             "reversible": True,
         }
+
+    @guarded("mail.move", target_arg="message_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+    def mail_move_to_folder(self, message_id: str, folder_id: str) -> dict[str, Any]:
+        """Move a message to any folder id or well-known name (Phase 3)."""
+        return self._ms_mail_move(message_id, folder_id)
 
     def _ms_cleanup_slug(self, operation: str) -> str:
         """Resolve a Microsoft cleanup slug without KeyError on google family."""

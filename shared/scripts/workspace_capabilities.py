@@ -37,6 +37,8 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,
         "mail.draft": False,        # google_api.py has no draft subcommand
         "mail.send": True,          # supported but destructive / guardrailed
+        "mail.list_folders": False, # Gmail uses labels, not Outlook folders
+        "mail.move": False,         # no folder-move surface on google_api
         "mail.archive": True,       # via gmail modify --remove-labels INBOX
         "mail.trash": True,         # via gmail modify --add-labels TRASH
         "mail.list_tags": True,     # via gmail labels (read-only)
@@ -55,6 +57,8 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,
         "mail.draft": True,
         "mail.send": False,
+        "mail.list_folders": False,
+        "mail.move": False,
         "mail.archive": False,      # not exposed via Composio MCP
         "mail.trash": False,        # not exposed via Composio MCP
         "mail.list_tags": False,    # not exposed via Composio MCP
@@ -73,6 +77,8 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,
         "mail.draft": True,
         "mail.send": False,
+        "mail.list_folders": False,
+        "mail.move": False,
         "mail.archive": False,
         "mail.trash": False,
         "mail.list_tags": False,
@@ -102,12 +108,19 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # 2026-07-16: staging returned HTTP 401 before anything reached OneDrive).
     # The staging code (composio_files.py) ships, but the capability is NOT
     # execution-verified end-to-end, so it must not report True yet.
-    # mail.send / calendar.cancel stay False (policy / no restore).
+    # v0.3.11 Phase 3 — execution-verified 2026-07-16 (live Outlook):
+    # mail.list_folders (26 folders listed), mail.move (throwaway draft moved to
+    # a real custom folder id, then cleaned up), and mail.send (OUTLOOK_SEND_EMAIL
+    # executed AND the email was actually received at a controlled address).
+    # mail.send stays destructive — routed via pending-action approve or
+    # CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1. calendar.cancel stays False.
     # Categories (mail.tag*) remain Phase 4.
     "composio_microsoft": {
         "mail.search": True,        # OUTLOOK_QUERY_EMAILS — execution-verified (read)
         "mail.draft": True,         # OUTLOOK_CREATE_DRAFT — execution-verified 2026-07-16
-        "mail.send": False,
+        "mail.send": True,          # OUTLOOK_SEND_EMAIL — execution-verified 2026-07-16 (approval-gated / destructive)
+        "mail.list_folders": True,  # OUTLOOK_LIST_MAIL_FOLDERS — execution-verified 2026-07-16
+        "mail.move": True,          # OUTLOOK_MOVE_MESSAGE → folder id / well-known — execution-verified 2026-07-16
         "mail.archive": True,       # OUTLOOK_MOVE_MESSAGE → archive — execution-verified 2026-07-16
         "mail.unarchive": True,     # OUTLOOK_MOVE_MESSAGE → inbox — execution-verified 2026-07-16
         "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems — execution-verified 2026-07-16
@@ -130,7 +143,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     "composio_microsoft:mcp": {
         "mail.search": True,
         "mail.draft": True,
-        "mail.send": False,
+        "mail.send": True,
+        "mail.list_folders": True,
+        "mail.move": True,
         "mail.archive": True,
         "mail.unarchive": True,
         "mail.trash": True,
@@ -159,8 +174,12 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,        # GET /messages ($filter/$search)
         "mail.draft": True,         # POST /messages
         "mail.send": True,          # POST /sendMail — destructive / guardrailed
+        "mail.list_folders": True,  # GET /mailFolders
+        "mail.move": True,          # POST /messages/{id}/move
         "mail.archive": True,       # POST /messages/{id}/move -> archive
+        "mail.unarchive": True,     # move -> inbox
         "mail.trash": True,         # move -> deleteditems (reversible)
+        "mail.untrash": True,       # move -> inbox
         "mail.list_tags": True,     # GET /outlook/masterCategories
         "mail.tag": True,           # PATCH /messages/{id} categories (append)
         "mail.create_tag": True,    # POST /outlook/masterCategories
@@ -183,6 +202,8 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": False,
         "mail.draft": False,
         "mail.send": False,
+        "mail.list_folders": False,
+        "mail.move": False,
         "mail.archive": False,
         "mail.trash": False,
         "mail.list_tags": False,
@@ -226,10 +247,6 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
-    ("composio_microsoft", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
-    ("composio_microsoft:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
-    ("composio_microsoft", "mail.send"): "sending email is intentionally disabled for Composio MCP",
-    ("composio_microsoft:mcp", "mail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio_microsoft", "files.upload"): _FILES_STAGING_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_STAGING_REASON,
     ("composio_microsoft", "files.download"): _FILES_STAGING_REASON,
@@ -246,7 +263,7 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
 PROVIDER_RECOMMENDATIONS: dict[str, str] = {
     "gmail.draft": "composio",
     "document.handoff": "composio",
-    "gmail.send": "google_api",
+    "gmail.send": "google_api or composio_microsoft",
     "calendar.create": "google_api or composio",
     "calendar.update": "google_api or composio",
     "drive.upload": "google_api or composio",

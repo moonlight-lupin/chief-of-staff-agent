@@ -735,8 +735,11 @@ def cmd_capabilities(config: dict[str, Any], provider_override: str | None = Non
     print("Supported:")
     for action in sorted(supported):
         note = ""
-        if action == "gmail.send":
-            note = "  destructive / requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1"
+        if action in ("gmail.send", "mail.send"):
+            note = (
+                "  destructive — approve via send_email.py "
+                "(or CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)"
+            )
         print(f"  ✅ {action}{note}")
     print()
 
