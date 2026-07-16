@@ -229,8 +229,15 @@ class TestGoogleFamilyByteForByte:
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"id": "file"})
         client._mcp_client = mock
-        client.files_upload("/tmp/x.pdf", parent_id="folder")
-        assert mock.call_tool.call_args[0][1]["tools"][0]["tool_slug"] == "GOOGLEDRIVE_UPLOAD_FILE"
+        # GOOGLEDRIVE_UPLOAD_FILE needs a staged file_to_upload — patch staging.
+        with patch(
+            "composio_files.stage_file_uploadable",
+            return_value={"name": "x.pdf", "mimetype": "application/pdf", "s3key": "k"},
+        ):
+            client.files_upload("/tmp/x.pdf", parent_id="folder")
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GOOGLEDRIVE_UPLOAD_FILE"
+        assert call["arguments"]["file_to_upload"]["s3key"] == "k"
 
 
 # ── microsoft mail_search: slug + query-compiled args ────────────────────────

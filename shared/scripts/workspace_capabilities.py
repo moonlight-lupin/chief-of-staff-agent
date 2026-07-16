@@ -62,8 +62,15 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # clean archive→unarchive→trash→untrash cycle plus tag apply ran green on
     # real hex message ids (write_ready: yes, no id-shape errors).
     # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
-    # folders). calendar.cancel stays False. files.trash wired via
-    # GOOGLEDRIVE_TRASH_FILE (v0.3.15).
+    # folders). calendar.cancel stays False.
+    # files.upload / files.trash stay False: the live probe (2026-07-16) proved
+    # GOOGLEDRIVE_UPLOAD_FILE needs a STAGED file_to_upload FileUploadable
+    # (COMPOSIO_API_KEY — the raw file_path was silently ignored; the MCP key
+    # 401s at the Files API, same as OneDrive binary). The arg is now fixed to
+    # stage + file_to_upload, but until a keyed --verify-writes run confirms
+    # upload→trash end-to-end, these stay False. files.trash (GOOGLEDRIVE_TRASH_FILE
+    # + {file_id}) matches the live schema but can't be self-verified without a
+    # throwaway upload, so it is gated with upload.
     "composio": {
         "mail.search": True,
         "mail.draft": True,
@@ -82,9 +89,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.update": True,
         "calendar.cancel": False,   # leave unsupported (no restore path parity)
         "files.search": True,
-        "files.upload": True,
+        "files.upload": False,      # GOOGLEDRIVE_UPLOAD_FILE needs staged file_to_upload (COMPOSIO_API_KEY) — see _GDRIVE_FILES_REASON
         "files.download": True,
-        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — wired v0.3.15 (soft trash)
+        "files.trash": False,       # GOOGLEDRIVE_TRASH_FILE wired; gated with upload until a keyed run verifies
     },
     "composio:mcp": {
         "mail.search": True,
@@ -106,9 +113,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.update": True,
         "calendar.cancel": False,
         "files.search": True,
-        "files.upload": True,
+        "files.upload": False,      # needs staged file_to_upload (COMPOSIO_API_KEY) — see _GDRIVE_FILES_REASON
         "files.download": True,
-        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — wired v0.3.15
+        "files.trash": False,       # GOOGLEDRIVE_TRASH_FILE wired; gated with upload
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
@@ -260,6 +267,18 @@ _FILES_UPLOAD_BINARY_REASON = (
     "file upload."
 )
 
+# Google Drive uploads over Composio MCP need a STAGED FileUploadable: the live
+# GOOGLEDRIVE_UPLOAD_FILE schema takes `file_to_upload` (not a raw path), and
+# staging goes through the Files REST API which needs COMPOSIO_API_KEY (the MCP
+# key 401s — confirmed 2026-07-16). files.trash (GOOGLEDRIVE_TRASH_FILE) is wired
+# but can't be self-verified without a throwaway upload, so it's gated together.
+_GDRIVE_FILES_REASON = (
+    "Google Drive file writes stage through Composio's Files REST API "
+    "(GOOGLEDRIVE_UPLOAD_FILE wants a file_to_upload FileUploadable), which needs "
+    "COMPOSIO_API_KEY — the MCP key alone 401s. Set COMPOSIO_API_KEY and re-run "
+    "connect_workspace.py --verify-writes on family: google to enable."
+)
+
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
@@ -267,6 +286,10 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                      "(no restore-path parity with the soft-delete promise)",
     ("composio:mcp", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                          "(no restore-path parity with the soft-delete promise)",
+    ("composio", "files.upload"): _GDRIVE_FILES_REASON,
+    ("composio:mcp", "files.upload"): _GDRIVE_FILES_REASON,
+    ("composio", "files.trash"): _GDRIVE_FILES_REASON,
+    ("composio:mcp", "files.trash"): _GDRIVE_FILES_REASON,
     ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "

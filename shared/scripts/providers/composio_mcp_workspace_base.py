@@ -1510,8 +1510,22 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             out["upload_slug"] = slug
             return out
 
+        # Google Drive: GOOGLEDRIVE_UPLOAD_FILE expects a Composio FileUploadable
+        # `file_to_upload` (a staged {name,mimetype,s3key}), NOT a raw file_path.
+        # Passing file_path is silently ignored and the tool errors "file does
+        # not exist in storage". Stage via the Files REST API first — same as the
+        # OneDrive binary path, so it needs COMPOSIO_API_KEY (the MCP key alone
+        # 401s at backend.composio.dev).
+        from composio_files import stage_file_uploadable
+
         slug = self._slug_for("files_upload")
-        args = {"file_path": file_path}
+        file_arg = stage_file_uploadable(
+            file_path,
+            tool_slug=slug,
+            toolkit_slug="googledrive",
+            key_env=self.key_env,
+        )
+        args: dict[str, Any] = {"file_to_upload": file_arg}
         if parent_id:
             args["parent_id"] = parent_id
         data = self._execute_composio_tool(slug, args, operation="files_upload")

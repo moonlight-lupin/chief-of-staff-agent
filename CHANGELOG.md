@@ -4,8 +4,12 @@
 
 ### Features
 
-- **Google Composio `files.trash`**: `GOOGLEDRIVE_TRASH_FILE` (`file_id`) —
-  soft trash (reversible). Capability True for `composio` / `composio:mcp`.
+- **Google Composio Drive files**: fixed `files_upload` to stage a
+  `file_to_upload` FileUploadable (the live schema ignores a raw `file_path`),
+  and wired `files.trash` → `GOOGLEDRIVE_TRASH_FILE` (`file_id`, soft trash).
+  Both **stay False**: staging needs `COMPOSIO_API_KEY` (the MCP key 401s at the
+  Files API, confirmed 2026-07-16), so upload/trash aren't execution-verified —
+  set the key and re-run `--verify-writes` on `family: google` to enable.
 - **`google_api` `mail.draft`**: create drafts via Gmail REST
   (`users.drafts.create`) with service-account domain-wide delegation when
   `google_api.py` has no draft CLI. Surfaces message id as `id` (keeps

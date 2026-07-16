@@ -173,11 +173,18 @@ class TestComposioMCPDrive:
         }
         client._mcp_client = mock_mcp
 
-        client.drive_upload("/tmp/report.pdf", parent_id="folder_123")
+        # GOOGLEDRIVE_UPLOAD_FILE takes a staged file_to_upload FileUploadable;
+        # patch staging (it hits the Files REST API) and assert the wired shape.
+        with patch(
+            "composio_files.stage_file_uploadable",
+            return_value={"name": "report.pdf", "mimetype": "application/pdf", "s3key": "k1"},
+        ):
+            client.drive_upload("/tmp/report.pdf", parent_id="folder_123")
 
         mock_mcp.call_tool.assert_called_once()
         tools_arg = mock_mcp.call_tool.call_args[0][1]["tools"]
         assert tools_arg[0]["tool_slug"] == "GOOGLEDRIVE_UPLOAD_FILE"
+        assert tools_arg[0]["arguments"]["file_to_upload"]["s3key"] == "k1"
 
 
 class TestComposioMCPMissingKey:
