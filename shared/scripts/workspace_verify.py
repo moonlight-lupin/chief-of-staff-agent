@@ -38,8 +38,9 @@ Report schema (``run_verification`` return value)::
                     write check was unsupported / not tested, OR cleanup could not
                     be verified.
   * ``"no"``      — any tested write check failed OR any cleanup failed.
-``mail_send`` and ``calendar_write`` are ALWAYS ``not_tested``: verification never
-auto-sends mail and never creates calendar events.
+``mail_send`` is ALWAYS ``not_tested``: verification never auto-sends mail.
+``calendar_write`` is ``not_tested`` unless ``include_calendar_writes=True``
+(opt-in create → update → delete of a marked ``[CoS verify]`` event).
 
 Read-check warning capture
 --------------------------
@@ -189,6 +190,9 @@ def _self_address(config: Any) -> str:
         google = config.get("google") or {}
         if isinstance(google, Mapping) and google.get("delegate_email"):
             return str(google["delegate_email"])
+        user = config.get("user") or {}
+        if isinstance(user, Mapping) and user.get("email"):
+            return str(user["email"])
         esign = config.get("esign") or {}
         if isinstance(esign, Mapping) and esign.get("provider_email"):
             return str(esign["provider_email"])
@@ -270,6 +274,23 @@ def _check_mail_draft(
     return _mk("fail", d.get("error") or "draft creation returned no id in data"), None, None
 
 
+def _trash_verify_draft(
+    client: Any, draft_id: str, subject: str | None
+) -> dict[str, str] | None:
+    """Trash a verification draft. Return a fail check dict on cleanup failure."""
+    marker = f" Draft subject: {subject}." if subject else ""
+    try:
+        trashed = _result_dict(client.mail_trash(draft_id))
+        if not trashed.get("success"):
+            return _mk(
+                "fail",
+                f"{_CLEANUP_FAIL_PREFIX}{marker} (cleanup error: {trashed.get('error')})",
+            )
+    except Exception as exc:  # noqa: BLE001
+        return _mk("fail", f"{_CLEANUP_FAIL_PREFIX}{marker} (cleanup error: {exc})")
+    return None
+
+
 def _check_mail_tag_write(
     client: Any, draft_check: Mapping[str, str], draft_id: str | None, subject: str | None
 ) -> dict[str, str]:
@@ -308,16 +329,9 @@ def _check_mail_tag_write(
 
         # Clean up the draft regardless of tag-apply outcome. A cleanup failure is
         # a FAILURE: the artefact still exists and needs manual removal.
-        marker = f" Draft subject: {subject}." if subject else ""
-        try:
-            trashed = _result_dict(client.mail_trash(draft_id))
-            if not trashed.get("success"):
-                return _mk(
-                    "fail",
-                    f"{_CLEANUP_FAIL_PREFIX}{marker} (cleanup error: {trashed.get('error')})",
-                )
-        except Exception as exc:  # noqa: BLE001
-            return _mk("fail", f"{_CLEANUP_FAIL_PREFIX}{marker} (cleanup error: {exc})")
+        cleanup_fail = _trash_verify_draft(client, draft_id, subject)
+        if cleanup_fail is not None:
+            return cleanup_fail
         return check
     except Exception as exc:  # noqa: BLE001
         return _mk("fail", str(exc))
@@ -396,15 +410,85 @@ def _emit_check_failures(provider: Any, checks: Mapping[str, dict[str, str]]) ->
         )
 
 
+def _check_calendar_write(client: Any) -> dict[str, str]:
+    """Opt-in: create → update → delete a marked verify event.
+
+    Requires ``calendar.create``, ``calendar.update``, and a ``calendar_delete``
+    method. Delete is destructive; caller must allow
+    ``CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE`` for the duration (set by
+    :func:`_run_calendar_write_check`).
+    """
+    if not (_supported(client, "calendar.create") and _supported(client, "calendar.update")):
+        return _mk("not_tested", "provider does not support calendar create/update")
+    if not hasattr(client, "calendar_delete"):
+        return _mk(
+            "not_tested",
+            "provider has no calendar_delete cleanup method — skipped to avoid leaving events",
+        )
+    day = (datetime.date.today() + datetime.timedelta(days=14)).isoformat()
+    title = f"[CoS verify] {_marker()}"
+    event_id: str | None = None
+    try:
+        created = _result_dict(
+            client.calendar_create(
+                title, day, day,
+                description="Chief-of-Staff workspace verification event. Safe to delete.",
+            )
+        )
+        event_id = (created.get("data") or {}).get("id")
+        if not (created.get("success") and event_id):
+            return _mk("fail", created.get("error") or "calendar create returned no id")
+
+        updated = _result_dict(
+            client.calendar_update(event_id, title=f"{title} (updated)")
+        )
+        if not updated.get("success"):
+            update_err = updated.get("error") or "calendar update failed"
+            deleted = _result_dict(client.calendar_delete(event_id))
+            if not deleted.get("success"):
+                return _mk(
+                    "fail",
+                    f"{update_err}; {_CLEANUP_FAIL_PREFIX} Event: {title}. "
+                    f"(cleanup error: {deleted.get('error')})",
+                )
+            return _mk("fail", update_err)
+
+        deleted = _result_dict(client.calendar_delete(event_id))
+        if not deleted.get("success"):
+            return _mk(
+                "fail",
+                f"{_CLEANUP_FAIL_PREFIX} Event: {title}. "
+                f"(cleanup error: {deleted.get('error')})",
+            )
+        return _mk("pass", f"created/updated/deleted (id={_short(event_id)})")
+    except NotImplementedError as exc:
+        return _mk("not_tested", str(exc))
+    except Exception as exc:  # noqa: BLE001
+        if event_id:
+            try:
+                client.calendar_delete(event_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return _mk("fail", str(exc))
+
+
 def _run_write_checks(client: Any, config: Any, checks: dict[str, dict[str, str]]) -> None:
     """Run the opt-in write smoke checks with the auto-approve env var set for
-    the duration (restored in finally). ALLOW_DESTRUCTIVE is never touched."""
+    the duration (restored in finally). ALLOW_DESTRUCTIVE is never touched here
+    (calendar delete uses a separate opt-in path)."""
     saved = os.environ.get(AUTO_APPROVE_ENV)
     os.environ[AUTO_APPROVE_ENV] = "1"
     try:
         draft_check, draft_id, subject = _check_mail_draft(client, config)
         checks["mail_draft"] = draft_check
-        checks["mail_tag_write"] = _check_mail_tag_write(client, draft_check, draft_id, subject)
+        tag_check = _check_mail_tag_write(client, draft_check, draft_id, subject)
+        checks["mail_tag_write"] = tag_check
+        # When tags are unsupported the tag check does not trash the draft —
+        # clean it up here so Composio MS (and similar) leave no artefacts.
+        if draft_id and tag_check.get("status") == "not_tested" and _supported(client, "mail.trash"):
+            cleanup_fail = _trash_verify_draft(client, draft_id, subject)
+            if cleanup_fail is not None:
+                checks["mail_draft"] = cleanup_fail
         checks["files_write"] = _check_files_write(client)
     finally:
         if saved is None:
@@ -413,9 +497,38 @@ def _run_write_checks(client: Any, config: Any, checks: dict[str, dict[str, str]
             os.environ[AUTO_APPROVE_ENV] = saved
 
 
+def _run_calendar_write_check(client: Any, checks: dict[str, dict[str, str]]) -> None:
+    """Opt-in calendar create/update/delete probe.
+
+    Temporarily enables AUTO_APPROVE and ALLOW_DESTRUCTIVE so the delete cleanup
+    of the artefact *we just created* can proceed non-interactively. Both env
+    vars are restored in ``finally``.
+    """
+    destructive_env = "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"
+    saved_auto = os.environ.get(AUTO_APPROVE_ENV)
+    saved_destr = os.environ.get(destructive_env)
+    os.environ[AUTO_APPROVE_ENV] = "1"
+    os.environ[destructive_env] = "1"
+    try:
+        checks["calendar_write"] = _check_calendar_write(client)
+    finally:
+        if saved_auto is None:
+            os.environ.pop(AUTO_APPROVE_ENV, None)
+        else:
+            os.environ[AUTO_APPROVE_ENV] = saved_auto
+        if saved_destr is None:
+            os.environ.pop(destructive_env, None)
+        else:
+            os.environ[destructive_env] = saved_destr
+
+
 # ── public API ─────────────────────────────────────────────────────────────
 
-def run_verification(config: Any, include_writes: bool = False) -> dict[str, Any]:
+def run_verification(
+    config: Any,
+    include_writes: bool = False,
+    include_calendar_writes: bool = False,
+) -> dict[str, Any]:
     """Run per-capability verification of the configured workspace provider.
 
     See the module docstring for the full report schema and check semantics.
@@ -449,9 +562,16 @@ def run_verification(config: Any, include_writes: bool = False) -> dict[str, Any
     # Writes.
     if include_writes:
         _run_write_checks(client, config, checks)
-    # mail_send / calendar_write are ALWAYS not_tested — never auto-send/create.
+    # mail_send is ALWAYS not_tested — never auto-send.
     checks["mail_send"] = _mk("not_tested", "verification never sends mail")
-    checks["calendar_write"] = _mk("not_tested", "verification never creates calendar events")
+    if include_calendar_writes:
+        _run_calendar_write_check(client, checks)
+    else:
+        checks["calendar_write"] = _mk(
+            "not_tested",
+            "verification never creates calendar events "
+            "(pass include_calendar_writes / --verify-calendar-writes to opt in)",
+        )
 
     # Emit a structured error event for every failed check (observability): these
     # become error events in the active run's events.jsonl and feed the analyser.
@@ -464,16 +584,17 @@ def run_verification(config: Any, include_writes: bool = False) -> dict[str, Any
         checks[name]["status"] == "pass"
         for name in ("auth", "mail_read", "mail_folder_scoped", "calendar_read", "files_read")
     )
-    if not include_writes:
+    tested_writes = list(_TESTED_WRITE_CHECKS)
+    if include_calendar_writes:
+        tested_writes.append("calendar_write")
+    writes_requested = include_writes or include_calendar_writes
+    if not writes_requested:
         write_ready = "partial"
-    elif any(checks[name]["status"] == "fail" for name in _TESTED_WRITE_CHECKS):
-        # Any tested write check failed (a cleanup failure is a failed check).
+    elif any(checks[name]["status"] == "fail" for name in tested_writes):
         write_ready = "no"
-    elif any(checks[name]["status"] == "pass" for name in _TESTED_WRITE_CHECKS):
-        # At least one representative write check ran and every one that ran passed.
+    elif any(checks[name]["status"] == "pass" for name in tested_writes):
         write_ready = "yes"
     else:
-        # Writes requested but every write check was unsupported / not tested.
         write_ready = "partial"
 
     return {

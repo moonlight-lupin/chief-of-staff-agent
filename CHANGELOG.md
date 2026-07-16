@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.9 — Composio Microsoft cleanup primitives (Phase 1)
+## v0.3.9 — Composio Microsoft cleanup + content writes (Phase 1+2)
 
 ### Features
 
@@ -10,18 +10,26 @@
   native m365. Does **not** use permanent `OUTLOOK_DELETE_MESSAGE`.
 - **Composio Microsoft OneDrive trash** via `ONE_DRIVE_DELETE_ITEM` (recycle bin,
   not `ONE_DRIVE_DELETE_ITEM_PERMANENTLY`).
-- **Capability matrix** for `composio_microsoft` / `composio_microsoft:mcp` now
-  reports `mail.archive`, `mail.trash`, `mail.unarchive`, `mail.untrash`, and
-  `files.trash` as supported so `--verify-writes` is no longer blocked on missing
-  cleanup. Content writes (`mail.draft`, calendar create/update, files
-  upload/download) remain `False` until Phase 2 live verification.
-- Slugs are overridable via `integrations.workspace.tool_slugs.mail_move` /
-  `files_trash`. Google Composio family still refuses these methods
-  (`NotImplementedError` → ActionResult error).
+- **Content writes (Phase 2)** capability-True with **Composio catalog arg shapes**:
+  `mail.draft` (`OUTLOOK_CREATE_DRAFT`), `calendar.create` /
+  `calendar.update`, `files.upload` / `files.download`. Args no longer send raw
+  Graph JSON where the catalog expects Composio fields (`to_recipients`,
+  `start_datetime`+`time_zone`, `folder`, `file_name`, …). Write payloads normalize
+  a top-level `id` for `workspace_verify`.
+- **`calendar_delete`** (`OUTLOOK_DELETE_CALENDAR_EVENT`) for verify cleanup;
+  opt-in CLI `--verify-calendar-writes` (create→update→delete of a marked
+  `[CoS verify]` event). Default `--verify-writes` still never creates events.
+- **Verify draft cleanup without tags**: when `mail.tag` is unsupported, a
+  successful draft probe still trashes the artefact (needed for Composio MS).
+- **Capability matrix** for `composio_microsoft` / `:mcp`: cleanup + content
+  writes True; `mail.send` / `calendar.cancel` / `mail.tag*` still False.
+- Slugs overridable via `tool_slugs` (`mail_move`, `files_trash`,
+  `calendar_delete`, …). Google Composio family still refuses MS-only cleanup
+  methods.
 
 ### Docs
 
-- `docs/SETUP.md` Composio Microsoft verification note updated for Phase 1 cleanup.
+- `docs/SETUP.md` Composio Microsoft verification note updated for Phase 1+2.
 
 ## v0.3.8 — Code review fixes (v0.3.5→v0.3.7 review findings)
 
