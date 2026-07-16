@@ -31,40 +31,54 @@ class TestCapabilities:
         assert caps["drive.search"] is True
 
     def test_composio_microsoft_writes_reflect_live_execution(self):
-        # Updated to match the LIVE WRITE VERIFICATION run of 2026-07-16 (PR #6,
-        # Composio MS Phase 1+2) against a real Outlook + OneDrive connection.
-        # A write is True ONLY if it EXECUTED successfully live; the rest stay
-        # False with a specific (non-generic) UNSUPPORTED_REASONS entry.
+        # A write is True ONLY if it EXECUTED successfully against the live
+        # service; anything not execution-verified stays False. This tripwire
+        # exists because catalog-plausible slugs and never-run code paths have
+        # repeatedly proven wrong when actually executed (v0.3.7, v0.3.9).
+        #
+        # LIVE WRITE VERIFICATION 2026-07-16 (PR #7, Outlook + OneDrive):
+        #   PASS  mail.draft, mail.trash, mail.archive/unarchive/untrash
+        #         (full archive→unarchive→trash→untrash→trash cycle),
+        #         calendar.create/update/delete.
+        #   FAIL  files.upload — the OneDrive staging step returned HTTP 401
+        #         because Composio's Files REST API rejects the MCP key; it
+        #         needs a COMPOSIO_API_KEY. Nothing reached OneDrive, so
+        #         files.upload/download/trash are NOT execution-verified.
         from workspace_capabilities import get_capabilities, get_unsupported_reason
         caps = get_capabilities("composio_microsoft:mcp")
-        # Reads remain execution-verified (v0.3.7 read run).
         assert caps["mail.search"] is True
         assert caps["calendar.list"] is True
         assert caps["files.search"] is True
-        # Writes that EXECUTED successfully live on 2026-07-16 → True.
+
+        # Execution-verified writes → must be True.
         for action in (
-            "mail.draft", "gmail.draft",           # OUTLOOK_CREATE_DRAFT
-            "mail.trash", "gmail.trash",            # OUTLOOK_MOVE_MESSAGE → deleteditems
+            "mail.draft", "gmail.draft",
+            "mail.trash", "gmail.trash",
+            "mail.archive", "gmail.archive", "mail.unarchive", "mail.untrash",
             "calendar.create", "calendar.update", "calendar.delete",
         ):
             assert caps[action] is True, f"{action} should be live-verified True"
-        # mail.send stays False by policy (never send).
-        assert caps["mail.send"] is False
-        # Writes that did NOT execute live stay False, each with a SPECIFIC reason
-        # (not the generic "is not supported by ..." fallback).
-        generic_suffix = "is not supported by composio_microsoft:mcp"
+
+        # NOT execution-verified (Files API staging needs COMPOSIO_API_KEY) →
+        # must be False, with a reason that names the credential gap.
         for action in (
-            # OneDrive write chain — blocked by the FileUploadable/s3key upload arg.
             "files.upload", "drive.upload",
             "files.download", "drive.download",
             "files.trash", "drive.trash",
-            # mail-move archive/inbox destinations not exercised (only deleteditems ran).
-            "mail.archive", "gmail.archive", "mail.unarchive", "mail.untrash",
         ):
-            assert caps[action] is False, f"{action} was not execution-verified; must be False"
-            reason = get_unsupported_reason("composio_microsoft:mcp", action)
-            assert not reason.endswith(generic_suffix), f"{action} needs a specific reason"
-            assert "2026-07-16" in reason
+            assert caps[action] is False, (
+                f"{action} was not execution-verified (staging 401'd); must be False"
+            )
+        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
+            "composio_microsoft:mcp", "files.upload"
+        )
+
+        assert caps["mail.send"] is False
+        assert "intentionally disabled" in get_unsupported_reason(
+            "composio_microsoft:mcp", "mail.send"
+        )
+        for action in ("mail.tag", "mail.create_tag", "calendar.cancel"):
+            assert caps[action] is False
 
     def test_supports(self):
         from workspace_capabilities import supports

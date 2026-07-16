@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.10 — Composio OneDrive FileUploadable staging + mail-move verify
+
+### Features
+
+- **Composio Files API staging** (`shared/scripts/composio_files.py`): local files
+  are staged via `POST /api/v3.1/files/upload/request` (v3 fallback) + presigned
+  PUT, then passed to `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` as
+  `{name, mimetype, s3key}`. Azure Blob PUTs set `x-ms-blob-type: BlockBlob`.
+- **OneDrive download persist** prefers Composio `s3url` fetch before inline/
+  base64 fallbacks.
+- **Capability matrix** for `composio_microsoft` / `:mcp`: `files.upload` /
+  `files.download` / `files.trash` and `mail.archive` / `mail.unarchive` /
+  `mail.untrash` are True (share execution-verified `OUTLOOK_MOVE_MESSAGE`).
+- **Verify harness** adds `mail_move_write` (draft → archive → inbox → trash →
+  inbox → trash) and runs `files_write` (upload → optional download → trash)
+  when those capabilities are present.
+
+### Docs
+
+- `docs/SETUP.md` updated for FileUploadable staging and the mail-move probe.
+
 ## v0.3.9 — Composio Microsoft cleanup + content writes (Phase 1+2)
 
 ### Features

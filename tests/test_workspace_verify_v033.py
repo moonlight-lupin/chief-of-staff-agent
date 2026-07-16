@@ -54,7 +54,10 @@ class FakeClient:
     def __init__(self, provider_name="fake", supports_map=None, healthy=True,
                  reads=None, warn_reads=None, writes=None):
         self._provider_name = provider_name
+        # Explicit supports_map → missing keys default False (so new write checks
+        # like mail_move_write do not auto-enable). No map → permissive True.
         self._supports = supports_map if supports_map is not None else {}
+        self._supports_default = supports_map is None
         self._healthy = healthy
         self._reads = reads or {}
         self._warn_reads = warn_reads or {}
@@ -68,7 +71,7 @@ class FakeClient:
         return self._provider_name
 
     def supports(self, action):
-        return self._supports.get(action, True)
+        return self._supports.get(action, self._supports_default)
 
     def health_check(self):
         self.calls.append(("health_check", ()))
@@ -127,8 +130,20 @@ class FakeClient:
     def mail_trash(self, message_id):
         return self._write("mail_trash", (message_id,))
 
+    def mail_archive(self, message_id):
+        return self._write("mail_archive", (message_id,))
+
+    def mail_unarchive(self, message_id):
+        return self._write("mail_unarchive", (message_id,))
+
+    def mail_untrash(self, message_id):
+        return self._write("mail_untrash", (message_id,))
+
     def files_upload(self, file_path, parent_id=None):
         return self._write("files_upload", (file_path,))
+
+    def files_download(self, file_id, output_path):
+        return self._write("files_download", (file_id, output_path))
 
     def files_trash(self, file_id):
         return self._write("files_trash", (file_id,))
@@ -161,7 +176,7 @@ def test_all_pass_read_run(monkeypatch):
     assert rep["read_ready"] is True
     assert rep["write_ready"] == "partial"
     # writes untested
-    for name in ("mail_draft", "mail_tag_write", "files_write",
+    for name in ("mail_draft", "mail_tag_write", "mail_move_write", "files_write",
                  "mail_send", "calendar_write"):
         assert rep["checks"][name]["status"] == "not_tested"
 
@@ -253,17 +268,27 @@ def test_auth_exception_is_isolated_fail(monkeypatch):
 
 # ── write smoke ─────────────────────────────────────────────────────────────
 
+def _move_ok(message_id="draft-1"):
+    return _ok({"id": message_id, "restore_target": message_id, "reversible": True})
+
+
 def test_write_smoke_happy_path(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "mail.archive": True, "mail.unarchive": True, "mail.untrash": True,
+                      "files.upload": True, "files.download": True, "files.trash": True},
         reads={"mail_read": [{"id": "m1"}], "calendar_read": [{"id": "e1"}]},
         writes={
             "mail_create_draft": _ok({"id": "draft-1"}),
             "mail_create_tag": _ok({"id": "CoS-Verify"}),
             "mail_tag": _ok({"id": "draft-1"}),
-            "mail_trash": _ok({"id": "draft-1"}),
+            "mail_trash": _move_ok("draft-1"),
+            "mail_archive": _move_ok("draft-1"),
+            "mail_unarchive": _move_ok("draft-1"),
+            "mail_untrash": _move_ok("draft-1"),
             "files_upload": _ok({"id": "file-1"}),
+            "files_download": _ok({"path": "/tmp/x"}),
             "files_trash": _ok({"id": "file-1"}),
         },
     )
@@ -272,12 +297,18 @@ def test_write_smoke_happy_path(monkeypatch):
 
     assert rep["checks"]["mail_draft"]["status"] == "pass"
     assert rep["checks"]["mail_tag_write"]["status"] == "pass"
+    assert rep["checks"]["mail_move_write"]["status"] == "pass"
     assert rep["checks"]["files_write"]["status"] == "pass"
+    assert "downloaded" in rep["checks"]["files_write"]["detail"]
     assert rep["write_ready"] == "yes"
 
-    # draft trashed, tag applied to draft, upload trashed
+    # draft tagged; mail_draft + mail_move_write both trash; upload trashed
     assert client.called("mail_tag") == [("mail_tag", ("draft-1", "CoS-Verify"))]
-    assert client.called("mail_trash") == [("mail_trash", ("draft-1",))]
+    assert ("mail_trash", ("draft-1",)) in client.called("mail_trash")
+    assert len(client.called("mail_trash")) >= 2  # draft cleanup + move cycle
+    assert client.called("mail_archive")
+    assert client.called("mail_unarchive")
+    assert client.called("mail_untrash")
     assert client.called("files_trash") == [("files_trash", ("file-1",))]
     # drafted to the configured operator/self address
     assert client.called("mail_create_draft")[0][1][0] == "op@x.com"
@@ -294,7 +325,7 @@ def test_write_smoke_happy_path(monkeypatch):
 
 def test_legacy_admin_email_still_accepted(monkeypatch):
     client = FakeClient(
-        supports_map={"mail.draft": True},
+        supports_map={"mail.draft": True, "mail.trash": True},
         writes={
             "mail_create_draft": _ok({"id": "draft-1"}),
             "mail_trash": _ok({"id": "draft-1"}),
@@ -312,7 +343,8 @@ def test_write_smoke_restores_preexisting_auto_approve(monkeypatch):
     os.environ[AUTO] = "preset"
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         writes={
             "mail_create_draft": _ok({"id": "d"}), "mail_create_tag": _ok({"id": "CoS-Verify"}),
             "mail_tag": _ok(), "mail_trash": _ok(),
@@ -327,7 +359,8 @@ def test_write_smoke_restores_preexisting_auto_approve(monkeypatch):
 def test_write_failure_sets_write_ready_no(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         reads={"mail_read": [{"id": "m1"}], "calendar_read": [{"id": "e1"}]},
         writes={
             "mail_create_draft": _ok({"id": "draft-1"}),
@@ -346,7 +379,8 @@ def test_write_failure_sets_write_ready_no(monkeypatch):
 def test_draft_no_id_fails(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         writes={"mail_create_draft": _ok({}),  # success but no id
                 "files_upload": _ok({"id": "f"}), "files_trash": _ok()},
     )
@@ -361,7 +395,8 @@ def test_draft_no_id_fails(monkeypatch):
 def test_tag_already_exists_counts_as_pass(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         writes={
             "mail_create_draft": _ok({"id": "draft-1"}),
             "mail_create_tag": _err("category 'CoS-Verify' already exists"),
@@ -453,7 +488,8 @@ def test_missing_trash_capability_skips_write(monkeypatch):
 def test_mail_send_and_calendar_write_default_not_tested(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         writes={
             "mail_create_draft": _ok({"id": "d"}), "mail_create_tag": _ok({"id": "CoS-Verify"}),
             "mail_tag": _ok(), "mail_trash": _ok(),
@@ -472,6 +508,7 @@ def test_draft_cleaned_up_when_tags_unsupported(monkeypatch):
         supports_map={
             "mail.draft": True, "mail.trash": True,
             "mail.create_tag": False, "mail.tag": False,
+            "mail.archive": False, "mail.unarchive": False, "mail.untrash": False,
             "files.upload": False, "files.trash": False,
         },
         writes={
@@ -485,6 +522,7 @@ def test_draft_cleaned_up_when_tags_unsupported(monkeypatch):
     )
     assert rep["checks"]["mail_draft"]["status"] == "pass"
     assert rep["checks"]["mail_tag_write"]["status"] == "not_tested"
+    assert rep["checks"]["mail_move_write"]["status"] == "not_tested"
     assert client.called("mail_trash") == [("mail_trash", ("draft-x",))]
     assert rep["write_ready"] == "yes"
 
@@ -493,7 +531,7 @@ def test_check_names_contract():
     assert wv.CHECK_NAMES == [
         "auth", "mail_read", "mail_folder_scoped", "mail_tags_list",
         "calendar_read", "files_read", "mail_draft", "mail_tag_write",
-        "files_write", "mail_send", "calendar_write",
+        "mail_move_write", "files_write", "mail_send", "calendar_write",
     ]
 
 
@@ -573,7 +611,8 @@ def test_cli_verify_writes_write_fail_exit1(monkeypatch, capsys):
     import connect_workspace as cw
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         reads={"mail_read": [{"id": "m"}], "calendar_read": [{"id": "e"}]},
         writes={
             "mail_create_draft": _ok({"id": "d"}), "mail_create_tag": _ok({"id": "CoS-Verify"}),
@@ -594,7 +633,8 @@ def test_cli_verify_writes_happy_exit0(monkeypatch, capsys):
     import connect_workspace as cw
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
-                      "mail.tag": True, "files.upload": True},
+                      "mail.tag": True, "mail.trash": True,
+                      "files.upload": True, "files.trash": True},
         reads={"mail_read": [{"id": "m"}], "calendar_read": [{"id": "e"}]},
         writes={
             "mail_create_draft": _ok({"id": "d"}), "mail_create_tag": _ok({"id": "CoS-Verify"}),

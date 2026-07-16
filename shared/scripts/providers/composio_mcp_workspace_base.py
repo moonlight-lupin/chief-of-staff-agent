@@ -1009,15 +1009,28 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         except Exception as exc:
             raise ComposioReadError("files_search", exc) from exc
 
+    def _ms_stage_file_uploadable(self, file_path: str, tool_slug: str) -> dict[str, str]:
+        """Stage a local file into Composio's object store for FileUploadable args."""
+        from composio_files import stage_file_uploadable
+
+        return stage_file_uploadable(
+            file_path,
+            tool_slug=tool_slug,
+            toolkit_slug="one_drive",
+            key_env=self.key_env,
+        )
+
     @guarded("drive.upload", target_arg="file_path", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("files_upload"),
              tool_slug=lambda self: self._slug_for("files_upload"))
     def files_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
         slug = self._slug_for("files_upload")
         if self.family == "microsoft":
-            # ONE_DRIVE_ONEDRIVE_UPLOAD_FILE: ``file`` + optional ``folder``
-            # (path or folder id). Avoid Graph parentReference.
-            args: dict[str, Any] = {"file": file_path}
+            # ONE_DRIVE_ONEDRIVE_UPLOAD_FILE expects a Composio FileUploadable
+            # {name, mimetype, s3key} — stage the local path via the Files API
+            # before calling COMPOSIO_MULTI_EXECUTE_TOOL.
+            file_arg: Any = self._ms_stage_file_uploadable(file_path, slug)
+            args: dict[str, Any] = {"file": file_arg}
             if parent_id:
                 args["folder"] = parent_id
         else:
@@ -1047,8 +1060,19 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
     @staticmethod
     def _ms_persist_download(payload: Mapping[str, Any], output_path: str) -> None:
-        """Best-effort: write downloaded bytes/base64 from a Composio payload."""
+        """Write a Composio OneDrive download payload to ``output_path``.
+
+        Prefer ``content.s3url`` (fetch via HTTPS). Fall back to inline
+        bytes/base64 when present.
+        """
         import base64
+
+        from composio_files import download_s3url, find_s3url
+
+        s3url = find_s3url(payload)
+        if s3url:
+            download_s3url(s3url, output_path)
+            return
 
         content = payload.get("content")
         if content is None and isinstance(payload.get("data"), Mapping):
@@ -1060,8 +1084,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(content, (bytes, bytearray)):
                 path.write_bytes(bytes(content))
+            elif isinstance(content, Mapping):
+                # Nested content without s3url already handled above; ignore.
+                return
             elif isinstance(content, str):
-                # Composio may return raw text or base64.
                 try:
                     path.write_bytes(base64.b64decode(content, validate=True))
                 except Exception:
