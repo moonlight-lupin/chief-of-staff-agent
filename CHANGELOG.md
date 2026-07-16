@@ -19,7 +19,10 @@
   - Binary files still use `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` with staged
     `{name,mimetype,s3key}` (project `x-api-key`) or a public `source_url`
   - Files staging retries `x-consumer-api-key` when `x-api-key` returns 401/403
-  - Capabilities: `files.upload` / `files.download` / `files.trash` True
+  - Capabilities: `files.download` / `files.trash` True (execution-verified
+    2026-07-16). `files.upload` stays **False**: the text path works over MCP,
+    but binary document filing (`.pdf`/`.docx`) needs `COMPOSIO_API_KEY`, and a
+    coarse boolean must not over-promise it (set the key to enable)
 
 ### Docs
 

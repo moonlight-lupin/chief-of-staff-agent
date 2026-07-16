@@ -107,12 +107,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # v0.3.12 Phase 4 — execution-verified 2026-07-16 (live Outlook + OneDrive):
     # mail.list_tags/tag/create_tag (OUTLOOK_GET_MASTER_CATEGORIES /
     # CREATE_USER_MASTER_CATEGORY / UPDATE_EMAIL — CoS-Verify created + applied),
-    # and files.upload/download/trash via the MCP-native TEXT path
-    # (ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE → download → trash, no COMPOSIO_API_KEY).
-    # CAVEAT: files.upload's live proof is the TEXT path only. BINARY uploads
-    # (.pdf/.docx) still 401 without COMPOSIO_API_KEY (confirmed 2026-07-16) and
-    # fall through to a clear, actionable error — see files.upload note below and
-    # SETUP.md. calendar.cancel stays False.
+    # and files.download/trash (ONE_DRIVE_DOWNLOAD_FILE → ONE_DRIVE_DELETE_ITEM).
+    # files.upload stays False: the TEXT path (CREATE_TEXT_FILE) is verified, but
+    # the headline case is BINARY document filing (.pdf/.docx), which 401s without
+    # COMPOSIO_API_KEY (confirmed 2026-07-16). We do not advertise general upload
+    # until that key is set — see _FILES_UPLOAD_BINARY_REASON. calendar.cancel False.
     "composio_microsoft": {
         "mail.search": True,        # OUTLOOK_QUERY_EMAILS — execution-verified (read)
         "mail.draft": True,         # OUTLOOK_CREATE_DRAFT — execution-verified 2026-07-16
@@ -132,7 +131,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.cancel": False,
         "calendar.delete": True,    # OUTLOOK_DELETE_CALENDAR_EVENT — execution-verified 2026-07-16
         "files.search": True,       # ONE_DRIVE_SEARCH_ITEMS — execution-verified (read)
-        "files.upload": True,       # TEXT via CREATE_TEXT_FILE — execution-verified 2026-07-16; BINARY needs COMPOSIO_API_KEY (staging 401s over MCP)
+        "files.upload": False,      # text works via CREATE_TEXT_FILE, but binary (.pdf/.docx) needs COMPOSIO_API_KEY — see _FILES_UPLOAD_BINARY_REASON
         "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch) — execution-verified 2026-07-16
         "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin — execution-verified 2026-07-16
     },
@@ -157,7 +156,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.cancel": False,
         "calendar.delete": True,
         "files.search": True,
-        "files.upload": True,
+        "files.upload": False,      # text via CREATE_TEXT_FILE ok; binary needs COMPOSIO_API_KEY — see _FILES_UPLOAD_BINARY_REASON
         "files.download": True,
         "files.trash": True,
     },
@@ -227,6 +226,23 @@ WORKFLOW_REQUIREMENTS: dict[str, list[str]] = {
     "weekly.collect": ["calendar.list", "gmail.search", "drive.search"],
 }
 
+# OneDrive uploads over Composio MCP: plain-text files go through
+# ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE (MCP-native, execution-verified 2026-07-16).
+# BINARY files (.pdf/.docx — the headline document-filing case) must stage a
+# FileUploadable through Composio's Files REST API, which needs a project
+# COMPOSIO_API_KEY (the MCP key 401s, confirmed 2026-07-16); the source_url
+# alternative only helps for files already at a public HTTPS URL, not local
+# documents. So files.upload is reported unsupported until that key is set —
+# the text path still works when called directly, it is just not advertised as
+# general upload. files.download / files.trash remain supported (verified).
+_FILES_UPLOAD_BINARY_REASON = (
+    "OneDrive binary uploads (.pdf/.docx) stage through Composio's Files REST "
+    "API, which needs a project COMPOSIO_API_KEY (the MCP key 401s; source_url "
+    "only works for already-public URLs). Plain-text files upload over MCP via "
+    "ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE. Set COMPOSIO_API_KEY to enable general "
+    "file upload."
+)
+
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
@@ -234,6 +250,8 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
+    ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "

@@ -44,10 +44,12 @@ class TestCapabilities:
         #   2026-07-16 PR #8 — mail.send (OUTLOOK_SEND_EMAIL sent AND received),
         #       mail.list_folders (26 folders), mail.move (custom folder id).
         #   2026-07-16 PR #9 — mail.list_tags, mail.tag, mail.create_tag
-        #       (CoS-Verify created + applied); files.upload/download/trash via
-        #       the MCP-native text path (ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE →
-        #       download → trash, no COMPOSIO_API_KEY).
-        from workspace_capabilities import get_capabilities
+        #       (CoS-Verify created + applied); files.download + files.trash via
+        #       ONE_DRIVE_DOWNLOAD_FILE → ONE_DRIVE_DELETE_ITEM. The text upload
+        #       path (CREATE_TEXT_FILE) also ran, but files.upload stays False
+        #       (see below): the headline case is BINARY document filing, which
+        #       still 401s without COMPOSIO_API_KEY.
+        from workspace_capabilities import get_capabilities, get_unsupported_reason
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
         assert caps["calendar.list"] is True
@@ -61,16 +63,19 @@ class TestCapabilities:
             "calendar.create", "calendar.update", "calendar.delete",
             "mail.send", "mail.list_folders", "mail.move",
             "mail.list_tags", "mail.tag", "mail.create_tag",
-            "files.upload", "drive.upload",
             "files.download", "drive.download",
             "files.trash", "drive.trash",
         ):
             assert caps[action] is True, f"{action} should be live-verified True"
 
-        # files.upload's live proof covers the MCP-native TEXT path only. Binary
-        # uploads (.pdf/.docx) still 401 without COMPOSIO_API_KEY (confirmed
-        # 2026-07-16) and fall through to a clear error — documented in SETUP.md
-        # and the capability comment, not silently promised here.
+        # files.upload stays False: only the TEXT path is MCP-native, but the
+        # headline use (binary .pdf/.docx filing) needs COMPOSIO_API_KEY (401
+        # confirmed 2026-07-16). A coarse boolean must not over-promise it.
+        assert caps["files.upload"] is False
+        assert caps["drive.upload"] is False
+        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
+            "composio_microsoft:mcp", "files.upload"
+        )
 
         # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
