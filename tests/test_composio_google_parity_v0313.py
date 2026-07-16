@@ -117,6 +117,75 @@ class TestGoogleMailCleanup:
             "add_label_ids": ["Label_9"],
         }
 
+    def test_mail_tag_resolves_display_name(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.side_effect = [
+            _ok({"labels": [
+                {"id": "Label_9", "name": "CoS-Verify", "type": "user"},
+            ]}),
+            _ok({"id": "abc123"}),
+        ]
+        client._mcp_client = mock
+        res = client.mail_tag("abc123", "CoS-Verify")
+        assert res["success"] is True
+        assert res["data"]["label_id"] == "Label_9"
+        modify = mock.call_tool.call_args_list[-1][0][1]["tools"][0]
+        assert modify["arguments"]["add_label_ids"] == ["Label_9"]
+
+    def test_reject_gmail_draft_id_on_tag_archive_trash(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        client._mcp_client = mock
+        cases = [
+            ("mail_tag", lambda: client.mail_tag("r-12345", "Label_9")),
+            ("mail_archive", lambda: client.mail_archive("r-12345")),
+            ("mail_unarchive", lambda: client.mail_unarchive("r-12345")),
+            ("mail_trash", lambda: client.mail_trash("r-12345")),
+            ("mail_untrash", lambda: client.mail_untrash("r-12345")),
+        ]
+        for name, call in cases:
+            res = call()
+            assert res["success"] is False, name
+            assert "draft id" in (res.get("error") or "").lower(), name
+        assert mock.call_tool.call_count == 0
+
+    def test_create_tag_reuses_existing_label_id(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+
+        def _side_effect(*args, **kwargs):
+            tools = args[1]["tools"] if len(args) > 1 else kwargs.get("tools")
+            slug = tools[0]["tool_slug"]
+            if slug == "GMAIL_CREATE_LABEL":
+                raise RuntimeError("Label already exists (409 conflict)")
+            if slug == "GMAIL_LIST_LABELS":
+                return _ok({"labels": [
+                    {"id": "Label_77", "name": "CoS-Verify", "type": "user"},
+                ]})
+            return _ok({})
+
+        mock.call_tool.side_effect = _side_effect
+        client._mcp_client = mock
+        res = client.mail_create_tag("CoS-Verify")
+        assert res["success"] is True
+        assert res["data"]["id"] == "Label_77"
+        assert res["data"].get("reused") is True
+
+    def test_create_draft_surfaces_message_id(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({
+            "id": "r-999",
+            "message": {"id": "19a0deadbeef"},
+        })
+        client._mcp_client = mock
+        res = client.mail_create_draft("a@b.com", "Subj", "Body")
+        assert res["success"] is True
+        assert res["data"]["id"] == "19a0deadbeef"
+        assert res["data"]["message_id"] == "19a0deadbeef"
+        assert res["data"]["draft_id"] == "r-999"
+
     def test_archive_removes_inbox(self, mcp_key, tmp_project):
         client = self._client()
         mock = MagicMock()

@@ -156,10 +156,11 @@ def resolve_tag_id(client: Any, label_name: str,
 # ─── Label Parsing ────────────────────────────────────────────
 
 def parse_labels(raw_labels: list[dict[str, Any]]) -> dict[str, Any]:
-    """Parse raw Gmail labels into structured form.
+    """Parse raw Gmail labels or Outlook categories into structured form.
 
-    Separates system labels from user labels, detects hierarchy,
-    and infers categories.
+    Separates system labels from user labels/categories, detects hierarchy,
+    and infers organisation categories. Outlook master categories typically
+    omit ``type`` and use ``displayName`` (id = display name).
 
     Returns:
     {
@@ -178,9 +179,9 @@ def parse_labels(raw_labels: list[dict[str, Any]]) -> dict[str, Any]:
     groups: dict[str, list[str]] = {}
 
     for label in raw_labels:
-        name = label.get("name", "")
-        label_type = label.get("type", "user")
-        label_id = label.get("id", "")
+        name = str(label.get("name") or label.get("displayName") or "").strip()
+        label_type = str(label.get("type") or "user").strip().lower() or "user"
+        label_id = str(label.get("id") or name).strip()
 
         parsed = {
             "id": label_id,

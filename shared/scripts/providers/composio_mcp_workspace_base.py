@@ -931,6 +931,54 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         except KeyError:
             return operation
 
+    @staticmethod
+    def _google_reject_draft_id(message_id: str) -> None:
+        """Gmail label/trash tools need a hex message id, not a draft id (r-…)."""
+        mid = (message_id or "").strip()
+        if not mid:
+            raise RuntimeError("Gmail message_id is empty")
+        # Composio/Gmail draft ids look like ``r-…``; message ids are hex.
+        if mid.startswith("r-") or (mid.startswith("r") and "-" in mid[:4]):
+            raise RuntimeError(
+                f"Gmail draft id {mid!r} is not a message id. "
+                "Use mail_create_draft's returned id (underlying message.id), "
+                "not the draft resource id."
+            )
+
+    def _google_resolve_label_id(self, name_or_id: str) -> str:
+        """Resolve a Gmail label display name to its ``Label_…`` id.
+
+        System labels (INBOX, TRASH, …) and ids already starting with
+        ``Label_`` are returned unchanged. Display names are matched
+        case-insensitively against ``mail_list_tags``.
+        """
+        token = (name_or_id or "").strip()
+        if not token:
+            raise RuntimeError("Gmail label id/name is empty")
+        if token.startswith("Label_") or token.upper() in {
+            "INBOX", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT",
+            "CATEGORY_PERSONAL", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS",
+            "CATEGORY_UPDATES", "CATEGORY_FORUMS",
+        }:
+            return token
+        for label in self.mail_list_tags():
+            if str(label.get("name", "")).lower() == token.lower():
+                lid = str(label.get("id") or "")
+                if lid:
+                    return lid
+        raise RuntimeError(
+            f"Gmail label {token!r} not found — call mail_list_tags / "
+            "mail_create_tag first (label tools need Label_… ids, not names)"
+        )
+
+    @staticmethod
+    def _err_looks_already_exists(exc: BaseException | str) -> bool:
+        m = str(exc).lower()
+        return any(
+            needle in m
+            for needle in ("already exist", "already-exist", "duplicate", "409", "conflict")
+        )
+
     def _google_modify_labels(
         self,
         message_id: str,
@@ -939,6 +987,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         remove: list[str] | None = None,
     ) -> dict[str, Any]:
         """GMAIL_ADD_LABEL_TO_EMAIL — archive/unarchive/tag via label ids."""
+        self._google_reject_draft_id(message_id)
         slug = self._slug_for("mail_modify_labels")
         args: dict[str, Any] = {"message_id": message_id}
         if add:
@@ -1083,14 +1132,24 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
              audit_tool=lambda self: self._cleanup_slug("mail_create_tag"),
              tool_slug=lambda self: self._cleanup_slug("mail_create_tag"))
     def mail_create_tag(self, name: str) -> dict[str, Any]:
-        """Create Outlook master category or Gmail label."""
+        """Create Outlook master category or Gmail label.
+
+        On Google, a 409/already-exists response reuses the existing
+        ``Label_…`` id via ``mail_list_tags`` (display names are not valid
+        for ``GMAIL_ADD_LABEL_TO_EMAIL``).
+        """
         slug = self._slug_for("mail_create_tag")
         if self.family == "microsoft":
-            data = self._execute_composio_tool(
-                slug,
-                {"display_name": name, "color": "preset0"},
-                operation="mail_create_tag",
-            )
+            try:
+                data = self._execute_composio_tool(
+                    slug,
+                    {"display_name": name, "color": "preset0"},
+                    operation="mail_create_tag",
+                )
+            except Exception as exc:
+                if self._err_looks_already_exists(exc):
+                    return {"id": name, "name": name, "reused": True}
+                raise
             payload = data if isinstance(data, Mapping) else {}
             return {
                 "id": name,
@@ -1098,17 +1157,29 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 "graph_id": payload.get("id") if isinstance(payload, Mapping) else None,
             }
 
-        data = self._execute_composio_tool(
-            slug, {"label_name": name}, operation="mail_create_tag",
-        )
+        try:
+            data = self._execute_composio_tool(
+                slug, {"label_name": name}, operation="mail_create_tag",
+            )
+        except Exception as exc:
+            if self._err_looks_already_exists(exc):
+                lid = self._google_resolve_label_id(name)
+                return {"id": lid, "name": name, "reused": True}
+            raise
         payload = data if isinstance(data, Mapping) else {}
         label_id = (
             payload.get("id")
             or payload.get("labelId")
             or payload.get("label_id")
-            or name
+            or ""
         )
-        return {"id": label_id, "name": name}
+        if not label_id or not str(label_id).startswith("Label_"):
+            # Some envelopes nest the id; fall back to name lookup.
+            try:
+                label_id = self._google_resolve_label_id(name)
+            except RuntimeError:
+                label_id = label_id or name
+        return {"id": str(label_id), "name": name}
 
     @guarded("mail.tag", target_arg="message_id", audit_provider="composio",
              audit_tool=lambda self: (
@@ -1147,9 +1218,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             )
             return {"id": message_id, "categories": existing}
 
-        # Gmail: tag_id must be a label id (Label_…), not the display name.
-        result = self._google_modify_labels(message_id, add=[tag_id])
-        return {"id": message_id, "label_id": tag_id, **result}
+        # Gmail: resolve display names → Label_… ids (verify reuse path).
+        label_id = self._google_resolve_label_id(tag_id)
+        result = self._google_modify_labels(message_id, add=[label_id])
+        return {"id": message_id, "label_id": label_id, **result}
 
     # Back-compat alias used by older @guarded call sites / tests.
     def _ms_cleanup_slug(self, operation: str) -> str:
@@ -1204,6 +1276,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         """Soft-delete: Outlook deleteditems, or GMAIL_MOVE_TO_TRASH."""
         if self.family == "microsoft":
             return self._ms_mail_move(message_id, "deleteditems")
+        self._google_reject_draft_id(message_id)
         slug = self._slug_for("mail_trash")
         self._execute_composio_tool(
             slug, {"message_id": message_id}, operation="mail_trash",
@@ -1229,6 +1302,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def mail_untrash(self, message_id: str) -> dict[str, Any]:
         if self.family == "microsoft":
             return self._ms_mail_move(message_id, "inbox")
+        self._google_reject_draft_id(message_id)
         slug = self._slug_for("mail_untrash")
         self._execute_composio_tool(
             slug, {"message_id": message_id}, operation="mail_untrash",

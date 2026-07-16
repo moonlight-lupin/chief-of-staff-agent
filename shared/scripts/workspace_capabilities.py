@@ -92,12 +92,14 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.send": True,          # execution-verified 2026-07-16
         "mail.list_folders": False,
         "mail.move": False,
-        "mail.archive": False,      # wired; pending live re-verify (draft-id fix)
+        # Hardened (reject r- draft ids; resolve Label_… by name). Stay False
+        # until live --verify-writes re-runs green on family: google.
+        "mail.archive": False,
         "mail.unarchive": False,
         "mail.trash": False,
         "mail.untrash": False,
         "mail.list_tags": True,     # execution-verified 2026-07-16
-        "mail.tag": False,          # wired; pending live re-verify
+        "mail.tag": False,
         "mail.create_tag": True,    # execution-verified 2026-07-16
         "calendar.list": True,
         "calendar.create": True,
@@ -266,7 +268,8 @@ _FILES_UPLOAD_BINARY_REASON = (
 _GMAIL_WRITE_PENDING_REASON = (
     "Gmail label/archive/trash writes are wired but not yet execution-verified "
     "(the 2026-07-16 live probe rejected a draft id where a hex message id is "
-    "required). The draft-id→message-id fix ships; re-run connect_workspace.py "
+    "required). Draft-id→message-id, draft-id reject, and Label_… resolve ship; "
+    "re-run connect_workspace.py "
     "--verify-writes on family: google to enable."
 )
 

@@ -78,8 +78,27 @@ def mock_client():
 
 # ─── Label Parsing ────────────────────────────────────────────
 
+SAMPLE_OUTLOOK_CATEGORIES = [
+    # Composio MS / m365 shape: id == displayName; type often omitted.
+    {"id": "CoS-Verify", "name": "CoS-Verify", "displayName": "CoS-Verify", "type": "user"},
+    {"id": "Follow Up", "displayName": "Follow Up"},  # name omitted — use displayName
+    {"id": "Finance/Invoices", "name": "Finance/Invoices", "type": "user"},
+]
+
+
 class TestLabelParsing:
     """Test that parse_labels correctly separates and structures labels."""
+
+    def test_outlook_categories_as_user_tags(self):
+        from email_label_policy import parse_labels
+        parsed = parse_labels(SAMPLE_OUTLOOK_CATEGORIES)
+        assert parsed["total"] == 3
+        assert len(parsed["system_labels"]) == 0
+        names = {l["name"] for l in parsed["user_labels"]}
+        assert names == {"CoS-Verify", "Follow Up", "Finance/Invoices"}
+        by_name = {l["name"]: l for l in parsed["user_labels"]}
+        assert by_name["Follow Up"]["id"] == "Follow Up"
+        assert by_name["Finance/Invoices"]["inferred_category"]
 
     def test_system_labels_excluded_from_user(self):
         from email_label_policy import parse_labels
@@ -328,6 +347,8 @@ class TestEmailOrgCLI:
         assert rc == 0
         out = buf.getvalue()
         assert "📬 Email Organisation" in out
+        assert "Label Inspection" in out
+        assert "gmail_labels" in out
         assert "Total labels: 14" in out
         assert "User labels: 9" in out
 
@@ -344,6 +365,37 @@ class TestEmailOrgCLI:
         data = json.loads(buf.getvalue())
         assert data["total"] == 14
         assert len(data["user_labels"]) == 9
+        assert data["tag_surface"] == "gmail_labels"
+
+    def test_inspect_labels_outlook_composio_ms(self, temp_project):
+        config, project = temp_project
+        mock = MagicMock()
+        mock.provider_name = "composio_microsoft:mcp"
+        mock.family = "microsoft"
+        mock.supports.side_effect = lambda a: True
+        mock.mail_list_tags.return_value = SAMPLE_OUTLOOK_CATEGORIES
+        with patch("email_organisation.load_config", return_value=config), \
+             patch("email_organisation.get_client", return_value=mock), \
+             patch("workspace_capabilities.require_capability", return_value=None):
+            import email_organisation
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = email_organisation.main(["--summary", "inspect-labels"])
+            assert rc == 0
+            out = buf.getvalue()
+            assert "Outlook Category Inspection" in out
+            assert "outlook_categories" in out
+            assert "Total categories: 3" in out
+            assert "User categories: 3" in out
+
+            buf2 = io.StringIO()
+            with redirect_stdout(buf2):
+                rc2 = email_organisation.main(["inspect-labels"])
+            assert rc2 == 0
+            data = json.loads(buf2.getvalue())
+            assert data["tag_surface"] == "outlook_categories"
+            assert data["provider"] == "composio_microsoft:mcp"
+            assert len(data["user_labels"]) == 3
 
     def test_propose_policy_summary(self, temp_project, mock_client):
         config, project = temp_project
@@ -357,7 +409,7 @@ class TestEmailOrgCLI:
         assert rc == 0
         out = buf.getvalue()
         assert "🧭 Proposed" in out
-        assert "No Gmail changes were made" in out
+        assert "No mailbox changes were made" in out
 
     def test_save_policy(self, temp_project, mock_client):
         config, project = temp_project
