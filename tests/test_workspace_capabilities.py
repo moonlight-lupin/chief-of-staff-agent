@@ -29,7 +29,7 @@ class TestCapabilities:
         assert caps["gmail.draft"] is True
         assert caps["gmail.send"] is True          # execution-verified 2026-07-16
         assert caps["mail.list_tags"] is True      # execution-verified 2026-07-16
-        assert caps["mail.archive"] is False       # wired; pending live re-verify (draft-id fix)
+        assert caps["mail.archive"] is True        # execution-verified 2026-07-16 (v0.3.14 hardened path)
         assert caps["drive.search"] is True
         assert caps["calendar.cancel"] is False
 

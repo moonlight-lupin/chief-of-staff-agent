@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Email organisation onboarding CLI — inspect, propose, save, validate.
 
-Read-only: discovers existing Gmail labels, infers categories, generates
-a proposed label policy, and saves it locally for operator approval.
+Read-only: discovers existing Gmail labels or Outlook master categories,
+infers organisation categories, generates a proposed label policy, and
+saves it locally for operator approval.
 
 Never creates, applies, archives, trashes, or sends anything.
 
@@ -40,19 +41,39 @@ def get_client(config: Any):
     return get_workspace_client(config)
 
 
+def _tag_surface(client: Any) -> dict[str, str]:
+    """Describe the provider tag surface for inspect-labels copy/JSON."""
+    pname = str(getattr(client, "provider_name", "") or "").lower()
+    family = str(getattr(client, "family", "") or "").lower()
+    if family == "microsoft" or "microsoft" in pname or pname.startswith("m365"):
+        return {
+            "kind": "outlook_categories",
+            "noun": "category",
+            "noun_plural": "categories",
+            "title": "Outlook Category Inspection",
+        }
+    return {
+        "kind": "gmail_labels",
+        "noun": "label",
+        "noun_plural": "labels",
+        "title": "Label Inspection",
+    }
+
+
 def cmd_inspect_labels(args: argparse.Namespace) -> int:
-    """Discover and display existing Gmail labels."""
+    """Discover and display existing Gmail labels or Outlook categories."""
     cfg = load_config(args.config)
     if cfg is None:
         return 1
 
     client = get_client(cfg)
+    surface = _tag_surface(client)
 
     from workspace_capabilities import require_capability
     unsupported = require_capability(client, "gmail.labels.list", target="labels")
     if unsupported:
         if args.summary:
-            print("❌ gmail.labels.list not supported by current provider")
+            print("❌ mail.list_tags / gmail.labels.list not supported by current provider")
             print(f"   Provider: {client.provider_name}")
         else:
             print_json(unsupported)
@@ -61,27 +82,33 @@ def cmd_inspect_labels(args: argparse.Namespace) -> int:
     from email_label_policy import parse_labels
     raw_labels = client.mail_list_tags()
     parsed = parse_labels(raw_labels)
+    parsed["tag_surface"] = surface["kind"]
+    parsed["provider"] = getattr(client, "provider_name", None)
+
+    noun = surface["noun"]
+    nouns = surface["noun_plural"]
 
     if args.summary:
-        print("📬 Email Organisation — Label Inspection")
+        print(f"📬 Email Organisation — {surface['title']}")
+        print(f"   Provider: {getattr(client, 'provider_name', '?')} ({surface['kind']})")
         print()
-        print(f"Total labels: {parsed['total']}")
-        print(f"User labels: {len(parsed['user_labels'])}")
-        print(f"System labels: {len(parsed['system_labels'])}")
-        print(f"Nested labels: {len(parsed['nested_user_labels'])}")
+        print(f"Total {nouns}: {parsed['total']}")
+        print(f"User {nouns}: {len(parsed['user_labels'])}")
+        print(f"System {nouns}: {len(parsed['system_labels'])}")
+        print(f"Nested {nouns}: {len(parsed['nested_user_labels'])}")
         print()
 
         groups = parsed["groups"]
         if groups:
             print("Detected groups:")
             for parent, labels in sorted(groups.items()):
-                print(f"- {parent}: {len(labels)} label(s)")
+                print(f"- {parent}: {len(labels)} {noun}(s)")
                 for name in labels:
                     print(f"    └─ {name}")
             print()
 
         if parsed["user_labels"]:
-            print("User labels with inferred categories:")
+            print(f"User {nouns} with inferred organisation categories:")
             for label in parsed["user_labels"]:
                 cat = label.get("inferred_category") or "unmapped"
                 conf = label.get("inferred_confidence", 0)
@@ -91,7 +118,7 @@ def cmd_inspect_labels(args: argparse.Namespace) -> int:
 
         unmapped = [l for l in parsed["user_labels"] if not l.get("inferred_category")]
         if unmapped:
-            print("Unmapped labels:")
+            print(f"Unmapped {nouns}:")
             for label in unmapped:
                 print(f"  {label['name']}")
     else:
@@ -101,18 +128,19 @@ def cmd_inspect_labels(args: argparse.Namespace) -> int:
 
 
 def cmd_propose_policy(args: argparse.Namespace) -> int:
-    """Generate a proposed label policy from existing Gmail labels."""
+    """Generate a proposed policy from existing labels/categories."""
     cfg = load_config(args.config)
     if cfg is None:
         return 1
 
     client = get_client(cfg)
+    surface = _tag_surface(client)
 
     from workspace_capabilities import require_capability
     unsupported = require_capability(client, "gmail.labels.list", target="labels")
     if unsupported:
         if args.summary:
-            print("❌ gmail.labels.list not supported by current provider")
+            print("❌ mail.list_tags / gmail.labels.list not supported by current provider")
         else:
             print_json(unsupported)
         return 1
@@ -125,11 +153,12 @@ def cmd_propose_policy(args: argparse.Namespace) -> int:
 
     if args.summary:
         print("🧭 Proposed Email Organisation Policy")
+        print(f"   Provider: {getattr(client, 'provider_name', '?')} ({surface['kind']})")
         print()
         print(f"Mode: {policy['mode']}")
         print(f"Mapped categories: {len(policy['categories'])}")
-        print(f"Unmapped labels: {len(policy['unmapped_labels'])}")
-        print(f"New labels proposed: 0")
+        print(f"Unmapped {surface['noun_plural']}: {len(policy['unmapped_labels'])}")
+        print(f"New {surface['noun_plural']} proposed: 0")
         print()
 
         high_conf = [(cat, data) for cat, data in policy["categories"].items()
@@ -141,15 +170,16 @@ def cmd_propose_policy(args: argparse.Namespace) -> int:
             print()
 
         if policy["unmapped_labels"]:
-            print("Unmapped labels:")
+            print(f"Unmapped {surface['noun_plural']}:")
             for item in policy["unmapped_labels"]:
                 print(f"  {item['name']} — {item['reason']}")
             print()
 
-        print("No Gmail changes were made.")
+        print("No mailbox changes were made.")
         print(f"Proposal saved to: {path}")
     else:
         policy["_proposal_path"] = str(path)
+        policy["tag_surface"] = surface["kind"]
         print_json(policy)
 
     return 0
@@ -337,7 +367,7 @@ def cmd_suggest(args: argparse.Namespace) -> int:
             conf = f"{sug['confidence']:.0%}"
             print(f"  {risk_icon} {sug['action_type']} ({conf}): {sug['title']}")
         print()
-        print("No Gmail changes were made.")
+        print("No mailbox changes were made.")
     else:
         print_json(result)
     return 0 if not result.get("error") else 1
@@ -527,8 +557,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # v0.1.26 commands
-    sub.add_parser("inspect-labels", help="Discover and display existing Gmail labels")
-    sub.add_parser("propose-policy", help="Generate a proposed label policy")
+    sub.add_parser(
+        "inspect-labels",
+        help="Discover Gmail labels or Outlook master categories (mail_list_tags)",
+    )
+    sub.add_parser("propose-policy", help="Generate a proposed label/category policy")
     sub.add_parser("show-policy", help="Show current approved policy")
 
     save = sub.add_parser("save-policy", help="Save a proposal as an approved policy")

@@ -298,6 +298,25 @@ def _trash_verify_draft(
     return None
 
 
+def _lookup_tag_id(client: Any, name: str) -> str | None:
+    """Resolve a tag display name to the provider id (Gmail Label_… / Outlook name)."""
+    target = (name or "").strip().lower()
+    if not target:
+        return None
+    try:
+        tags = client.mail_list_tags() or []
+    except Exception:  # noqa: BLE001
+        return None
+    for tag in tags:
+        if not isinstance(tag, Mapping):
+            continue
+        tname = str(tag.get("name") or tag.get("displayName") or "").strip()
+        if tname.lower() == target:
+            tid = str(tag.get("id") or tname).strip()
+            return tid or None
+    return None
+
+
 def _check_mail_tag_write(
     client: Any, draft_check: Mapping[str, str], draft_id: str | None, subject: str | None
 ) -> dict[str, str]:
@@ -313,17 +332,19 @@ def _check_mail_tag_write(
     try:
         tag_id = VERIFY_TAG
         # Create the category/label; an already-exists error counts as pass (reuse).
+        # On Gmail, reuse must yield a Label_… id — never the display name alone.
         try:
             cr = _result_dict(client.mail_create_tag(VERIFY_TAG))
             if cr.get("success"):
                 tag_id = (cr.get("data") or {}).get("id") or VERIFY_TAG
             elif _already_exists(cr.get("error")):
-                tag_id = VERIFY_TAG
+                tag_id = _lookup_tag_id(client, VERIFY_TAG) or VERIFY_TAG
             else:
                 return _mk("fail", cr.get("error") or "mail_create_tag failed")
         except Exception as exc:  # noqa: BLE001
             if not _already_exists(exc):
                 return _mk("fail", str(exc))
+            tag_id = _lookup_tag_id(client, VERIFY_TAG) or VERIFY_TAG
 
         if not draft_id:
             return _mk("fail", "no verification draft available to tag")

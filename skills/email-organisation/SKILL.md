@@ -1,7 +1,7 @@
 ---
 name: email-organisation
 description: "Use when inspecting mail labels/categories, proposing or saving a label policy, or when the operator addresses 'Chief of Staff' (the CoS assistant name) to check email (e.g. 'Ask Chief of Staff to check my email'). Route all mail operations through the company workspace account configured in company.yaml for your organization, NOT the agent's personal email."
-version: 0.1.1
+version: 0.1.2
 author: moonlight-lupin
 license: Apache-2.0
 metadata:
@@ -74,10 +74,12 @@ python skills/email-organisation/scripts/email_organisation.py \
   --config shared/config/company.yaml --summary propose-policy
 ```
 
-Categories appear as user tags (id = display name). Classify / suggest /
-prepare still go through the review queue; execute uses guarded
-`mail_tag` / `mail_archive` / `mail_create_tag` on the CoS workspace client —
-not raw Hermes MCP write tools.
+`inspect-labels` uses `OUTLOOK_GET_MASTER_CATEGORIES` via `mail_list_tags`.
+Summary titles the run **Outlook Category Inspection** and sets
+`tag_surface: outlook_categories`. Categories appear as user tags
+(id = displayName). Classify / suggest / prepare still go through the review
+queue; execute uses guarded `mail_tag` / `mail_archive` / `mail_create_tag` on
+the CoS workspace client — not raw Hermes MCP write tools.
 
 See `docs/EMAIL_ORG_LIVE_TEST_CHECKLIST.md` § Composio Microsoft.
 

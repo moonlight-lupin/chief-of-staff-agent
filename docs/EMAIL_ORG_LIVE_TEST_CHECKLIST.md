@@ -24,7 +24,7 @@
    ```
    - [ ] Shows mode: use_existing_first
    - [ ] Shows mapped categories and unmapped labels
-   - [ ] Shows "No Gmail changes were made"
+   - [ ] Shows "No mailbox changes were made"
 
 3. **Save policy**
    ```bash
@@ -62,7 +62,7 @@
    ```
    - [ ] Shows label/archive/create-label suggestion counts
    - [ ] All suggestions have risk icons and confidence
-   - [ ] Shows "No Gmail changes were made"
+   - [ ] Shows "No mailbox changes were made"
 
 8. **Dry-run suggestions**
    ```bash
@@ -117,7 +117,7 @@
     - [ ] Shows classified, with_category, unmapped
     - [ ] Shows by_category breakdown
     - [ ] Shows suggestion counts
-    - [ ] Shows "No Gmail changes were made"
+    - [ ] Shows "No mailbox changes were made"
 
 15. **Notify CLI**
     ```bash
@@ -179,15 +179,18 @@ Use when `integrations.workspace.provider: composio` and `family: microsoft`
    python skills/email-organisation/scripts/email_organisation.py \
      --config shared/config/company.yaml --summary inspect-labels
    ```
+   - [ ] Title says "Outlook Category Inspection"; provider line includes `outlook_categories`
    - [ ] Lists Outlook categories as user tags (no crash on missing `type`)
    - [ ] Totals look sane vs Outlook master category list
+   - [ ] JSON mode includes `"tag_surface": "outlook_categories"`
 
 2. **Propose policy**
    ```bash
    python skills/email-organisation/scripts/email_organisation.py \
      --config shared/config/company.yaml --summary propose-policy
    ```
-   - [ ] Proposal written; "No Gmail changes were made" (read-only)
+   - [ ] Proposal written; "No mailbox changes were made" (read-only)
+   - [ ] Summary shows `outlook_categories` tag surface / composio_microsoft provider
 
 3. **Classify + suggest (optional)**
    ```bash

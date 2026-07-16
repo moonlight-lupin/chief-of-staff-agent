@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.14 — Google cleanup hardening + Outlook inspect-labels
+
+### Fixes / hardening
+
+- **Google Composio mail.tag / archive / unarchive / trash / untrash**:
+  - Reject Gmail draft ids (`r-…`) on label/trash paths (tools need hex message ids).
+  - Resolve label display names → `Label_…` ids before `GMAIL_ADD_LABEL_TO_EMAIL`.
+  - `mail_create_tag` reuses an existing label id on 409/already-exists (verify
+    path no longer falls back to the bare display name).
+  - `workspace_verify` looks up tag ids via `mail_list_tags` on reuse.
+  - **Execution-verified 2026-07-16 (live Gmail):** with the hardened path,
+    `--verify-writes` on `family: google` ran green (`write_ready: yes`) — a full
+    archive→unarchive→trash→untrash cycle plus tag apply on real hex message ids,
+    no id-shape errors. These five capabilities are now **True** for
+    `composio` / `composio:mcp`.
+
+### Features
+
+- **email-organisation `inspect-labels` (Composio Microsoft)**: Outlook-aware
+  summary (`Outlook Category Inspection`, `tag_surface: outlook_categories`);
+  `parse_labels` accepts `displayName` / missing `type` for master categories.
+
 ## v0.3.13 — Hermes Composio reads + Google Composio cleanup/tags/send
 
 ### Features

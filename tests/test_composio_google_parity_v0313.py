@@ -117,6 +117,75 @@ class TestGoogleMailCleanup:
             "add_label_ids": ["Label_9"],
         }
 
+    def test_mail_tag_resolves_display_name(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.side_effect = [
+            _ok({"labels": [
+                {"id": "Label_9", "name": "CoS-Verify", "type": "user"},
+            ]}),
+            _ok({"id": "abc123"}),
+        ]
+        client._mcp_client = mock
+        res = client.mail_tag("abc123", "CoS-Verify")
+        assert res["success"] is True
+        assert res["data"]["label_id"] == "Label_9"
+        modify = mock.call_tool.call_args_list[-1][0][1]["tools"][0]
+        assert modify["arguments"]["add_label_ids"] == ["Label_9"]
+
+    def test_reject_gmail_draft_id_on_tag_archive_trash(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        client._mcp_client = mock
+        cases = [
+            ("mail_tag", lambda: client.mail_tag("r-12345", "Label_9")),
+            ("mail_archive", lambda: client.mail_archive("r-12345")),
+            ("mail_unarchive", lambda: client.mail_unarchive("r-12345")),
+            ("mail_trash", lambda: client.mail_trash("r-12345")),
+            ("mail_untrash", lambda: client.mail_untrash("r-12345")),
+        ]
+        for name, call in cases:
+            res = call()
+            assert res["success"] is False, name
+            assert "draft id" in (res.get("error") or "").lower(), name
+        assert mock.call_tool.call_count == 0
+
+    def test_create_tag_reuses_existing_label_id(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+
+        def _side_effect(*args, **kwargs):
+            tools = args[1]["tools"] if len(args) > 1 else kwargs.get("tools")
+            slug = tools[0]["tool_slug"]
+            if slug == "GMAIL_CREATE_LABEL":
+                raise RuntimeError("Label already exists (409 conflict)")
+            if slug == "GMAIL_LIST_LABELS":
+                return _ok({"labels": [
+                    {"id": "Label_77", "name": "CoS-Verify", "type": "user"},
+                ]})
+            return _ok({})
+
+        mock.call_tool.side_effect = _side_effect
+        client._mcp_client = mock
+        res = client.mail_create_tag("CoS-Verify")
+        assert res["success"] is True
+        assert res["data"]["id"] == "Label_77"
+        assert res["data"].get("reused") is True
+
+    def test_create_draft_surfaces_message_id(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({
+            "id": "r-999",
+            "message": {"id": "19a0deadbeef"},
+        })
+        client._mcp_client = mock
+        res = client.mail_create_draft("a@b.com", "Subj", "Body")
+        assert res["success"] is True
+        assert res["data"]["id"] == "19a0deadbeef"
+        assert res["data"]["message_id"] == "19a0deadbeef"
+        assert res["data"]["draft_id"] == "r-999"
+
     def test_archive_removes_inbox(self, mcp_key, tmp_project):
         client = self._client()
         mock = MagicMock()
@@ -167,19 +236,17 @@ class TestGoogleMailCleanup:
 class TestGoogleCapabilities:
     def test_caps_reflect_live_execution(self):
         # Execution-verified 2026-07-16 (live Gmail): list_tags, create_tag, send.
-        # NOT verified — the label/move/trash path fed a Gmail draft id where a
-        # hex message id is required; those stay False until --verify-writes
-        # re-runs green after the draft-id→message-id fix.
-        from workspace_capabilities import get_capabilities, get_unsupported_reason
+        # After the v0.3.14 hardening (draft-id→message-id fix, r- draft-id
+        # reject, Label_… name resolve), the label/move/trash path re-ran green
+        # on real hex message ids (write_ready: yes, full archive→unarchive→
+        # trash→untrash cycle + tag apply) — so mail.tag/archive/unarchive/trash/
+        # untrash are now True. calendar.cancel / files.trash / folders stay False.
+        from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
-        assert caps["mail.list_tags"] is True
-        assert caps["mail.create_tag"] is True
-        assert caps["mail.send"] is True
-        # Wired but not execution-verified → False with a reason.
-        for action in ("mail.archive", "mail.unarchive", "mail.trash",
+        for action in ("mail.list_tags", "mail.create_tag", "mail.send",
+                       "mail.archive", "mail.unarchive", "mail.trash",
                        "mail.untrash", "mail.tag"):
-            assert caps[action] is False, f"{action} not live-verified; must be False"
-        assert "verif" in get_unsupported_reason("composio:mcp", "mail.archive").lower()
+            assert caps[action] is True, f"{action} should be live-verified True"
         assert caps["calendar.cancel"] is False
         assert caps["files.trash"] is False
         assert caps["mail.list_folders"] is False
@@ -190,5 +257,6 @@ class TestGoogleCapabilities:
         assert client.supports("mail.list_tags") is True
         assert client.supports("mail.create_tag") is True
         assert client.supports("mail.send") is True
-        assert client.supports("mail.archive") is False
+        assert client.supports("mail.archive") is True
+        assert client.supports("mail.tag") is True
         assert client.supports("calendar.cancel") is False
