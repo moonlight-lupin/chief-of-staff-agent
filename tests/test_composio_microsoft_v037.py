@@ -378,21 +378,33 @@ class TestMicrosoftWriteArgs:
         assert "title" not in args
         assert "start" not in args
 
-    def test_microsoft_files_upload_args_are_not_google_shape(self, mcp_key, tmp_project):
+    def test_microsoft_files_upload_stages_fileuploadable(self, mcp_key, tmp_project):
         client = self._client()
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"id": "file"})
         client._mcp_client = mock
+        staged = {
+            "name": "x.pdf",
+            "mimetype": "application/pdf",
+            "s3key": "uploads/abc/x.pdf",
+        }
 
-        client.files_upload("/tmp/x.pdf", parent_id="folder")
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
+            fh.write(b"%PDF-1.4")
+            path = fh.name
+        try:
+            with patch.object(
+                client, "_ms_stage_file_uploadable", return_value=staged,
+            ) as stage:
+                client.files_upload(path, parent_id="folder")
+            stage.assert_called_once_with(path, "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE")
+        finally:
+            Path(path).unlink(missing_ok=True)
 
         call = mock.call_tool.call_args[0][1]["tools"][0]
         assert call["tool_slug"] == "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE"
         args = call["arguments"]
-        assert args == {
-            "file": "/tmp/x.pdf",
-            "folder": "folder",
-        }
+        assert args == {"file": staged, "folder": "folder"}
         assert "file_path" not in args
         assert "parent_id" not in args
         assert "parentReference" not in args
@@ -642,29 +654,26 @@ class TestMicrosoftNormalizers:
 # ── capabilities honesty ─────────────────────────────────────────────────────
 
 class TestCapabilities:
-    # Capability expectations reflect the LIVE WRITE VERIFICATION run of
-    # 2026-07-16 (PR #6): a write is True only if it EXECUTED successfully live.
+    # v0.3.10: files + archive/inbox moves True; send/tags/cancel still False.
     def test_composio_microsoft_supported_set(self):
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
-        assert caps["mail.draft"] is True          # OUTLOOK_CREATE_DRAFT executed
+        assert caps["mail.draft"] is True
         assert caps["calendar.list"] is True
-        assert caps["calendar.create"] is True     # executed
-        assert caps["calendar.update"] is True     # executed
-        assert caps["calendar.delete"] is True     # executed
-        # mail-trash (move → deleteditems) executed live.
+        assert caps["calendar.create"] is True
+        assert caps["calendar.update"] is True
+        assert caps["calendar.delete"] is True
         assert caps["mail.trash"] is True
-        # legacy aliases resolve too
+        assert caps["mail.archive"] is True
+        assert caps["mail.unarchive"] is True
+        assert caps["mail.untrash"] is True
         assert caps["gmail.draft"] is True
         assert caps["gmail.trash"] is True
-        # OneDrive writes did NOT execute live (FileUploadable upload blocker).
-        assert caps["files.upload"] is False
-        assert caps["files.download"] is False
-        assert caps["files.trash"] is False
-        assert caps["drive.trash"] is False
-        # mail-move archive/inbox destinations were not exercised.
-        assert caps["mail.archive"] is False
+        assert caps["files.upload"] is True
+        assert caps["files.download"] is True
+        assert caps["files.trash"] is True
+        assert caps["drive.trash"] is True
 
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
@@ -672,24 +681,21 @@ class TestCapabilities:
         assert caps["mail.send"] is False
         reason = get_unsupported_reason("composio_microsoft:mcp", "mail.send")
         assert "intentionally disabled" in reason
-        # Tags/cancel remain unsupported (Phase 4 / policy).
         for op in ("mail.tag", "calendar.cancel"):
             assert caps[op] is False
-        # Live-verified writes.
         assert caps["mail.trash"] is True
         assert caps["mail.draft"] is True
-        # Not execution-verified writes carry a specific (non-generic) reason.
-        for op in ("files.upload", "files.trash", "mail.archive"):
-            assert caps[op] is False
-            assert "2026-07-16" in get_unsupported_reason("composio_microsoft:mcp", op)
+        assert caps["files.upload"] is True
+        assert caps["mail.archive"] is True
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         assert client.supports("mail.search") is True
         assert client.supports("mail.send") is False
-        assert client.supports("mail.draft") is True      # executed live
-        assert client.supports("files.upload") is False    # live FileUploadable blocker
+        assert client.supports("mail.draft") is True
+        assert client.supports("files.upload") is True
+        assert client.supports("mail.archive") is True
 
 
 # ── connect flow accepts outlook / one_drive ─────────────────────────────────

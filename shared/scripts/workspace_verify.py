@@ -57,7 +57,10 @@ Non-destructive by construction:
   * ``mail_draft``     — create a draft addressed to the operator/self address.
   * ``mail_tag_write`` — create (or reuse) the ``CoS-Verify`` tag/category and
                          apply it to the draft, then TRASH the draft to clean up.
-  * ``files_write``    — upload a tiny temp file, then TRASH it.
+  * ``mail_move_write``— create a draft, move archive→inbox (unarchive), then
+                         trash→inbox (untrash), then trash again to clean up.
+  * ``files_write``    — upload a tiny temp file, optionally DOWNLOAD it, then
+                         TRASH it.
 
 CLEANUP-CAPABILITY PRECONDITIONS.  A write check is only run when the provider can
 also clean up after it: ``mail_draft`` (and, transitively, ``mail_tag_write``,
@@ -109,6 +112,7 @@ CHECK_NAMES = [
     "files_read",
     "mail_draft",
     "mail_tag_write",
+    "mail_move_write",
     "files_write",
     "mail_send",
     "calendar_write",
@@ -123,8 +127,8 @@ AUTO_APPROVE_ENV = "CHIEF_OF_STAFF_AUTO_APPROVE"
 VERIFY_TAG = "CoS-Verify"
 
 # Write checks that count toward write_ready (mail_send / calendar_write are
-# always not_tested and never contribute a failure).
-_TESTED_WRITE_CHECKS = ("mail_draft", "mail_tag_write", "files_write")
+# always not_tested by default and never contribute a failure unless opted in).
+_TESTED_WRITE_CHECKS = ("mail_draft", "mail_tag_write", "mail_move_write", "files_write")
 
 # Human-report section layout.
 _SECTIONS: list[tuple[str, list[str]]] = [
@@ -132,7 +136,10 @@ _SECTIONS: list[tuple[str, list[str]]] = [
     ("Mail", ["mail_read", "mail_folder_scoped", "mail_tags_list"]),
     ("Calendar", ["calendar_read"]),
     ("OneDrive/Files", ["files_read"]),
-    ("Writes", ["mail_draft", "mail_tag_write", "files_write", "mail_send", "calendar_write"]),
+    ("Writes", [
+        "mail_draft", "mail_tag_write", "mail_move_write", "files_write",
+        "mail_send", "calendar_write",
+    ]),
 ]
 
 # Checks that are NOT required for read_ready (surfaced visibly in the report).
@@ -337,6 +344,73 @@ def _check_mail_tag_write(
         return _mk("fail", str(exc))
 
 
+def _check_mail_move_write(client: Any, config: Any) -> dict[str, str]:
+    """Exercise archive/inbox destinations on OUTLOOK_MOVE_MESSAGE (or equiv).
+
+    Cycle: draft → archive → unarchive → trash → untrash → trash (final cleanup).
+    Requires mail.draft plus archive/unarchive/trash/untrash.
+    """
+    needed = ("mail.draft", "mail.archive", "mail.unarchive", "mail.trash", "mail.untrash")
+    missing = [a for a in needed if not _supported(client, a)]
+    if missing:
+        return _mk(
+            "not_tested",
+            "provider does not support mail move cycle "
+            f"(missing: {', '.join(missing)})",
+        )
+    subject = f"[CoS verify move] {_marker()}"
+    draft_id: str | None = None
+    try:
+        addr = _self_address(config)
+        created = _result_dict(
+            client.mail_create_draft(
+                to=addr,
+                subject=subject,
+                body="Chief-of-Staff mail-move verification draft. Safe to delete.",
+            )
+        )
+        draft_id = (created.get("data") or {}).get("id")
+        if not (created.get("success") and draft_id):
+            return _mk("fail", created.get("error") or "draft creation returned no id")
+
+        current_id = draft_id
+        for step_name, method_name, dest_hint in (
+            ("archive", "mail_archive", "archive"),
+            ("unarchive", "mail_unarchive", "inbox"),
+            ("trash", "mail_trash", "deleteditems"),
+            ("untrash", "mail_untrash", "inbox"),
+            ("trash", "mail_trash", "deleteditems"),
+        ):
+            method = getattr(client, method_name)
+            res = _result_dict(method(current_id))
+            if not res.get("success"):
+                # Best-effort final trash if we still have an id.
+                try:
+                    client.mail_trash(current_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                return _mk(
+                    "fail",
+                    f"{step_name} failed ({dest_hint}): {res.get('error') or 'unknown'}",
+                )
+            data = res.get("data") or {}
+            current_id = str(data.get("restore_target") or data.get("id") or current_id)
+
+        return _mk(
+            "pass",
+            f"archive/unarchive/trash/untrash cycle ok (final id={_short(current_id)})",
+        )
+    except NotImplementedError as exc:
+        return _mk("not_tested", str(exc))
+    except Exception as exc:  # noqa: BLE001
+        if draft_id:
+            try:
+                client.mail_trash(draft_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return _mk("fail", str(exc))
+
+
 def _check_files_write(client: Any) -> dict[str, str]:
     if not _supported(client, "files.upload"):
         return _mk("not_tested", "provider does not support files.upload")
@@ -347,6 +421,7 @@ def _check_files_write(client: Any) -> dict[str, str]:
             "cleanup capability files.trash unsupported — skipped to avoid leaving artefacts",
         )
     tmp_path: str | None = None
+    download_path: str | None = None
     try:
         fd, tmp_path = tempfile.mkstemp(prefix="cos-verify-", suffix=".txt")
         with os.fdopen(fd, "w") as fh:
@@ -360,6 +435,26 @@ def _check_files_write(client: Any) -> dict[str, str]:
         file_id = (d.get("data") or {}).get("id")
         if not (d.get("success") and file_id):
             return _mk("fail", d.get("error") or "upload returned no id in data")
+
+        downloaded = False
+        if _supported(client, "files.download"):
+            fd2, download_path = tempfile.mkstemp(prefix="cos-verify-dl-", suffix=".txt")
+            os.close(fd2)
+            try:
+                dl = _result_dict(client.files_download(file_id, download_path))
+            except NotImplementedError:
+                dl = {"success": False, "error": "files.download NotImplementedError"}
+            except Exception as exc:  # noqa: BLE001
+                dl = {"success": False, "error": str(exc)}
+            if not dl.get("success"):
+                # Still trash the upload; surface download failure.
+                try:
+                    client.files_trash(file_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                return _mk("fail", dl.get("error") or "files.download failed")
+            downloaded = True
+
         # Clean up the upload. A cleanup failure is a FAILURE.
         try:
             trashed = _result_dict(client.files_trash(file_id))
@@ -374,15 +469,20 @@ def _check_files_write(client: Any) -> dict[str, str]:
                 "fail",
                 f"{_CLEANUP_FAIL_PREFIX} Uploaded file: {filename}. (cleanup error: {exc})",
             )
-        return _mk("pass", f"uploaded (id={_short(file_id)}); trashed")
+        detail = f"uploaded (id={_short(file_id)})"
+        if downloaded:
+            detail += "; downloaded"
+        detail += "; trashed"
+        return _mk("pass", detail)
     except Exception as exc:  # noqa: BLE001
         return _mk("fail", str(exc))
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        for p in (tmp_path, download_path):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
 def _emit_check_failures(provider: Any, checks: Mapping[str, dict[str, str]]) -> None:
@@ -489,6 +589,7 @@ def _run_write_checks(client: Any, config: Any, checks: dict[str, dict[str, str]
             cleanup_fail = _trash_verify_draft(client, draft_id, subject)
             if cleanup_fail is not None:
                 checks["mail_draft"] = cleanup_fail
+        checks["mail_move_write"] = _check_mail_move_write(client, config)
         checks["files_write"] = _check_files_write(client)
     finally:
         if saved is None:
