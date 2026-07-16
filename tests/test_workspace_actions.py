@@ -91,11 +91,24 @@ class TestGoogleProviderWriteActions:
         with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake")):
             return GoogleWorkspaceClient({"google": {"delegate_email": "test@test.com", "account_alias": "test"}})
 
-    def test_gmail_create_draft_not_supported(self, google_client):
-        """gmail_create_draft returns 'not supported' for google_api provider."""
-        result = google_client.gmail_create_draft("a@test.com", "Subject", "Body")
-        assert result["success"] is False
-        assert "not supported" in result["error"].lower()
+    def test_gmail_create_draft_via_sa_rest(self, google_client):
+        """gmail_create_draft uses SA REST when service_account_path is set."""
+        google_client.config = {
+            "google": {
+                "delegate_email": "test@test.com",
+                "account_alias": "test",
+                "service_account_path": "/fake/sa.json",
+            }
+        }
+        google_client.delegate_email = "test@test.com"
+        with patch(
+            "providers.google_workspace._gmail_draft_via_service_account",
+            return_value={"id": "msg-1", "draft_id": "r-1", "message_id": "msg-1"},
+        ) as mock_draft:
+            result = google_client.gmail_create_draft("a@test.com", "Subject", "Body")
+        assert result["success"] is True
+        assert result["data"]["id"] == "msg-1"
+        mock_draft.assert_called_once()
 
     def test_calendar_create(self, google_client):
         with patch.object(google_client, "_run", return_value=(0, '{"id": "evt_1"}', "")):

@@ -61,6 +61,8 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "files_search": "GOOGLEDRIVE_FIND_FILE",
         "files_upload": "GOOGLEDRIVE_UPLOAD_FILE",
         "files_download": "GOOGLEDRIVE_DOWNLOAD_FILE",
+        # Soft trash (recoverable via GOOGLEDRIVE_UNTRASH_FILE) — not permanent delete.
+        "files_trash": "GOOGLEDRIVE_TRASH_FILE",
     },
     # Microsoft (Outlook + OneDrive) slugs corrected against Composio's LIVE
     # catalog (v0.3.7 acceptance test, 2026-07). The reads (mail_search,
@@ -1569,18 +1571,23 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             return
 
     @guarded("files.trash", target_arg="file_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("files_trash"),
-             tool_slug=lambda self: self._ms_cleanup_slug("files_trash"))
+             audit_tool=lambda self: self._cleanup_slug("files_trash"),
+             tool_slug=lambda self: self._cleanup_slug("files_trash"))
     def files_trash(self, file_id: str) -> dict[str, Any]:
-        """Move a OneDrive item to the recycle bin (ONE_DRIVE_DELETE_ITEM).
+        """Soft-delete a file: OneDrive recycle bin or Google Drive trash.
 
-        Uses the soft-delete slug, not ONE_DRIVE_DELETE_ITEM_PERMANENTLY.
+        Microsoft → ``ONE_DRIVE_DELETE_ITEM`` (``item_id``).
+        Google → ``GOOGLEDRIVE_TRASH_FILE`` (``file_id``) — not permanent delete.
         """
-        self._require_microsoft_cleanup("files_trash")
         slug = self._slug_for("files_trash")
-        self._execute_composio_tool(
-            slug, {"item_id": file_id}, operation="files_trash",
-        )
+        if self.family == "microsoft":
+            self._execute_composio_tool(
+                slug, {"item_id": file_id}, operation="files_trash",
+            )
+        else:
+            self._execute_composio_tool(
+                slug, {"file_id": file_id}, operation="files_trash",
+            )
         return {"id": file_id, "reversible": True}
 
     # --- Health ---

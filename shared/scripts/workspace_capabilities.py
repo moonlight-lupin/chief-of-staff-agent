@@ -35,7 +35,7 @@ LEGACY_ACTION_ALIASES: dict[str, str] = {
 CAPABILITIES: dict[str, dict[str, bool]] = {
     "google_api": {
         "mail.search": True,
-        "mail.draft": False,        # google_api.py has no draft subcommand
+        "mail.draft": True,         # Gmail drafts.create via SA REST (google_api.py has no draft CLI)
         "mail.send": True,          # supported but destructive / guardrailed
         "mail.list_folders": False, # Gmail uses labels, not Outlook folders
         "mail.move": False,         # no folder-move surface on google_api
@@ -62,7 +62,8 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # clean archive→unarchive→trash→untrash cycle plus tag apply ran green on
     # real hex message ids (write_ready: yes, no id-shape errors).
     # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
-    # folders). calendar.cancel / files.trash stay False.
+    # folders). calendar.cancel stays False. files.trash wired via
+    # GOOGLEDRIVE_TRASH_FILE (v0.3.15).
     "composio": {
         "mail.search": True,
         "mail.draft": True,
@@ -83,7 +84,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.search": True,
         "files.upload": True,
         "files.download": True,
-        "files.trash": False,       # not wired yet
+        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — wired v0.3.15 (soft trash)
     },
     "composio:mcp": {
         "mail.search": True,
@@ -107,7 +108,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.search": True,
         "files.upload": True,
         "files.download": True,
-        "files.trash": False,
+        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — wired v0.3.15
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
@@ -262,14 +263,10 @@ _FILES_UPLOAD_BINARY_REASON = (
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
-    ("google_api", "gmail.draft"): "google_api.py has no draft subcommand",
-    ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                      "(no restore-path parity with the soft-delete promise)",
     ("composio:mcp", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                          "(no restore-path parity with the soft-delete promise)",
-    ("composio", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
-    ("composio:mcp", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
     ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
@@ -280,8 +277,8 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
 
 # Provider recommendations for each action/workflow.
 PROVIDER_RECOMMENDATIONS: dict[str, str] = {
-    "gmail.draft": "composio",
-    "document.handoff": "composio",
+    "gmail.draft": "google_api or composio",
+    "document.handoff": "google_api or composio",
     "gmail.send": "google_api, composio, or composio_microsoft",
     "calendar.create": "google_api or composio",
     "calendar.update": "google_api or composio",

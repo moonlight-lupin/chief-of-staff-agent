@@ -455,10 +455,10 @@ class TestSoftDeleteCapabilities:
         assert supports("google_api", "calendar.cancel") is True
 
     def test_composio_google_soft_delete_surface(self):
-        # v0.3.14: Gmail archive/trash execution-verified 2026-07-16 (hardened
-        # message-id path) → True. Drive trash + calendar.cancel stay unsupported.
+        # v0.3.14: Gmail archive/trash execution-verified. v0.3.15: Drive trash
+        # via GOOGLEDRIVE_TRASH_FILE. calendar.cancel stays unsupported.
         from workspace_capabilities import supports
         assert supports("composio:mcp", "gmail.archive") is True
         assert supports("composio:mcp", "gmail.trash") is True
-        assert supports("composio:mcp", "drive.trash") is False
+        assert supports("composio:mcp", "drive.trash") is True
         assert supports("composio:mcp", "calendar.cancel") is False

@@ -40,8 +40,7 @@ def fake_config():
 def mock_workspace():
     mock = MagicMock()
     mock.provider_name = "google_api"
-    # Capability: google_api supports everything except gmail.draft
-    mock.supports.side_effect = lambda action: action != "gmail.draft"
+    mock.supports.side_effect = lambda action: True
     # Read methods
     mock.files_search.return_value = [{"id": "f1", "name": "doc.pdf"}]
     mock.mail_search.return_value = [{"id": "m1", "subject": "Test"}]
@@ -193,11 +192,20 @@ class TestDocumentHandoff:
 class TestHandoffProviderAwareness:
     """Handoff respects provider capabilities."""
 
-    def test_handoff_google_api_fails_cleanly_without_side_effects(self, fake_config, auto_approve, tmp_path):
-        """Under google_api, handoff fails before uploading because gmail.draft unsupported."""
+    def test_handoff_google_api_succeeds_with_draft(self, fake_config, auto_approve, tmp_path):
+        """Under google_api, handoff uploads then drafts when mail.draft is supported."""
         mock_google = MagicMock()
         mock_google.provider_name = "google_api"
-        mock_google.supports.side_effect = lambda action: action != "gmail.draft"
+        mock_google.supports.side_effect = lambda action: True
+        mock_google.files_upload.return_value = {
+            "success": True, "action": "drive.upload", "provider": "google_api",
+            "data": {"id": "f1", "webViewLink": "https://drive.google.com/file/d/f1/view"},
+            "audited": True,
+        }
+        mock_google.mail_create_draft.return_value = {
+            "success": True, "action": "gmail.draft", "provider": "google_api",
+            "data": {"id": "msg-1"}, "audited": True,
+        }
         test_file = tmp_path / "NDA.docx"
         test_file.write_text("dummy")
         with patch("document_actions.load_config", return_value=fake_config), \
@@ -212,14 +220,15 @@ class TestHandoffProviderAwareness:
                     "--to", "client@test.com", "--subject", "NDA", "--body", "Body",
                 ])
             data = json.loads(buf.getvalue())
-        assert rc == 1
-        assert data["success"] is False
-        assert "gmail.draft" in data["error"]
-        assert data["steps"]["drive_upload"] is None  # no side effects
-        mock_google.files_upload.assert_not_called()  # upload was NOT called
+        assert rc == 0
+        assert data["success"] is True
+        mock_google.files_upload.assert_called_once()
+        mock_google.mail_create_draft.assert_called_once()
 
-    def test_handoff_google_api_allow_partial_uploads(self, fake_config, auto_approve, tmp_path):
-        """Under google_api with --allow-partial, file is uploaded but draft fails."""
+    def test_handoff_allow_partial_when_draft_capability_missing(
+        self, fake_config, auto_approve, tmp_path
+    ):
+        """With --allow-partial, upload proceeds even if draft capability is missing."""
         mock_google = MagicMock()
         mock_google.provider_name = "google_api"
         mock_google.supports.side_effect = lambda action: action != "gmail.draft"
@@ -246,15 +255,18 @@ class TestHandoffProviderAwareness:
         assert rc == 1
         assert data["success"] is False
         assert "not supported" in data["error"].lower()
-        assert data["steps"]["drive_upload"] is not None  # upload DID happen
+        assert data["steps"]["drive_upload"] is not None
         mock_google.files_upload.assert_called_once()
         mock_google.mail_create_draft.assert_not_called()
 
-    def test_draft_email_google_api_returns_unsupported(self, fake_config, auto_approve):
-        """draft-email under google_api returns clean unsupported error."""
+    def test_draft_email_google_api_calls_mail_create_draft(self, fake_config, auto_approve):
         mock_google = MagicMock()
         mock_google.provider_name = "google_api"
-        mock_google.supports.side_effect = lambda action: action != "gmail.draft"
+        mock_google.supports.side_effect = lambda action: True
+        mock_google.mail_create_draft.return_value = {
+            "success": True, "action": "gmail.draft", "provider": "google_api",
+            "data": {"id": "d1"}, "audited": True,
+        }
         with patch("document_actions.load_config", return_value=fake_config), \
              patch("document_actions.get_client", return_value=mock_google):
             import document_actions
@@ -266,10 +278,9 @@ class TestHandoffProviderAwareness:
                     "draft-email", "--to", "c@test.com", "--subject", "S", "--body", "B",
                 ])
             data = json.loads(buf.getvalue())
-        assert rc == 1
-        assert data["success"] is False
-        assert "not supported" in data["error"].lower()
-        mock_google.mail_create_draft.assert_not_called()
+        assert rc == 0
+        assert data["success"] is True
+        mock_google.mail_create_draft.assert_called_once()
 
 
 class TestMeetingPrepEventGather:

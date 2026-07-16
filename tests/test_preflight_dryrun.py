@@ -79,10 +79,10 @@ def make_composio_mock():
 
 
 def make_google_mock():
-    """Mock client that supports all except gmail.draft (google_api)."""
+    """Mock google_api client with full write surface (incl. mail.draft)."""
     mock = MagicMock()
     mock.provider_name = "google_api"
-    mock.supports.side_effect = lambda action: action != "gmail.draft"
+    mock.supports.side_effect = lambda action: True
     return mock
 
 
@@ -191,7 +191,7 @@ class TestPreflight:
         mock.gmail_create_draft.assert_not_called()
 
     def test_handoff_preflight_google_api(self, fake_config, auto_approve, tmp_path):
-        """Preflight under google_api shows missing gmail.draft."""
+        """Preflight under google_api is green when draft+upload are supported."""
         test_file = tmp_path / "NDA.docx"
         test_file.write_text("dummy")
         mock = make_google_mock()
@@ -207,10 +207,11 @@ class TestPreflight:
                     "--to", "c@test.com", "--subject", "NDA", "--body", "Body", "--preflight",
                 ])
             data = json.loads(buf.getvalue())
-        assert rc == 1  # missing capabilities
-        assert data["data"]["capabilities_ok"] is False
-        assert "gmail.draft" in data["data"]["missing"]
+        assert rc == 0
+        assert data["data"]["capabilities_ok"] is True
+        assert data["data"]["missing"] == []
         mock.drive_upload.assert_not_called()
+        mock.gmail_create_draft.assert_not_called()
 
     def test_handoff_preflight_summary_mode(self, fake_config, auto_approve, tmp_path):
         """Preflight in summary mode prints readable plan."""

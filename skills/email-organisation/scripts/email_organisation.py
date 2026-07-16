@@ -321,14 +321,19 @@ def cmd_classify_inbox(args: argparse.Namespace) -> int:
             print_json(unsupported)
         return 1
 
+    surface = _tag_surface(client)
+    # in:inbox compiles to Outlook Inbox folder scope on Composio MS / m365.
     emails = client.mail_search(query="in:inbox", max_results=args.limit)
     result = do_classify(cfg, emails, limit=args.limit)
+    result["tag_surface"] = surface["kind"]
+    result["provider"] = getattr(client, "provider_name", None)
 
     if args.summary:
         if result.get("no_policy"):
             print(f"❌ {result.get('error', 'No policy')}")
         else:
-            print(f"📧 Inbox Classification")
+            print("📧 Inbox Classification")
+            print(f"   Provider: {getattr(client, 'provider_name', '?')} ({surface['kind']})")
             print(f"  Classified: {result['classified']}")
             print(f"  With category: {result['with_category']}")
             print(f"  Unmapped: {result['unmapped']}")

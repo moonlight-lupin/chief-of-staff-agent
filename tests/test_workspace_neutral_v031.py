@@ -247,8 +247,8 @@ class TestCapabilityLegacyAliases:
         from workspace_capabilities import supports
         assert supports("google_api", "gmail.labels.list") is True
         assert supports("google_api", "mail.list_tags") is True
-        assert supports("composio:mcp", "drive.trash") is False
-        assert supports("composio:mcp", "files.trash") is False
+        assert supports("composio:mcp", "drive.trash") is True
+        assert supports("composio:mcp", "files.trash") is True
 
     def test_client_supports_legacy_and_neutral(self):
         from providers.google_workspace import GoogleWorkspaceClient

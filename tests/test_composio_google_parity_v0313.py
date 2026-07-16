@@ -235,20 +235,16 @@ class TestGoogleMailCleanup:
 
 class TestGoogleCapabilities:
     def test_caps_reflect_live_execution(self):
-        # Execution-verified 2026-07-16 (live Gmail): list_tags, create_tag, send.
-        # After the v0.3.14 hardening (draft-id→message-id fix, r- draft-id
-        # reject, Label_… name resolve), the label/move/trash path re-ran green
-        # on real hex message ids (write_ready: yes, full archive→unarchive→
-        # trash→untrash cycle + tag apply) — so mail.tag/archive/unarchive/trash/
-        # untrash are now True. calendar.cancel / files.trash / folders stay False.
+        # Execution-verified 2026-07-16 (live Gmail): list_tags, create_tag, send,
+        # mail.tag/archive/unarchive/trash/untrash. files.trash wired v0.3.15 via
+        # GOOGLEDRIVE_TRASH_FILE. calendar.cancel / folders stay False.
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
         for action in ("mail.list_tags", "mail.create_tag", "mail.send",
                        "mail.archive", "mail.unarchive", "mail.trash",
-                       "mail.untrash", "mail.tag"):
-            assert caps[action] is True, f"{action} should be live-verified True"
+                       "mail.untrash", "mail.tag", "files.trash"):
+            assert caps[action] is True, f"{action} should be True"
         assert caps["calendar.cancel"] is False
-        assert caps["files.trash"] is False
         assert caps["mail.list_folders"] is False
 
     def test_client_supports(self, mcp_key):
@@ -259,4 +255,16 @@ class TestGoogleCapabilities:
         assert client.supports("mail.send") is True
         assert client.supports("mail.archive") is True
         assert client.supports("mail.tag") is True
+        assert client.supports("files.trash") is True
         assert client.supports("calendar.cancel") is False
+
+    def test_files_trash_google_slug(self, mcp_key, tmp_project):
+        client = TestGoogleMailCleanup()._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
+        client._mcp_client = mock
+        res = client.files_trash("drive-file-1")
+        assert res["success"] is True
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GOOGLEDRIVE_TRASH_FILE"
+        assert call["arguments"] == {"file_id": "drive-file-1"}
