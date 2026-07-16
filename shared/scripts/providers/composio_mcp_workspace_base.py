@@ -59,8 +59,14 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "calendar_create": "GOOGLECALENDAR_CREATE_EVENT",
         "calendar_update": "GOOGLECALENDAR_UPDATE_EVENT",
         "files_search": "GOOGLEDRIVE_FIND_FILE",
-        "files_upload": "GOOGLEDRIVE_UPLOAD_FILE",
+        # Text create — MCP-native (name+content, no Files API staging).
+        # Execution-verified 2026-07-16, analog of OneDrive CREATE_TEXT_FILE.
+        "files_upload": "GOOGLEDRIVE_CREATE_FILE_FROM_TEXT",
+        # Binary — FileUploadable staging ({name,mimetype,s3key}) via COMPOSIO_API_KEY.
+        "files_upload_binary": "GOOGLEDRIVE_UPLOAD_FILE",
         "files_download": "GOOGLEDRIVE_DOWNLOAD_FILE",
+        # Soft trash (recoverable via GOOGLEDRIVE_UNTRASH_FILE) — not permanent delete.
+        "files_trash": "GOOGLEDRIVE_TRASH_FILE",
     },
     # Microsoft (Outlook + OneDrive) slugs corrected against Composio's LIVE
     # catalog (v0.3.7 acceptance test, 2026-07). The reads (mail_search,
@@ -1508,10 +1514,38 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             out["upload_slug"] = slug
             return out
 
-        slug = self._slug_for("files_upload")
-        args = {"file_path": file_path}
-        if parent_id:
-            args["parent_id"] = parent_id
+        # Google Drive: text files use GOOGLEDRIVE_CREATE_FILE_FROM_TEXT
+        # (file_name+text_content over MCP — no Files API staging, no
+        # COMPOSIO_API_KEY; execution-verified 2026-07-16). Binary files use
+        # GOOGLEDRIVE_UPLOAD_FILE with a staged file_to_upload FileUploadable
+        # (needs COMPOSIO_API_KEY — the raw file_path is silently ignored).
+        # Mirrors the OneDrive text/binary split.
+        path = Path(file_path).expanduser()
+        if self._ms_is_text_upload(path):
+            slug = self._slug_for("files_upload")  # CREATE_FILE_FROM_TEXT
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                raise RuntimeError(
+                    f"file looks text-like but is not valid UTF-8 ({path.name}); "
+                    "rename with a binary extension to use the staged upload path"
+                ) from exc
+            args: dict[str, Any] = {"file_name": path.name, "text_content": content}
+            if parent_id:
+                args["parent_id"] = parent_id
+        else:
+            from composio_files import stage_file_uploadable
+
+            slug = self._slug_for("files_upload_binary")  # GOOGLEDRIVE_UPLOAD_FILE
+            file_arg = stage_file_uploadable(
+                file_path,
+                tool_slug=slug,
+                toolkit_slug="googledrive",
+                key_env=self.key_env,
+            )
+            args = {"file_to_upload": file_arg}
+            if parent_id:
+                args["parent_id"] = parent_id
         data = self._execute_composio_tool(slug, args, operation="files_upload")
         return data if isinstance(data, dict) else {}
 
@@ -1569,18 +1603,23 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             return
 
     @guarded("files.trash", target_arg="file_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("files_trash"),
-             tool_slug=lambda self: self._ms_cleanup_slug("files_trash"))
+             audit_tool=lambda self: self._cleanup_slug("files_trash"),
+             tool_slug=lambda self: self._cleanup_slug("files_trash"))
     def files_trash(self, file_id: str) -> dict[str, Any]:
-        """Move a OneDrive item to the recycle bin (ONE_DRIVE_DELETE_ITEM).
+        """Soft-delete a file: OneDrive recycle bin or Google Drive trash.
 
-        Uses the soft-delete slug, not ONE_DRIVE_DELETE_ITEM_PERMANENTLY.
+        Microsoft → ``ONE_DRIVE_DELETE_ITEM`` (``item_id``).
+        Google → ``GOOGLEDRIVE_TRASH_FILE`` (``file_id``) — not permanent delete.
         """
-        self._require_microsoft_cleanup("files_trash")
         slug = self._slug_for("files_trash")
-        self._execute_composio_tool(
-            slug, {"item_id": file_id}, operation="files_trash",
-        )
+        if self.family == "microsoft":
+            self._execute_composio_tool(
+                slug, {"item_id": file_id}, operation="files_trash",
+            )
+        else:
+            self._execute_composio_tool(
+                slug, {"file_id": file_id}, operation="files_trash",
+            )
         return {"id": file_id, "reversible": True}
 
     # --- Health ---

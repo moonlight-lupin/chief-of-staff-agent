@@ -56,7 +56,7 @@ class TestMCPClient:
         call_headers = mock_post.call_args_list[0][1]["headers"]
         assert call_headers["Authorization"] == "Bearer test-mcp-key"
         payload = mock_post.call_args_list[0][1]["json"]
-        assert payload["params"]["clientInfo"]["version"] == "0.3.14"
+        assert payload["params"]["clientInfo"]["version"] == "0.3.15"
 
     def test_initialize_failed_http(self, mcp_key):
         from mcp_client import MCPClient

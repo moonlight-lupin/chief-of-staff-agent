@@ -7,11 +7,13 @@ All write actions are audited via workspace_audit.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
 import sys
 import warnings
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,6 +24,83 @@ if str(_PARENT) not in sys.path:
 
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
+
+# Draft creation uses gmail.modify (a superset of gmail.compose) because it is
+# ALREADY in google_api.py's standard SCOPES / domain-wide delegation set — so
+# drafts work with any existing google_api service-account setup, no new admin
+# scope authorization required. gmail.compose is narrower but would force every
+# operator to add a scope in Workspace Admin. Execution-verified 2026-07-16: the
+# identical drafts.create call under gmail.modify returned HTTP 200 with the
+# draft in the delegate's Drafts folder.
+_GMAIL_DRAFT_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+_GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
+
+
+def _gmail_draft_via_service_account(
+    *,
+    service_account_path: str,
+    delegate_email: str,
+    to: str,
+    subject: str,
+    body: str,
+    cc: str | None = None,
+) -> dict[str, Any]:
+    """Create a Gmail draft via REST using domain-wide delegation.
+
+    ``google_api.py`` has no draft subcommand; this path uses the same SA +
+    delegate identity already configured for the google_api provider.
+    """
+    import requests
+    from google.auth.transport.requests import Request
+    from google.oauth2 import service_account
+
+    sa_path = Path(service_account_path).expanduser()
+    if not sa_path.is_file():
+        raise RuntimeError(f"service account JSON not found: {sa_path}")
+    if not (delegate_email or "").strip():
+        raise RuntimeError(
+            "google.delegate_email is required for Gmail draft creation"
+        )
+
+    credentials = service_account.Credentials.from_service_account_file(
+        str(sa_path),
+        scopes=[_GMAIL_DRAFT_SCOPE],
+    ).with_subject(delegate_email.strip())
+    credentials.refresh(Request())
+
+    mime = MIMEText(body or "", _charset="utf-8")
+    mime["To"] = to
+    mime["Subject"] = subject
+    if cc:
+        mime["Cc"] = cc
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+
+    resp = requests.post(
+        _GMAIL_DRAFTS_URL,
+        headers={
+            "Authorization": f"Bearer {credentials.token}",
+            "Content-Type": "application/json",
+        },
+        json={"message": {"raw": raw}},
+        timeout=45,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"Gmail drafts.create failed ({resp.status_code}): {resp.text[:500]}"
+        )
+    data = resp.json() if resp.content else {}
+    draft_id = str(data.get("id") or "")
+    msg = data.get("message") if isinstance(data.get("message"), Mapping) else {}
+    msg_id = str(msg.get("id") or "") if isinstance(msg, Mapping) else ""
+    out: dict[str, Any] = dict(data) if isinstance(data, dict) else {}
+    if msg_id:
+        out["draft_id"] = draft_id or out.get("id")
+        out["id"] = msg_id
+        out["message_id"] = msg_id
+    elif draft_id:
+        out["id"] = draft_id
+        out["draft_id"] = draft_id
+    return out
 
 
 def _find_google_api_script() -> Path:
@@ -185,21 +264,40 @@ class GoogleWorkspaceClient(WorkspaceClient):
             raise RuntimeError(err.strip() or out.strip())
         return {"output": out.strip()}
 
+    @guarded("gmail.draft", target_arg="to", audit_provider="google_api")
     def mail_create_draft(self, to: str, subject: str, body: str,
                           cc: str | None = None) -> dict[str, Any]:
         """Create a mail draft.
 
-        Note: google_api.py does not support a 'draft' subcommand.
-        Drafts are only supported through the Composio MCP provider.
-        This method returns a clear 'not supported' error for the Google provider.
+        ``google_api.py`` has no draft CLI; drafts are created via the Gmail
+        REST API using the configured service-account + ``delegate_email``.
+        Surfaces the underlying message id as ``id`` (keeps ``draft_id``),
+        matching the Composio Google contract.
         """
-        from workspace_guardrails import ActionResult
-        return ActionResult(
-            success=False, action="gmail.draft", provider=self._provider_name,
-            target=to,
-            error="gmail.draft not supported by google_api provider — use Composio MCP provider for draft creation",
-            audited=False,
-        ).to_dict()
+        google_cfg = (
+            self.config.get("google", {})
+            if isinstance(self.config, Mapping)
+            else {}
+        )
+        sa_path = str(google_cfg.get("service_account_path") or "").strip()
+        if not sa_path:
+            sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
+        delegate = self.delegate_email or str(
+            google_cfg.get("delegate_email") or ""
+        ).strip()
+        if not sa_path:
+            raise RuntimeError(
+                "gmail.draft requires google.service_account_path (or "
+                "GOOGLE_SERVICE_ACCOUNT_PATH) — google_api.py has no draft CLI"
+            )
+        return _gmail_draft_via_service_account(
+            service_account_path=sa_path,
+            delegate_email=delegate,
+            to=to,
+            subject=subject,
+            body=body,
+            cc=cc,
+        )
 
     @guarded("calendar.create", target_arg="title", audit_provider="google_api")
     def calendar_create(self, title: str, start: str, end: str,

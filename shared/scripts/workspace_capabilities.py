@@ -35,7 +35,7 @@ LEGACY_ACTION_ALIASES: dict[str, str] = {
 CAPABILITIES: dict[str, dict[str, bool]] = {
     "google_api": {
         "mail.search": True,
-        "mail.draft": False,        # google_api.py has no draft subcommand
+        "mail.draft": True,         # Gmail drafts.create via SA REST (gmail.modify) — execution-verified 2026-07-16 (draft landed in Drafts)
         "mail.send": True,          # supported but destructive / guardrailed
         "mail.list_folders": False, # Gmail uses labels, not Outlook folders
         "mail.move": False,         # no folder-move surface on google_api
@@ -62,7 +62,14 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # clean archive→unarchive→trash→untrash cycle plus tag apply ran green on
     # real hex message ids (write_ready: yes, no id-shape errors).
     # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
-    # folders). calendar.cancel / files.trash stay False.
+    # folders). calendar.cancel stays False.
+    # files.download / files.trash: execution-verified 2026-07-16 — a throwaway
+    # file created via GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (MCP-native text create,
+    # no key) was trashed via GOOGLEDRIVE_TRASH_FILE and confirmed in Drive Trash.
+    # files.upload stays False (mirrors OneDrive): the TEXT path works over MCP
+    # (CREATE_FILE_FROM_TEXT — wired), but the headline case is BINARY document
+    # filing (.pdf/.docx), which needs COMPOSIO_API_KEY staging on
+    # GOOGLEDRIVE_UPLOAD_FILE. A coarse boolean must not over-promise it.
     "composio": {
         "mail.search": True,
         "mail.draft": True,
@@ -81,9 +88,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.update": True,
         "calendar.cancel": False,   # leave unsupported (no restore path parity)
         "files.search": True,
-        "files.upload": True,
+        "files.upload": False,      # TEXT via CREATE_FILE_FROM_TEXT (wired); BINARY needs COMPOSIO_API_KEY — see _GDRIVE_FILES_REASON. For binary Drive filing without a key, use the google_api provider.
         "files.download": True,
-        "files.trash": False,       # not wired yet
+        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
     },
     "composio:mcp": {
         "mail.search": True,
@@ -105,9 +112,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.update": True,
         "calendar.cancel": False,
         "files.search": True,
-        "files.upload": True,
+        "files.upload": False,      # TEXT via CREATE_FILE_FROM_TEXT; BINARY needs COMPOSIO_API_KEY (use google_api for keyless binary)
         "files.download": True,
-        "files.trash": False,
+        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
@@ -259,17 +266,29 @@ _FILES_UPLOAD_BINARY_REASON = (
     "file upload."
 )
 
+# Google Drive uploads over Composio MCP: TEXT files work MCP-native via
+# GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (no key). BINARY files (.pdf/.docx — the
+# headline document-filing case) need GOOGLEDRIVE_UPLOAD_FILE with a staged
+# file_to_upload FileUploadable, which requires COMPOSIO_API_KEY (the MCP key
+# 401s at the Files API — confirmed 2026-07-16). A coarse files.upload boolean
+# can't promise binary, so it stays False. (For keyless binary Drive filing,
+# use the google_api service-account provider instead.)
+_GDRIVE_FILES_REASON = (
+    "Google Drive binary uploads (.pdf/.docx) need GOOGLEDRIVE_UPLOAD_FILE with a "
+    "staged file_to_upload FileUploadable (COMPOSIO_API_KEY; the MCP key 401s). "
+    "Plain-text files upload over MCP via GOOGLEDRIVE_CREATE_FILE_FROM_TEXT. Set "
+    "COMPOSIO_API_KEY, or use the google_api provider for keyless binary filing."
+)
+
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
-    ("google_api", "gmail.draft"): "google_api.py has no draft subcommand",
-    ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                      "(no restore-path parity with the soft-delete promise)",
     ("composio:mcp", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                          "(no restore-path parity with the soft-delete promise)",
-    ("composio", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
-    ("composio:mcp", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
+    ("composio", "files.upload"): _GDRIVE_FILES_REASON,
+    ("composio:mcp", "files.upload"): _GDRIVE_FILES_REASON,
     ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
@@ -280,8 +299,8 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
 
 # Provider recommendations for each action/workflow.
 PROVIDER_RECOMMENDATIONS: dict[str, str] = {
-    "gmail.draft": "composio",
-    "document.handoff": "composio",
+    "gmail.draft": "google_api or composio",
+    "document.handoff": "google_api or composio",
     "gmail.send": "google_api, composio, or composio_microsoft",
     "calendar.create": "google_api or composio",
     "calendar.update": "google_api or composio",

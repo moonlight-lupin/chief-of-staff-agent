@@ -134,6 +134,7 @@ integrations:
           - GOOGLEDRIVE_FIND_FILE
         write_safe:
           - GOOGLEDRIVE_UPLOAD_FILE
+          - GOOGLEDRIVE_TRASH_FILE
 ```
 
 6. Connect Gmail and Calendar:

@@ -17,7 +17,7 @@ class TestCapabilities:
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("google_api")
         assert caps["gmail.search"] is True
-        assert caps["gmail.draft"] is False       # google_api.py has no draft subcommand
+        assert caps["gmail.draft"] is True         # SA REST drafts.create (v0.3.15)
         assert caps["gmail.send"] is True          # supported but destructive
         assert caps["calendar.create"] is True
         assert caps["drive.upload"] is True
@@ -87,17 +87,19 @@ class TestCapabilities:
         from workspace_capabilities import supports
         assert supports("google_api", "gmail.send") is True
         assert supports("composio", "gmail.send") is True
-        assert supports("composio", "drive.upload") is True
+        assert supports("composio", "drive.upload") is False  # GDrive upload needs COMPOSIO_API_KEY staging
         assert supports("composio", "calendar.cancel") is False
 
     def test_unsupported_actions(self):
         from workspace_capabilities import unsupported_actions
         google_unsup = unsupported_actions("google_api")
-        assert "gmail.draft" in google_unsup  # now False
+        assert "gmail.draft" not in google_unsup
         assert "gmail.send" not in google_unsup
         composio_unsup = unsupported_actions("composio")
         assert "calendar.cancel" in composio_unsup
         assert "gmail.send" not in composio_unsup
+        assert "files.trash" not in composio_unsup   # GDrive trash execution-verified 2026-07-16
+        assert "files.upload" in composio_unsup       # binary needs COMPOSIO_API_KEY
 
     def test_unknown_provider_returns_empty(self):
         from workspace_capabilities import get_capabilities, supports
@@ -117,10 +119,12 @@ class TestCapabilities:
 
     def test_unsupported_reasons_exist(self):
         from workspace_capabilities import UNSUPPORTED_REASONS
-        assert ("google_api", "gmail.draft") in UNSUPPORTED_REASONS
+        assert ("google_api", "gmail.draft") not in UNSUPPORTED_REASONS
         assert ("composio:mcp", "calendar.cancel") in UNSUPPORTED_REASONS
+        assert ("composio:mcp", "files.upload") in UNSUPPORTED_REASONS  # binary needs COMPOSIO_API_KEY
+        assert ("composio:mcp", "files.trash") not in UNSUPPORTED_REASONS  # execution-verified True
 
     def test_provider_recommendations_exist(self):
         from workspace_capabilities import PROVIDER_RECOMMENDATIONS
-        assert PROVIDER_RECOMMENDATIONS["gmail.draft"] == "composio"
-        assert PROVIDER_RECOMMENDATIONS["document.handoff"] == "composio"
+        assert "google_api" in PROVIDER_RECOMMENDATIONS["gmail.draft"]
+        assert "google_api" in PROVIDER_RECOMMENDATIONS["document.handoff"]

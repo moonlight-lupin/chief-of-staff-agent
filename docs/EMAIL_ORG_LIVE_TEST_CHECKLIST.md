@@ -192,15 +192,27 @@ Use when `integrations.workspace.provider: composio` and `family: microsoft`
    - [ ] Proposal written; "No mailbox changes were made" (read-only)
    - [ ] Summary shows `outlook_categories` tag surface / composio_microsoft provider
 
-3. **Classify + suggest (optional)**
+3. **Classify + suggest**
    ```bash
    python skills/email-organisation/scripts/email_organisation.py \
      --config shared/config/company.yaml --summary classify-inbox --limit 20
    python skills/email-organisation/scripts/email_organisation.py \
      --config shared/config/company.yaml --summary suggest --limit 20
    ```
-   - [ ] Suggestions use category display names as tag ids
+   - [ ] Classification shows `outlook_categories` provider line
+   - [ ] Suggestions use category display names as tag ids (`label_id`)
+   - [ ] Titles say “Apply category …” (not Gmail-only “Label …”)
    - [ ] No mutations until prepare → review_queue approve → execute
 
-4. **Writes stay on CoS** — even if Hermes has Composio MCP, do not apply
+4. **Prepare → approve → execute (tag apply)**
+   ```bash
+   python skills/email-organisation/scripts/email_organisation.py \
+     --config shared/config/company.yaml prepare --suggestion-id <id>
+   python shared/scripts/review_queue.py approve --action-id <pending-id>
+   python shared/scripts/review_queue.py execute --action-id <pending-id>
+   ```
+   - [ ] Pending payload has Outlook message id + category displayName
+   - [ ] Category appears on the message in Outlook after execute
+
+5. **Writes stay on CoS** — even if Hermes has Composio MCP, do not apply
    categories via raw MCP tools for this skill; use the review queue.

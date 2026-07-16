@@ -86,7 +86,7 @@ class TestFamilySlugs:
         assert ms["mail_move"] == "OUTLOOK_MOVE_MESSAGE"
         assert ms["files_trash"] == "ONE_DRIVE_DELETE_ITEM"
         assert "mail_move" not in FAMILY_SLUGS["google"]
-        assert "files_trash" not in FAMILY_SLUGS["google"]
+        assert FAMILY_SLUGS["google"]["files_trash"] == "GOOGLEDRIVE_TRASH_FILE"
 
 
 class TestMailMoveCleanup:
@@ -194,16 +194,19 @@ class TestFilesTrash:
         assert res["action"] == "files.trash"
         assert res["data"] == {"id": "file-1", "reversible": True}
 
-    def test_google_family_refuses_files_trash(self, mcp_key, tmp_project):
+    def test_google_family_files_trash_uses_drive_slug(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_google_workspace())
         mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
         client._mcp_client = mock
 
         res = client.files_trash("f1")
-        assert res["success"] is False
-        assert "Microsoft" in (res.get("error") or "")
-        mock.call_tool.assert_not_called()
+        assert res["success"] is True
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GOOGLEDRIVE_TRASH_FILE"
+        assert call["arguments"] == {"file_id": "f1"}
+        assert res["data"] == {"id": "f1", "reversible": True}
 
 
 class TestCapabilitiesPhase1And2:

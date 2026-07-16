@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.3.15 — Google Drive trash, google_api drafts, Outlook email-org
+
+### Features
+
+- **Google Composio Drive files**: text uploads now use
+  `GOOGLEDRIVE_CREATE_FILE_FROM_TEXT` (`file_name`+`text_content`, MCP-native — no
+  Files-API staging, no `COMPOSIO_API_KEY`); binary uploads use
+  `GOOGLEDRIVE_UPLOAD_FILE` with a staged `file_to_upload` (the raw `file_path`
+  was silently ignored — fixed). **`files.trash` → True (execution-verified
+  2026-07-16):** a text file created via `CREATE_FILE_FROM_TEXT` was trashed via
+  `GOOGLEDRIVE_TRASH_FILE` and confirmed in Drive Trash. **`files.upload` stays
+  False** (mirrors OneDrive): text works over MCP, but binary document filing
+  needs `COMPOSIO_API_KEY` — or use the `google_api` service-account provider,
+  which uploads binary to Drive directly with no Composio key.
+- **`google_api` `mail.draft`**: create drafts via Gmail REST
+  (`users.drafts.create`) with service-account domain-wide delegation when
+  `google_api.py` has no draft CLI. Uses the `gmail.modify` scope (already in
+  the provider's standard SCOPES, so no new admin delegation) and surfaces the
+  message id as `id` (keeps `draft_id`). **Execution-verified 2026-07-16** — the
+  draft landed in the delegate's Drafts folder. Unlocks `document.handoff` on
+  google_api.
+- **email-organisation Composio Microsoft**: classify → suggest → prepare path
+  hardened for Outlook categories (displayName as tag id, Outlook message
+  shape, category-aware suggestion copy). Live checklist covers prepare →
+  review_queue execute.
+
 ## v0.3.14 — Google cleanup hardening + Outlook inspect-labels
 
 ### Fixes / hardening

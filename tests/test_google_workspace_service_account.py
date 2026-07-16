@@ -137,18 +137,29 @@ class TestReadMethods:
 
 
 class TestWriteGuardrails:
-    def test_gmail_draft_returns_not_supported(self, google_client):
-        """gmail_create_draft returns not-supported for google_api provider (no guardrail needed)."""
-        result = google_client.gmail_create_draft("a@b.com", "Test", "Body")
+    def test_gmail_draft_blocked_without_auto_approve(self, google_client):
+        with patch(
+            "providers.google_workspace._gmail_draft_via_service_account"
+        ) as mock_draft:
+            result = google_client.gmail_create_draft("a@b.com", "Test", "Body")
         assert result["success"] is False
-        assert "not supported" in result["error"].lower()
+        mock_draft.assert_not_called()
 
-    def test_gmail_draft_not_supported_for_google(self, google_client):
-        """gmail_create_draft returns not-supported for google_api provider."""
-        result = google_client.gmail_create_draft("a@b.com", "Test", "Body")
-        assert result["success"] is False
-        assert "not supported" in result["error"].lower()
-        assert result["audited"] is False
+    def test_gmail_draft_via_sa_with_auto_approve(self, google_client):
+        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
+        with patch(
+            "providers.google_workspace._gmail_draft_via_service_account",
+            return_value={"id": "msg-9", "draft_id": "r-9", "message_id": "msg-9"},
+        ) as mock_draft:
+            result = google_client.gmail_create_draft("a@b.com", "Test", "Body", cc="c@d.com")
+        assert result["success"] is True
+        assert result["action"] == "gmail.draft"
+        assert result["audited"] is True
+        assert result["data"]["id"] == "msg-9"
+        kwargs = mock_draft.call_args.kwargs
+        assert kwargs["to"] == "a@b.com"
+        assert kwargs["cc"] == "c@d.com"
+        assert "acme.json" in kwargs["service_account_path"]
 
     def test_calendar_create_blocked_without_auto_approve(self, google_client):
         with patch.object(google_client, "_run") as mock_run:
@@ -227,12 +238,16 @@ class TestActionResultShape:
         assert result["provider"] == "google_api"
 
     def test_gmail_draft_returns_action_result(self, google_client):
-        """gmail_create_draft returns ActionResult shape with not-supported error."""
-        result = google_client.gmail_create_draft("a@b.com", "Test", "Body")
+        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
+        with patch(
+            "providers.google_workspace._gmail_draft_via_service_account",
+            return_value={"id": "m1"},
+        ):
+            result = google_client.gmail_create_draft("a@b.com", "Test", "Body")
         assert "success" in result
         assert "action" in result
-        assert result["success"] is False
-        assert "not supported" in result["error"].lower()
+        assert result["success"] is True
+        assert result["action"] == "gmail.draft"
 
     def test_drive_upload_returns_action_result(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"

@@ -2,9 +2,11 @@
 """Email classification against approved organisation policy.
 
 Classifies inbox emails into policy categories, maps them to existing
-approved labels, and generates organisation suggestions (label, archive,
-create_label). All Gmail mutations go through the pending-action approval
-queue — nothing is executed automatically.
+approved labels/categories, and generates organisation suggestions
+(label/tag, archive, create_label). All mailbox mutations go through the
+pending-action approval queue — nothing is executed automatically.
+
+Works with Gmail labels and Outlook master categories (tag id = displayName).
 
 Classification is automatic. Mutation is approval-gated.
 """
@@ -98,10 +100,20 @@ def classify_email(
         "created_at": "...",
     }
     """
-    msg_id = str(email.get("id") or email.get("messageId") or "")
+    msg_id = str(
+        email.get("id") or email.get("messageId") or email.get("message_id") or ""
+    )
     subject = str(email.get("subject") or email.get("snippet") or "")
-    sender = str(email.get("from") or email.get("sender") or "")
-    snippet = str(email.get("snippet") or "")
+    raw_from = email.get("from") or email.get("sender") or ""
+    if isinstance(raw_from, Mapping):
+        addr = raw_from.get("emailAddress") or raw_from
+        if isinstance(addr, Mapping):
+            sender = str(addr.get("address") or addr.get("name") or "")
+        else:
+            sender = str(addr or "")
+    else:
+        sender = str(raw_from)
+    snippet = str(email.get("snippet") or email.get("bodyPreview") or "")
 
     # Build text for classification
     text = _normalize(f"{subject} {snippet} {sender}")
@@ -264,8 +276,16 @@ def generate_org_suggestions(
     archive_count = 0
     create_label_count = 0
 
-    # Track categories that don't map to any existing label
+    # Track categories that don't map to any existing label/category
     unmapped_categories: dict[str, int] = {}
+
+    provider = str(policy.get("provider") or "").lower()
+    outlook = (
+        "microsoft" in provider
+        or provider.startswith("m365")
+        or "outlook" in provider
+    )
+    tag_noun = "category" if outlook else "label"
 
     for cls in classifications:
         if not cls.get("message_id"):
@@ -282,12 +302,15 @@ def generate_org_suggestions(
         if msg_id in existing_msg_ids:
             continue
 
-        # 1. Label suggestion — if we have a matched policy label
+        # 1. Tag suggestion — if we have a matched policy label/category
         if category and cls.get("label_id") and cls.get("matched_policy_label"):
             sug = _make_suggestion(
                 action_type="gmail.label",
-                title=f"Label email as {cls['matched_policy_label']}",
-                reason=f"Email classified as {category} ({confidence:.0%}) — maps to approved label",
+                title=f"Apply {tag_noun} {cls['matched_policy_label']}",
+                reason=(
+                    f"Email classified as {category} ({confidence:.0%}) — "
+                    f"maps to approved {tag_noun}"
+                ),
                 confidence=confidence,
                 suggestion_risk="low",
                 execution_risk="medium",
@@ -323,7 +346,7 @@ def generate_org_suggestions(
             suggestions.append(sug)
             archive_count += 1
 
-        # 3. Create label suggestion — for recurring unmapped categories
+        # 3. Create tag suggestion — for recurring unmapped categories
         elif category and not cls.get("label_id"):
             unmapped_categories[category] = unmapped_categories.get(category, 0) + 1
 
@@ -333,12 +356,15 @@ def generate_org_suggestions(
 
     for cat, count in unmapped_categories.items():
         if count >= min_emails:
-            # Propose a label name based on category
+            # Propose a label/category name based on organisation category
             label_name = cat.replace("_", " ").title()
             sug = _make_suggestion(
                 action_type="gmail.create_label",
-                title=f"Create new label: {label_name}",
-                reason=f"{count} recent emails classified as {cat} with no existing label fit",
+                title=f"Create new {tag_noun}: {label_name}",
+                reason=(
+                    f"{count} recent emails classified as {cat} with no "
+                    f"existing {tag_noun} fit"
+                ),
                 confidence=min(0.80, 0.60 + count * 0.02),
                 suggestion_risk="medium",
                 execution_risk="medium",
@@ -349,7 +375,7 @@ def generate_org_suggestions(
                     "existing_label": False,
                     "category": cat,
                 },
-                event_summary=f"{count} emails need {label_name} label",
+                event_summary=f"{count} emails need {label_name} {tag_noun}",
             )
             suggestions.append(sug)
             create_label_count += 1

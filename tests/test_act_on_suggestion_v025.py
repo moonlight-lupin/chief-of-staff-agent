@@ -222,11 +222,11 @@ class TestCapabilityCheck:
         assert "not supported" in result.get("error", "")
 
     def test_gmail_draft_respects_capability(self, temp_project):
-        """gmail.draft on google_api (which doesn't support it) should fail."""
+        """gmail.draft fails cleanly when the provider reports it unsupported."""
         from suggested_actions import act_on_suggestion
         config, project = temp_project
         mock_client = MagicMock()
-        mock_client.provider_name = "google_api"
+        mock_client.provider_name = "composio:mcp"
         mock_client.supports.side_effect = lambda a: a != "gmail.draft"
         sug = _make_suggestion(config, "gmail.draft")
         with patch("workspace_client.get_workspace_client", return_value=mock_client):
