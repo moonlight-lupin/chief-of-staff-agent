@@ -179,8 +179,12 @@ backup:
 
 integrations:
   workspace:
-    provider: google_api        # google_api | composio | m365
+    provider: google_api        # google_api | composio | m365 | agent
     mode: direct                # direct | sdk | mcp
+    # provider: agent — Python client is a no-op. Hermes (or another host)
+    # fetches *reads* with its own connectors / already-authed Composio MCP,
+    # writes a schemas.py envelope, and passes --input to compute scripts.
+    # Keep provider: composio|m365|google_api for guarded *writes*.
     # Composio toolkit family (only used when provider: composio):
     #   google    -> Gmail / Google Calendar / Google Drive
     #   microsoft -> Outlook mail / Outlook calendar / OneDrive
@@ -226,8 +230,15 @@ integrations:
       gmail:
         read:
           - GMAIL_FETCH_EMAILS
+          - GMAIL_LIST_LABELS
         write_safe:
           - GMAIL_CREATE_EMAIL_DRAFT
+          - GMAIL_CREATE_LABEL
+          - GMAIL_ADD_LABEL_TO_EMAIL
+          - GMAIL_MOVE_TO_TRASH
+          - GMAIL_UNTRASH_MESSAGE
+        write_destructive:
+          - GMAIL_SEND_EMAIL
       googlecalendar:
         read:
           - GOOGLECALENDAR_FIND_EVENT

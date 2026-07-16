@@ -35,10 +35,11 @@ class TestWorkspaceCapabilitiesExtended:
         assert "google_api.py" in reason
         assert "draft subcommand" in reason
 
-    def test_unsupported_reason_composio_send(self):
-        from workspace_capabilities import get_unsupported_reason
-        reason = get_unsupported_reason("composio:mcp", "gmail.send")
-        assert "intentionally disabled" in reason
+    def test_unsupported_reason_composio_calendar_cancel(self):
+        from workspace_capabilities import get_unsupported_reason, supports
+        assert supports("composio:mcp", "gmail.send") is True
+        reason = get_unsupported_reason("composio:mcp", "calendar.cancel")
+        assert "restore-path" in reason or "cancel" in reason.lower()
 
     def test_recommend_provider_for_draft(self):
         from workspace_capabilities import recommend_provider_for
@@ -117,9 +118,10 @@ class TestConnectWorkspaceCapabilities:
         assert rc == 0
         assert "composio:mcp" in out
         assert "gmail.draft" in out
-        assert "❌" in out
         assert "gmail.send" in out
-        assert "intentionally disabled" in out
+        # calendar.cancel / files.trash remain unsupported for Google Composio
+        assert "❌" in out
+        assert "calendar.cancel" in out
 
     def test_capabilities_shows_workflows(self):
         from connect_workspace import cmd_capabilities

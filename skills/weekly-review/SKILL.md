@@ -88,9 +88,9 @@ Weekly Review reads two kinds of workspace data (read-only): **calendar meetings
 
 Obtain the data through the first available path in this order:
 
-1. **Native connector tools** in the agent's environment — Google Calendar / Google Drive connectors, or Microsoft 365 connectors (Outlook Calendar, OneDrive / SharePoint).
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).calendar_list(start, end)` for the two windows, and `.files_search(query)` for filing summaries. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
-3. **Pre-fetched data via `--input`** — when the agent has already gathered the data with its own tools, pass it to `skills/weekly-review/scripts/workspace_collect.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
+1. **Agent-side connectors** — native Google Calendar / Drive / Microsoft 365 connectors, **or an already-authed Hermes Composio MCP session** (calendar/files read tools). Use as a **read front-end only**; CoS writes still go through `get_workspace_client`.
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).calendar_list(start, end)` for the two windows, and `.files_search(query)` for filing summaries. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365` | `agent`).
+3. **Pre-fetched data via `--input`** — when the agent has already gathered the data with path 1, pass it to `skills/weekly-review/scripts/workspace_collect.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
 
 Pass the two calendar windows (this-week `week_start`→`week_end`, and next-week bounds) to whichever path is used. Optional file queries use the Google Drive query dialect; the `m365` provider translates the same intent to Microsoft Graph. Do not fail the weekly review if file/filing summaries are unavailable; state the limitation.
 

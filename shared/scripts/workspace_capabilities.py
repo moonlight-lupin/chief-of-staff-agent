@@ -53,37 +53,45 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # via drive delete (default is trash, reversible)
     },
+    # Google Composio family — v0.3.13 catalog-wired Gmail cleanup/tags/send
+    # (docs.composio.dev/toolkits/gmail). Pending live --verify-writes.
+    # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
+    # folders). calendar.cancel stays False. files.trash still unwired.
     "composio": {
         "mail.search": True,
         "mail.draft": True,
-        "mail.send": False,
-        "mail.list_folders": False,
+        "mail.send": True,          # GMAIL_SEND_EMAIL — destructive / approval-gated
+        "mail.list_folders": False, # Gmail uses labels, not folder ids
         "mail.move": False,
-        "mail.archive": False,      # not exposed via Composio MCP
-        "mail.trash": False,        # not exposed via Composio MCP
-        "mail.list_tags": False,    # not exposed via Composio MCP
-        "mail.tag": False,          # not exposed via Composio MCP
-        "mail.create_tag": False,   # not exposed via Composio MCP
+        "mail.archive": True,       # GMAIL_ADD_LABEL_TO_EMAIL remove INBOX
+        "mail.unarchive": True,     # add INBOX
+        "mail.trash": True,         # GMAIL_MOVE_TO_TRASH
+        "mail.untrash": True,       # GMAIL_UNTRASH_MESSAGE
+        "mail.list_tags": True,     # GMAIL_LIST_LABELS
+        "mail.tag": True,           # GMAIL_ADD_LABEL_TO_EMAIL (label id)
+        "mail.create_tag": True,    # GMAIL_CREATE_LABEL
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
-        "calendar.cancel": False,   # not exposed via Composio MCP
+        "calendar.cancel": False,   # leave unsupported (no restore path parity)
         "files.search": True,
         "files.upload": True,
         "files.download": True,
-        "files.trash": False,       # not exposed via Composio MCP
+        "files.trash": False,       # not wired yet
     },
     "composio:mcp": {
         "mail.search": True,
         "mail.draft": True,
-        "mail.send": False,
+        "mail.send": True,
         "mail.list_folders": False,
         "mail.move": False,
-        "mail.archive": False,
-        "mail.trash": False,
-        "mail.list_tags": False,
-        "mail.tag": False,
-        "mail.create_tag": False,
+        "mail.archive": True,
+        "mail.unarchive": True,
+        "mail.trash": True,
+        "mail.untrash": True,
+        "mail.list_tags": True,
+        "mail.tag": True,
+        "mail.create_tag": True,
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
@@ -248,8 +256,12 @@ _FILES_UPLOAD_BINARY_REASON = (
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("google_api", "gmail.draft"): "google_api.py has no draft subcommand",
     ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
-    ("composio", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
-    ("composio:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
+    ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
+                                     "(no restore-path parity with the soft-delete promise)",
+    ("composio:mcp", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
+                                         "(no restore-path parity with the soft-delete promise)",
+    ("composio", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
+    ("composio:mcp", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
     ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
@@ -262,7 +274,7 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
 PROVIDER_RECOMMENDATIONS: dict[str, str] = {
     "gmail.draft": "composio",
     "document.handoff": "composio",
-    "gmail.send": "google_api or composio_microsoft",
+    "gmail.send": "google_api, composio, or composio_microsoft",
     "calendar.create": "google_api or composio",
     "calendar.update": "google_api or composio",
     "drive.upload": "google_api or composio",

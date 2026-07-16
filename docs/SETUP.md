@@ -115,8 +115,15 @@ integrations:
       gmail:
         read:
           - GMAIL_FETCH_EMAILS
+          - GMAIL_LIST_LABELS
         write_safe:
           - GMAIL_CREATE_EMAIL_DRAFT
+          - GMAIL_CREATE_LABEL
+          - GMAIL_ADD_LABEL_TO_EMAIL
+          - GMAIL_MOVE_TO_TRASH
+          - GMAIL_UNTRASH_MESSAGE
+        write_destructive:
+          - GMAIL_SEND_EMAIL
       googlecalendar:
         read:
           - GOOGLECALENDAR_FIND_EVENT
@@ -566,6 +573,31 @@ DocuSeal coordinates and uploads.
 ## Switching Providers
 
 To switch from Google to Composio (or vice versa), just change `integrations.workspace.provider` in `company.yaml`. The Daily Briefing and all skills that use `WorkspaceClient` will automatically use the new provider.
+
+## Hermes Composio MCP as a read front-end
+
+If Hermes (or another host) **already** has Composio MCP connected and
+authenticated, use it for **reads** into the fetch/compute split — not as a
+bypass of CoS write guardrails.
+
+1. Fetch with Hermes Composio tools (examples):
+   - Google: `GMAIL_FETCH_EMAILS`, `GOOGLECALENDAR_FIND_EVENT`, `GOOGLEDRIVE_FIND_FILE`
+   - Microsoft: `OUTLOOK_QUERY_EMAILS`, `OUTLOOK_GET_CALENDAR_VIEW`, `ONE_DRIVE_SEARCH_ITEMS`
+2. Normalize to `shared/scripts/schemas.py` (`messages` / `events` / `files`).
+3. Run compute with `--input`:
+   ```bash
+   python skills/daily-briefing/scripts/daily_briefing.py --input /tmp/envelope.json
+   python skills/weekly-review/scripts/workspace_collect.py --input /tmp/envelope.json
+   ```
+4. Keep `integrations.workspace.provider: composio` (or `m365` / `google_api`)
+   for **writes** — draft, send, archive, tag, upload — so `@guarded`, the
+   review queue, and `.audit/workspace.log` still apply. Do not call Composio
+   write tools raw from the agent for CoS workflows.
+
+Optional: set `provider: agent` when *all* reads are agent-fetched via
+`--input` and you never call `get_workspace_client` for reads. Write skills
+still need a real provider in config (or a second config) before you mutate
+the mailbox.
 
 ## Doctor
 

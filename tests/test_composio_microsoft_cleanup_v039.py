@@ -162,16 +162,19 @@ class TestMailMoveCleanup:
         assert res["data"]["id"] == "nested-id"
         assert res["data"]["restore_target"] == "nested-id"
 
-    def test_google_family_refuses_mail_trash(self, mcp_key, tmp_project):
+    def test_google_family_mail_trash_uses_gmail_slug(self, mcp_key, tmp_project):
+        # v0.3.13: Google Composio wires GMAIL_MOVE_TO_TRASH (no longer MS-only).
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_google_workspace())
         mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "msg"})
         client._mcp_client = mock
 
         res = client.mail_trash("msg")
-        assert res["success"] is False
-        assert "Microsoft" in (res.get("error") or "")
-        mock.call_tool.assert_not_called()
+        assert res["success"] is True
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GMAIL_MOVE_TO_TRASH"
+        assert call["arguments"] == {"message_id": "msg"}
 
 
 class TestFilesTrash:

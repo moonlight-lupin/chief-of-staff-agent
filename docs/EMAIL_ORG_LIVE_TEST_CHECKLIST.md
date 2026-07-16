@@ -157,3 +157,47 @@
 21. **No auto-send during notify email**
     - [ ] notify --channel email creates pending action but never calls gmail_send
     - [ ] notify never calls approve_pending_action or mark_executing
+
+---
+
+## Composio Microsoft (Outlook categories) — Phase 4
+
+Use when `integrations.workspace.provider: composio` and `family: microsoft`
+(Outlook connected). Tags are Outlook master categories; tag id = displayName.
+
+### Prerequisites
+
+- [ ] Outlook connected via `connect_workspace.py --connect outlook`
+- [ ] `COMPOSIO_MCP_KEY` set; `company.yaml` has `family: microsoft`
+- [ ] `mail.list_tags` / `mail.tag` / `mail.create_tag` True
+      (`connect_workspace.py --capabilities`)
+
+### Live steps
+
+1. **Inspect categories**
+   ```bash
+   python skills/email-organisation/scripts/email_organisation.py \
+     --config shared/config/company.yaml --summary inspect-labels
+   ```
+   - [ ] Lists Outlook categories as user tags (no crash on missing `type`)
+   - [ ] Totals look sane vs Outlook master category list
+
+2. **Propose policy**
+   ```bash
+   python skills/email-organisation/scripts/email_organisation.py \
+     --config shared/config/company.yaml --summary propose-policy
+   ```
+   - [ ] Proposal written; "No Gmail changes were made" (read-only)
+
+3. **Classify + suggest (optional)**
+   ```bash
+   python skills/email-organisation/scripts/email_organisation.py \
+     --config shared/config/company.yaml --summary classify-inbox --limit 20
+   python skills/email-organisation/scripts/email_organisation.py \
+     --config shared/config/company.yaml --summary suggest --limit 20
+   ```
+   - [ ] Suggestions use category display names as tag ids
+   - [ ] No mutations until prepare → review_queue approve → execute
+
+4. **Writes stay on CoS** — even if Hermes has Composio MCP, do not apply
+   categories via raw MCP tools for this skill; use the review queue.
