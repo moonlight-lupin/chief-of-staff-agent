@@ -235,19 +235,18 @@ class TestGoogleMailCleanup:
 
 class TestGoogleCapabilities:
     def test_caps_reflect_live_execution(self):
-        # Execution-verified 2026-07-16 (live Gmail): list_tags, create_tag, send,
-        # mail.tag/archive/unarchive/trash/untrash. files.upload / files.trash
-        # stay False: the live probe proved GOOGLEDRIVE_UPLOAD_FILE needs a staged
-        # file_to_upload (COMPOSIO_API_KEY) — the arg is fixed, but upload/trash
-        # aren't execution-verified until a keyed run. calendar.cancel / folders False.
+        # Execution-verified 2026-07-16 (live Gmail + Drive): list_tags, create_tag,
+        # send, mail.tag/archive/unarchive/trash/untrash, and files.trash
+        # (GOOGLEDRIVE_CREATE_FILE_FROM_TEXT → GOOGLEDRIVE_TRASH_FILE → confirmed in
+        # Trash). files.upload stays False: text works over MCP (CREATE_FILE_FROM_TEXT)
+        # but binary needs COMPOSIO_API_KEY. calendar.cancel / folders False.
         from workspace_capabilities import get_capabilities, get_unsupported_reason
         caps = get_capabilities("composio:mcp")
         for action in ("mail.list_tags", "mail.create_tag", "mail.send",
                        "mail.archive", "mail.unarchive", "mail.trash",
-                       "mail.untrash", "mail.tag"):
+                       "mail.untrash", "mail.tag", "files.trash"):
             assert caps[action] is True, f"{action} should be True"
-        for action in ("files.upload", "files.trash"):
-            assert caps[action] is False, f"{action} not execution-verified; must be False"
+        assert caps["files.upload"] is False, "binary upload needs COMPOSIO_API_KEY; must be False"
         assert "COMPOSIO_API_KEY" in get_unsupported_reason("composio:mcp", "files.upload")
         assert caps["calendar.cancel"] is False
         assert caps["mail.list_folders"] is False
@@ -260,7 +259,7 @@ class TestGoogleCapabilities:
         assert client.supports("mail.send") is True
         assert client.supports("mail.archive") is True
         assert client.supports("mail.tag") is True
-        assert client.supports("files.trash") is False
+        assert client.supports("files.trash") is True
         assert client.supports("files.upload") is False
         assert client.supports("calendar.cancel") is False
 
@@ -274,3 +273,25 @@ class TestGoogleCapabilities:
         call = mock.call_tool.call_args[0][1]["tools"][0]
         assert call["tool_slug"] == "GOOGLEDRIVE_TRASH_FILE"
         assert call["arguments"] == {"file_id": "drive-file-1"}
+
+    def test_text_upload_uses_create_from_text_no_staging(self, mcp_key, tmp_project):
+        # Text files go through GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (MCP-native,
+        # file_name+text_content) — no Files-API staging / COMPOSIO_API_KEY.
+        from unittest.mock import patch
+        client = TestGoogleMailCleanup()._client()
+        local = tmp_project / "note.md"
+        local.write_text("# hello\n", encoding="utf-8")
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"id": "gdrive-text-1", "name": "note.md"})
+        client._mcp_client = mock
+        with patch("composio_files.stage_file_uploadable") as stage:
+            res = client.files_upload(str(local), parent_id="folder-9")
+        assert res["success"] is True
+        stage.assert_not_called()   # text path must NOT stage
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GOOGLEDRIVE_CREATE_FILE_FROM_TEXT"
+        assert call["arguments"] == {
+            "file_name": "note.md",
+            "text_content": "# hello\n",
+            "parent_id": "folder-9",
+        }

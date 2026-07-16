@@ -98,7 +98,8 @@ class TestCapabilities:
         composio_unsup = unsupported_actions("composio")
         assert "calendar.cancel" in composio_unsup
         assert "gmail.send" not in composio_unsup
-        assert "files.trash" in composio_unsup   # GDrive trash gated with upload (COMPOSIO_API_KEY)
+        assert "files.trash" not in composio_unsup   # GDrive trash execution-verified 2026-07-16
+        assert "files.upload" in composio_unsup       # binary needs COMPOSIO_API_KEY
 
     def test_unknown_provider_returns_empty(self):
         from workspace_capabilities import get_capabilities, supports
@@ -120,7 +121,8 @@ class TestCapabilities:
         from workspace_capabilities import UNSUPPORTED_REASONS
         assert ("google_api", "gmail.draft") not in UNSUPPORTED_REASONS
         assert ("composio:mcp", "calendar.cancel") in UNSUPPORTED_REASONS
-        assert ("composio:mcp", "files.trash") in UNSUPPORTED_REASONS   # gated on COMPOSIO_API_KEY
+        assert ("composio:mcp", "files.upload") in UNSUPPORTED_REASONS  # binary needs COMPOSIO_API_KEY
+        assert ("composio:mcp", "files.trash") not in UNSUPPORTED_REASONS  # execution-verified True
 
     def test_provider_recommendations_exist(self):
         from workspace_capabilities import PROVIDER_RECOMMENDATIONS

@@ -63,14 +63,13 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # real hex message ids (write_ready: yes, no id-shape errors).
     # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
     # folders). calendar.cancel stays False.
-    # files.upload / files.trash stay False: the live probe (2026-07-16) proved
-    # GOOGLEDRIVE_UPLOAD_FILE needs a STAGED file_to_upload FileUploadable
-    # (COMPOSIO_API_KEY — the raw file_path was silently ignored; the MCP key
-    # 401s at the Files API, same as OneDrive binary). The arg is now fixed to
-    # stage + file_to_upload, but until a keyed --verify-writes run confirms
-    # upload→trash end-to-end, these stay False. files.trash (GOOGLEDRIVE_TRASH_FILE
-    # + {file_id}) matches the live schema but can't be self-verified without a
-    # throwaway upload, so it is gated with upload.
+    # files.download / files.trash: execution-verified 2026-07-16 — a throwaway
+    # file created via GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (MCP-native text create,
+    # no key) was trashed via GOOGLEDRIVE_TRASH_FILE and confirmed in Drive Trash.
+    # files.upload stays False (mirrors OneDrive): the TEXT path works over MCP
+    # (CREATE_FILE_FROM_TEXT — wired), but the headline case is BINARY document
+    # filing (.pdf/.docx), which needs COMPOSIO_API_KEY staging on
+    # GOOGLEDRIVE_UPLOAD_FILE. A coarse boolean must not over-promise it.
     "composio": {
         "mail.search": True,
         "mail.draft": True,
@@ -89,9 +88,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.update": True,
         "calendar.cancel": False,   # leave unsupported (no restore path parity)
         "files.search": True,
-        "files.upload": False,      # GOOGLEDRIVE_UPLOAD_FILE needs staged file_to_upload (COMPOSIO_API_KEY) — see _GDRIVE_FILES_REASON
+        "files.upload": False,      # TEXT via CREATE_FILE_FROM_TEXT (wired); BINARY needs COMPOSIO_API_KEY — see _GDRIVE_FILES_REASON. For binary Drive filing without a key, use the google_api provider.
         "files.download": True,
-        "files.trash": False,       # GOOGLEDRIVE_TRASH_FILE wired; gated with upload until a keyed run verifies
+        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
     },
     "composio:mcp": {
         "mail.search": True,
@@ -113,9 +112,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.update": True,
         "calendar.cancel": False,
         "files.search": True,
-        "files.upload": False,      # needs staged file_to_upload (COMPOSIO_API_KEY) — see _GDRIVE_FILES_REASON
+        "files.upload": False,      # TEXT via CREATE_FILE_FROM_TEXT; BINARY needs COMPOSIO_API_KEY (use google_api for keyless binary)
         "files.download": True,
-        "files.trash": False,       # GOOGLEDRIVE_TRASH_FILE wired; gated with upload
+        "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
@@ -267,16 +266,18 @@ _FILES_UPLOAD_BINARY_REASON = (
     "file upload."
 )
 
-# Google Drive uploads over Composio MCP need a STAGED FileUploadable: the live
-# GOOGLEDRIVE_UPLOAD_FILE schema takes `file_to_upload` (not a raw path), and
-# staging goes through the Files REST API which needs COMPOSIO_API_KEY (the MCP
-# key 401s — confirmed 2026-07-16). files.trash (GOOGLEDRIVE_TRASH_FILE) is wired
-# but can't be self-verified without a throwaway upload, so it's gated together.
+# Google Drive uploads over Composio MCP: TEXT files work MCP-native via
+# GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (no key). BINARY files (.pdf/.docx — the
+# headline document-filing case) need GOOGLEDRIVE_UPLOAD_FILE with a staged
+# file_to_upload FileUploadable, which requires COMPOSIO_API_KEY (the MCP key
+# 401s at the Files API — confirmed 2026-07-16). A coarse files.upload boolean
+# can't promise binary, so it stays False. (For keyless binary Drive filing,
+# use the google_api service-account provider instead.)
 _GDRIVE_FILES_REASON = (
-    "Google Drive file writes stage through Composio's Files REST API "
-    "(GOOGLEDRIVE_UPLOAD_FILE wants a file_to_upload FileUploadable), which needs "
-    "COMPOSIO_API_KEY — the MCP key alone 401s. Set COMPOSIO_API_KEY and re-run "
-    "connect_workspace.py --verify-writes on family: google to enable."
+    "Google Drive binary uploads (.pdf/.docx) need GOOGLEDRIVE_UPLOAD_FILE with a "
+    "staged file_to_upload FileUploadable (COMPOSIO_API_KEY; the MCP key 401s). "
+    "Plain-text files upload over MCP via GOOGLEDRIVE_CREATE_FILE_FROM_TEXT. Set "
+    "COMPOSIO_API_KEY, or use the google_api provider for keyless binary filing."
 )
 
 # Human-readable reasons for why a specific provider doesn't support an action.
@@ -288,8 +289,6 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                          "(no restore-path parity with the soft-delete promise)",
     ("composio", "files.upload"): _GDRIVE_FILES_REASON,
     ("composio:mcp", "files.upload"): _GDRIVE_FILES_REASON,
-    ("composio", "files.trash"): _GDRIVE_FILES_REASON,
-    ("composio:mcp", "files.trash"): _GDRIVE_FILES_REASON,
     ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
