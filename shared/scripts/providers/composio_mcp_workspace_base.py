@@ -851,9 +851,26 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             if cc:
                 args["cc"] = cc
         data = self._execute_composio_tool(slug, args, operation="mail_create_draft")
-        return _ms_with_id(data) if self.family == "microsoft" else (
-            data if isinstance(data, dict) else {}
-        )
+        if self.family == "microsoft":
+            return _ms_with_id(data)
+        # Google: GMAIL_CREATE_EMAIL_DRAFT returns a DRAFT object whose top-level
+        # id is a draft id (r-…), NOT a Gmail message id. Downstream label/move/
+        # trash tools (GMAIL_ADD_LABEL_TO_EMAIL / GMAIL_MOVE_TO_TRASH) require the
+        # underlying hex message id, so surface it as `id` (keeping draft_id).
+        d = data if isinstance(data, dict) else {}
+        inner = d.get("data") if isinstance(d.get("data"), Mapping) else d
+        msg = inner.get("message") if isinstance(inner, Mapping) else None
+        msg_id = None
+        if isinstance(msg, Mapping):
+            msg_id = msg.get("id") or msg.get("messageId")
+        if not msg_id and isinstance(inner, Mapping):
+            msg_id = inner.get("messageId")
+        out = dict(inner) if isinstance(inner, Mapping) else {}
+        if msg_id:
+            out["draft_id"] = out.get("id")
+            out["id"] = str(msg_id)
+            out["message_id"] = str(msg_id)
+        return out
 
     @guarded("mail.send", target_arg="to", audit_provider="composio",
              audit_tool=lambda self: self._cleanup_slug("mail_send"),

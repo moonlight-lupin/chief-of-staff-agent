@@ -27,9 +27,9 @@ class TestCapabilities:
         caps = get_capabilities("composio")
         assert caps["gmail.search"] is True
         assert caps["gmail.draft"] is True
-        assert caps["gmail.send"] is True
-        assert caps["mail.archive"] is True
-        assert caps["mail.list_tags"] is True
+        assert caps["gmail.send"] is True          # execution-verified 2026-07-16
+        assert caps["mail.list_tags"] is True      # execution-verified 2026-07-16
+        assert caps["mail.archive"] is False       # wired; pending live re-verify (draft-id fix)
         assert caps["drive.search"] is True
         assert caps["calendar.cancel"] is False
 

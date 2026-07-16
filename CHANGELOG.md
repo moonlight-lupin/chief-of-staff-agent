@@ -15,7 +15,14 @@
   - `mail_tag` / archive / unarchive → `GMAIL_ADD_LABEL_TO_EMAIL`
   - `mail_trash` / `mail_untrash` → `GMAIL_MOVE_TO_TRASH` / `GMAIL_UNTRASH_MESSAGE`
   - `mail_send` → `GMAIL_SEND_EMAIL` (approval-gated, same model as MS)
-  - Capabilities True for the above on `composio` / `composio:mcp`
+  - **Execution-verified 2026-07-16 (live Gmail):** `mail.list_tags`
+    (`GMAIL_LIST_LABELS`), `mail.create_tag` (`GMAIL_CREATE_LABEL`), `mail.send`
+    (`GMAIL_SEND_EMAIL`, sent + received) → capabilities True.
+  - **Wired but NOT yet verified → False:** `mail.tag` / `mail.archive` /
+    `mail.unarchive` / `mail.trash` / `mail.untrash`. The live probe rejected a
+    Gmail draft id where a hex message id is required; `mail_create_draft` now
+    surfaces the underlying `message.id` (the fix), and these flip True once
+    `--verify-writes` re-runs green on `family: google`.
   - Still False: `mail.list_folders` / `mail.move`, `calendar.cancel`, `files.trash`
 - **email-organisation**: skill + live checklist cover Composio Microsoft
   Outlook categories (Phase 4) and the CoS-only write path.

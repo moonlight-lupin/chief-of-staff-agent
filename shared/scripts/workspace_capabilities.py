@@ -53,23 +53,30 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # via drive delete (default is trash, reversible)
     },
-    # Google Composio family — v0.3.13 catalog-wired Gmail cleanup/tags/send
-    # (docs.composio.dev/toolkits/gmail). Pending live --verify-writes.
+    # Google Composio family — v0.3.13.
+    # Execution-verified 2026-07-16 (live Gmail): mail.list_tags
+    # (GMAIL_LIST_LABELS, 18 labels), mail.create_tag (GMAIL_CREATE_LABEL), and
+    # mail.send (GMAIL_SEND_EMAIL sent AND received).
+    # NOT verified — the label/move/trash write path (GMAIL_ADD_LABEL_TO_EMAIL /
+    # GMAIL_MOVE_TO_TRASH / GMAIL_UNTRASH_MESSAGE) failed the live probe: it fed a
+    # Gmail DRAFT id (r-…) where a hex MESSAGE id is required. The draft-id→
+    # message-id fix ships (mail_create_draft now surfaces message.id), but these
+    # stay False until a re-run of --verify-writes proves the cleaned path.
     # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
-    # folders). calendar.cancel stays False. files.trash still unwired.
+    # folders). calendar.cancel / files.trash stay False.
     "composio": {
         "mail.search": True,
         "mail.draft": True,
-        "mail.send": True,          # GMAIL_SEND_EMAIL — destructive / approval-gated
+        "mail.send": True,          # GMAIL_SEND_EMAIL — execution-verified 2026-07-16 (destructive / approval-gated)
         "mail.list_folders": False, # Gmail uses labels, not folder ids
         "mail.move": False,
-        "mail.archive": True,       # GMAIL_ADD_LABEL_TO_EMAIL remove INBOX
-        "mail.unarchive": True,     # add INBOX
-        "mail.trash": True,         # GMAIL_MOVE_TO_TRASH
-        "mail.untrash": True,       # GMAIL_UNTRASH_MESSAGE
-        "mail.list_tags": True,     # GMAIL_LIST_LABELS
-        "mail.tag": True,           # GMAIL_ADD_LABEL_TO_EMAIL (label id)
-        "mail.create_tag": True,    # GMAIL_CREATE_LABEL
+        "mail.archive": False,      # GMAIL_ADD_LABEL_TO_EMAIL wired; NOT execution-verified (draft-id probe rejected 2026-07-16)
+        "mail.unarchive": False,    # add INBOX — gated on live re-verify
+        "mail.trash": False,        # GMAIL_MOVE_TO_TRASH wired; NOT execution-verified end-to-end
+        "mail.untrash": False,      # GMAIL_UNTRASH_MESSAGE — never executed
+        "mail.list_tags": True,     # GMAIL_LIST_LABELS — execution-verified 2026-07-16
+        "mail.tag": False,          # GMAIL_ADD_LABEL_TO_EMAIL wired; NOT execution-verified (draft-id probe rejected)
+        "mail.create_tag": True,    # GMAIL_CREATE_LABEL — execution-verified 2026-07-16
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
@@ -82,16 +89,16 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     "composio:mcp": {
         "mail.search": True,
         "mail.draft": True,
-        "mail.send": True,
+        "mail.send": True,          # execution-verified 2026-07-16
         "mail.list_folders": False,
         "mail.move": False,
-        "mail.archive": True,
-        "mail.unarchive": True,
-        "mail.trash": True,
-        "mail.untrash": True,
-        "mail.list_tags": True,
-        "mail.tag": True,
-        "mail.create_tag": True,
+        "mail.archive": False,      # wired; pending live re-verify (draft-id fix)
+        "mail.unarchive": False,
+        "mail.trash": False,
+        "mail.untrash": False,
+        "mail.list_tags": True,     # execution-verified 2026-07-16
+        "mail.tag": False,          # wired; pending live re-verify
+        "mail.create_tag": True,    # execution-verified 2026-07-16
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
@@ -251,6 +258,18 @@ _FILES_UPLOAD_BINARY_REASON = (
     "file upload."
 )
 
+# Google Gmail label/move/trash writes are wired but not yet execution-verified:
+# the 2026-07-16 live probe fed a Gmail draft id where a hex message id is
+# required (GMAIL_ADD_LABEL_TO_EMAIL / GMAIL_MOVE_TO_TRASH rejected it). The
+# draft-id→message-id fix ships; these flip True once --verify-writes re-runs
+# green against live Gmail.
+_GMAIL_WRITE_PENDING_REASON = (
+    "Gmail label/archive/trash writes are wired but not yet execution-verified "
+    "(the 2026-07-16 live probe rejected a draft id where a hex message id is "
+    "required). The draft-id→message-id fix ships; re-run connect_workspace.py "
+    "--verify-writes on family: google to enable."
+)
+
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
@@ -262,6 +281,12 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                          "(no restore-path parity with the soft-delete promise)",
     ("composio", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
     ("composio:mcp", "files.trash"): "Google Drive trash is not wired for Composio MCP yet",
+    ("composio", "mail.archive"): _GMAIL_WRITE_PENDING_REASON,
+    ("composio:mcp", "mail.archive"): _GMAIL_WRITE_PENDING_REASON,
+    ("composio", "mail.trash"): _GMAIL_WRITE_PENDING_REASON,
+    ("composio:mcp", "mail.trash"): _GMAIL_WRITE_PENDING_REASON,
+    ("composio", "mail.tag"): _GMAIL_WRITE_PENDING_REASON,
+    ("composio:mcp", "mail.tag"): _GMAIL_WRITE_PENDING_REASON,
     ("composio_microsoft", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("composio_microsoft:mcp", "files.upload"): _FILES_UPLOAD_BINARY_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
