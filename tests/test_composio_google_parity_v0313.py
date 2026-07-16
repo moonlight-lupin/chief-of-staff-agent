@@ -238,16 +238,15 @@ class TestGoogleCapabilities:
         # Execution-verified 2026-07-16 (live Gmail + Drive): list_tags, create_tag,
         # send, mail.tag/archive/unarchive/trash/untrash, and files.trash
         # (GOOGLEDRIVE_CREATE_FILE_FROM_TEXT → GOOGLEDRIVE_TRASH_FILE → confirmed in
-        # Trash). files.upload stays False: text works over MCP (CREATE_FILE_FROM_TEXT)
-        # but binary needs COMPOSIO_API_KEY. calendar.cancel / folders False.
-        from workspace_capabilities import get_capabilities, get_unsupported_reason
+        # Trash). files.upload is True (PR #14): text via CREATE_FILE_FROM_TEXT,
+        # binary via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging (no
+        # COMPOSIO_API_KEY). calendar.cancel / folders False.
+        from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
         for action in ("mail.list_tags", "mail.create_tag", "mail.send",
                        "mail.archive", "mail.unarchive", "mail.trash",
-                       "mail.untrash", "mail.tag", "files.trash"):
+                       "mail.untrash", "mail.tag", "files.trash", "files.upload"):
             assert caps[action] is True, f"{action} should be True"
-        assert caps["files.upload"] is False, "binary upload needs COMPOSIO_API_KEY; must be False"
-        assert "COMPOSIO_API_KEY" in get_unsupported_reason("composio:mcp", "files.upload")
         assert caps["calendar.cancel"] is False
         assert caps["mail.list_folders"] is False
 
@@ -260,7 +259,7 @@ class TestGoogleCapabilities:
         assert client.supports("mail.archive") is True
         assert client.supports("mail.tag") is True
         assert client.supports("files.trash") is True
-        assert client.supports("files.upload") is False
+        assert client.supports("files.upload") is True   # MCP sandbox staging (PR #14)
         assert client.supports("calendar.cancel") is False
 
     def test_files_trash_google_slug(self, mcp_key, tmp_project):

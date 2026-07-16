@@ -242,3 +242,100 @@ def test_stage_retries_consumer_api_key_on_401(tmp_path, monkeypatch):
     assert post.call_count == 2
     assert post.call_args_list[0][1]["headers"].get("x-api-key") == "mcp-only"
     assert post.call_args_list[1][1]["headers"].get("x-consumer-api-key") == "mcp-only"
+
+
+# ── v0.3.16 (PR #14): MCP-native sandbox staging (no COMPOSIO_API_KEY) ──────────
+
+import base64 as _b64
+import hashlib as _hashlib
+
+
+class _FakeSandboxMCP:
+    """Faithful fake of the two Composio sandbox meta-tools.
+
+    Reconstructs the file from the base64 heredoc chunks so the md5 integrity
+    check in ``stage_file_uploadable_via_sandbox`` is genuinely exercised.
+    """
+
+    def __init__(self, s3key="project/sess/OBJKEY", corrupt=False, stage_error=None):
+        self.calls = []
+        self._acc = ""
+        self.s3key = s3key
+        self.corrupt = corrupt
+        self.stage_error = stage_error
+
+    def call_tool(self, tool, args):
+        self.calls.append((tool, dict(args)))
+        if tool == "COMPOSIO_REMOTE_BASH_TOOL":
+            cmd = args["command"]
+            data = {"stdout": "", "stderr": "", "sandbox_id_suffix": "sbx1"}
+            if "staged-reset" in cmd:
+                self._acc = ""
+            elif "cat >>" in cmd and "COS_B64_EOF" in cmd:
+                body = cmd.split("<<'COS_B64_EOF'\n", 1)[1].rsplit("\nCOS_B64_EOF", 1)[0]
+                self._acc += body
+            elif "base64 -d" in cmd:
+                raw = _b64.b64decode(self._acc)
+                if self.corrupt:
+                    raw += b"\x00"
+                data["stdout"] = "COS_MD5=" + _hashlib.md5(raw).hexdigest()
+            return {"data": data, "successful": True, "error": None}
+        if tool == "COMPOSIO_REMOTE_WORKBENCH":
+            out = (
+                "COS_STAGE_ERROR=" + self.stage_error
+                if self.stage_error
+                else "COS_S3KEY=" + self.s3key
+            )
+            return {"data": {"stdout": out}, "successful": True, "error": None}
+        raise AssertionError("unexpected meta-tool: " + tool)
+
+
+def test_sandbox_stage_returns_fileuploadable_without_api_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
+    p = tmp_path / "invoice.pdf"
+    p.write_bytes(b"%PDF-1.4 binary\x00\x01\x02 body" * 200)
+    mcp = _FakeSandboxMCP(s3key="project/trs_x/ABC123")
+
+    out = cf.stage_file_uploadable_via_sandbox(str(p), mcp_client=mcp)
+
+    assert out == {"name": "invoice.pdf", "mimetype": "application/pdf", "s3key": "project/trs_x/ABC123"}
+    tools = [t for t, _ in mcp.calls]
+    assert "COMPOSIO_REMOTE_BASH_TOOL" in tools and "COMPOSIO_REMOTE_WORKBENCH" in tools
+    # The sandbox working copy is cleaned up (a trailing rm -f of the staged path).
+    assert any(
+        t == "COMPOSIO_REMOTE_BASH_TOOL" and a["command"].startswith("rm -f '/mnt/files/cos_stage_")
+        for t, a in mcp.calls
+    )
+
+
+def test_sandbox_stage_integrity_mismatch_raises(tmp_path):
+    p = tmp_path / "doc.docx"
+    p.write_bytes(b"binary-docx-bytes" * 50)
+    mcp = _FakeSandboxMCP(corrupt=True)
+    try:
+        cf.stage_file_uploadable_via_sandbox(str(p), mcp_client=mcp)
+        assert False, "expected ComposioFileError on md5 mismatch"
+    except cf.ComposioFileError as exc:
+        assert "integrity" in str(exc).lower()
+
+
+def test_sandbox_stage_helper_error_raises(tmp_path):
+    p = tmp_path / "doc.pdf"
+    p.write_bytes(b"%PDF x" * 10)
+    mcp = _FakeSandboxMCP(stage_error="RuntimeError('no space')")
+    try:
+        cf.stage_file_uploadable_via_sandbox(str(p), mcp_client=mcp)
+        assert False, "expected ComposioFileError on stage error"
+    except cf.ComposioFileError as exc:
+        assert "no space" in str(exc)
+
+
+def test_sandbox_stage_rejects_oversize(tmp_path):
+    p = tmp_path / "big.bin"
+    p.write_bytes(b"\x00" * (5 * 1024 * 1024 + 1))
+    mcp = _FakeSandboxMCP()
+    try:
+        cf.stage_file_uploadable_via_sandbox(str(p), mcp_client=mcp)
+        assert False, "expected ComposioFileError on oversize"
+    except cf.ComposioFileError as exc:
+        assert "5 MB" in str(exc) or "5242880" in str(exc)

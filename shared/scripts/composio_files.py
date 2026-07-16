@@ -14,9 +14,11 @@ so the raw-MCP workspace provider can upload local files.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import mimetypes
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -24,6 +26,15 @@ try:
     import requests
 except ImportError:  # pragma: no cover
     requests = None  # type: ignore
+
+# Composio's upload tools (GOOGLEDRIVE_UPLOAD_FILE / ONE_DRIVE_ONEDRIVE_UPLOAD_FILE)
+# cap FileUploadable payloads at 5 MB.
+_MAX_STAGE_BYTES = 5 * 1024 * 1024
+# Base64 text appended to the sandbox per COMPOSIO_REMOTE_BASH_TOOL call. Sent via
+# a quoted heredoc (NOT a shell argument) so it bypasses MAX_ARG_STRLEN (128 KB);
+# the only ceiling is the JSON-RPC body size, so ~700 KB per round-trip is safe.
+_SANDBOX_B64_CHUNK = 700_000
+_SANDBOX_MOUNT = "/mnt/files"
 
 # Prefer the documented v3.1 path; fall back to the SDK's older v3 path.
 _UPLOAD_REQUEST_PATHS = (
@@ -200,6 +211,171 @@ def stage_file_uploadable(
         "mimetype": mimetype,
         "s3key": s3key,
     }
+
+
+# ── MCP-native sandbox staging (no COMPOSIO_API_KEY) ───────────────────────────
+# The Files REST path above needs a project x-api-key. Composio's MCP meta-tools
+# (COMPOSIO_REMOTE_BASH_TOOL + COMPOSIO_REMOTE_WORKBENCH) can stage a local file
+# into the same object store using ONLY the MCP key:
+#   1. base64-pipe the local bytes into the remote sandbox (/mnt/files) — the
+#      file content travels over MCP's encrypted JSON-RPC channel, never a public
+#      URL, no IP allow-listing.
+#   2. call the sandbox helper upload_local_file() → returns an s3key.
+#   3. the caller passes {name, mimetype, s3key} to the upload tool.
+# The local sandbox copy is removed in step 4; the STAGED S3 object itself cannot
+# be force-deleted over MCP (no delete helper) — its presigned URL is revoked
+# immediately and it is reclaimed with the tool-router session TTL. See the
+# CLEANUP note in providers/composio_mcp_workspace_base.files_upload.
+
+_S3KEY_MARKER = "COS_S3KEY="
+_STAGE_ERR_MARKER = "COS_STAGE_ERROR="
+_MD5_MARKER = "COS_MD5="
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_sandbox_name(name: str) -> str:
+    """A filesystem/shell-safe sandbox filename that keeps the real extension.
+
+    The destination filename is set explicitly on the FileUploadable ``name``
+    field, so the sandbox name only needs to be safe + preserve the suffix (some
+    Composio helpers sniff mimetype from the extension)."""
+    suffix = "".join(Path(name).suffixes)[-16:]
+    suffix = _SAFE_NAME_RE.sub("", suffix)
+    return f"cos_stage_{os.urandom(6).hex()}{suffix}"
+
+
+def _meta_call(mcp_client: Any, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Invoke a Composio MCP meta-tool and return its ``data`` mapping.
+
+    Raises ``ComposioFileError`` on a non-successful envelope so a broken step
+    never silently yields a bad s3key.
+    """
+    resp = mcp_client.call_tool(tool, arguments)
+    if not isinstance(resp, Mapping):
+        raise ComposioFileError(f"{tool}: unexpected response type {type(resp).__name__}")
+    if resp.get("successful") is False and resp.get("error"):
+        raise ComposioFileError(f"{tool} failed: {str(resp.get('error'))[:300]}")
+    data = resp.get("data")
+    return data if isinstance(data, Mapping) else {}
+
+
+def _sandbox_bash(mcp_client: Any, command: str, session_id: str | None) -> dict[str, Any]:
+    args: dict[str, Any] = {"command": command}
+    if session_id:
+        args["session_id"] = session_id
+    data = _meta_call(mcp_client, "COMPOSIO_REMOTE_BASH_TOOL", args)
+    stderr = str(data.get("stderr") or "")
+    if stderr.strip():
+        raise ComposioFileError(f"sandbox bash stderr: {stderr[:300]}")
+    return data
+
+
+def _sandbox_python(mcp_client: Any, code: str, session_id: str | None) -> str:
+    args: dict[str, Any] = {"code_to_execute": code, "thought": "stage file for upload"}
+    if session_id:
+        args["session_id"] = session_id
+    data = _meta_call(mcp_client, "COMPOSIO_REMOTE_WORKBENCH", args)
+    return str(data.get("stdout") or "")
+
+
+def stage_file_uploadable_via_sandbox(
+    file_path: str | Path,
+    *,
+    mcp_client: Any,
+    mount_dir: str = _SANDBOX_MOUNT,
+) -> dict[str, str]:
+    """Stage a local file into Composio's object store over MCP (no API key).
+
+    Returns a ``{"name", "mimetype", "s3key"}`` FileUploadable dict, mirroring
+    :func:`stage_file_uploadable` but authenticating with only the MCP key via
+    the remote sandbox. The sandbox working copy is deleted before returning.
+    """
+    path = Path(file_path).expanduser()
+    if not path.is_file():
+        raise ComposioFileError(f"File not found or not a regular file: {path}")
+    if not os.access(path, os.R_OK):
+        raise ComposioFileError(f"File not readable: {path}")
+    raw = path.read_bytes()
+    if len(raw) > _MAX_STAGE_BYTES:
+        raise ComposioFileError(
+            f"file {path.name} is {len(raw)} bytes; Composio upload tools cap "
+            f"FileUploadable at {_MAX_STAGE_BYTES} bytes (5 MB)"
+        )
+    mimetype = guess_mimetype(path)
+    expected_md5 = file_md5(path)
+
+    # 76-col-wrapped base64 (base64 -d tolerates the newlines).
+    b64 = base64.b64encode(raw).decode("ascii")
+    wrapped = "\n".join(b64[i : i + 76] for i in range(0, len(b64), 76))
+
+    sbx_name = _safe_sandbox_name(path.name)
+    sbx = f"{mount_dir}/{sbx_name}"
+    b64_path = f"{sbx}.b64"
+
+    session: str | None = None
+    try:
+        # 1. Fresh scratch files in the sandbox.
+        data = _sandbox_bash(
+            mcp_client,
+            f"mkdir -p {mount_dir} && rm -f '{b64_path}' '{sbx}' && echo staged-reset",
+            session,
+        )
+        session = str(data.get("sandbox_id_suffix") or "") or None
+
+        # 2. Append the base64 in heredoc chunks (bypasses MAX_ARG_STRLEN).
+        for start in range(0, len(wrapped), _SANDBOX_B64_CHUNK):
+            chunk = wrapped[start : start + _SANDBOX_B64_CHUNK]
+            _sandbox_bash(
+                mcp_client,
+                f"cat >> '{b64_path}' <<'COS_B64_EOF'\n{chunk}\nCOS_B64_EOF",
+                session,
+            )
+
+        # 3. Decode + integrity-check against the local md5.
+        data = _sandbox_bash(
+            mcp_client,
+            f"base64 -d '{b64_path}' > '{sbx}' && rm -f '{b64_path}' && "
+            f"printf '{_MD5_MARKER}%s\\n' \"$(md5sum '{sbx}' | cut -d' ' -f1)\"",
+            session,
+        )
+        got_md5 = ""
+        for line in str(data.get("stdout") or "").splitlines():
+            if line.startswith(_MD5_MARKER):
+                got_md5 = line[len(_MD5_MARKER):].strip()
+        if got_md5 != expected_md5:
+            raise ComposioFileError(
+                f"sandbox file integrity check failed for {path.name}: "
+                f"local md5 {expected_md5}, sandbox md5 {got_md5 or '<none>'}"
+            )
+
+        # 4. Stage to the object store via the sandbox helper → s3key.
+        code = (
+            "try:\n"
+            f"    _m, _ = upload_local_file({sbx!r})\n"
+            f"    print({_S3KEY_MARKER!r} + str(_m.get('s3key','')))\n"
+            "except Exception as _e:\n"
+            f"    print({_STAGE_ERR_MARKER!r} + repr(_e))\n"
+        )
+        stdout = _sandbox_python(mcp_client, code, session)
+        s3key = ""
+        for line in stdout.splitlines():
+            if line.startswith(_S3KEY_MARKER):
+                s3key = line[len(_S3KEY_MARKER):].strip()
+            elif line.startswith(_STAGE_ERR_MARKER):
+                raise ComposioFileError(
+                    f"sandbox upload_local_file failed: {line[len(_STAGE_ERR_MARKER):][:300]}"
+                )
+        if not s3key:
+            raise ComposioFileError(
+                f"sandbox staging returned no s3key for {path.name}; stdout: {stdout[:300]}"
+            )
+        return {"name": path.name, "mimetype": mimetype, "s3key": s3key}
+    finally:
+        # Remove the sandbox working copy (best-effort; sandbox is ephemeral too).
+        try:
+            _sandbox_bash(mcp_client, f"rm -f '{sbx}' '{b64_path}'", session)
+        except Exception:  # noqa: BLE001 — cleanup must never mask the real result
+            pass
 
 
 def download_s3url(url: str, output_path: str | Path, *, timeout: int = 120) -> Path:

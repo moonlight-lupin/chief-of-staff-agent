@@ -48,11 +48,12 @@ class TestCapabilities:
         #       mail.list_folders (26 folders), mail.move (custom folder id).
         #   2026-07-16 PR #9 — mail.list_tags, mail.tag, mail.create_tag
         #       (CoS-Verify created + applied); files.download + files.trash via
-        #       ONE_DRIVE_DOWNLOAD_FILE → ONE_DRIVE_DELETE_ITEM. The text upload
-        #       path (CREATE_TEXT_FILE) also ran, but files.upload stays False
-        #       (see below): the headline case is BINARY document filing, which
-        #       still 401s without COMPOSIO_API_KEY.
-        from workspace_capabilities import get_capabilities, get_unsupported_reason
+        #       ONE_DRIVE_DOWNLOAD_FILE → ONE_DRIVE_DELETE_ITEM.
+        #   2026-07-17 PR #14 — files.upload for text AND binary with only the MCP
+        #       key: text via CREATE_TEXT_FILE, binary via ONE_DRIVE_ONEDRIVE_
+        #       UPLOAD_FILE with a FileUploadable staged over the MCP remote
+        #       sandbox (no COMPOSIO_API_KEY). A throwaway .pdf uploaded + trashed.
+        from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
         assert caps["calendar.list"] is True
@@ -66,19 +67,11 @@ class TestCapabilities:
             "calendar.create", "calendar.update", "calendar.delete",
             "mail.send", "mail.list_folders", "mail.move",
             "mail.list_tags", "mail.tag", "mail.create_tag",
+            "files.upload", "drive.upload",
             "files.download", "drive.download",
             "files.trash", "drive.trash",
         ):
             assert caps[action] is True, f"{action} should be live-verified True"
-
-        # files.upload stays False: only the TEXT path is MCP-native, but the
-        # headline use (binary .pdf/.docx filing) needs COMPOSIO_API_KEY (401
-        # confirmed 2026-07-16). A coarse boolean must not over-promise it.
-        assert caps["files.upload"] is False
-        assert caps["drive.upload"] is False
-        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
-            "composio_microsoft:mcp", "files.upload"
-        )
 
         # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
@@ -87,7 +80,7 @@ class TestCapabilities:
         from workspace_capabilities import supports
         assert supports("google_api", "gmail.send") is True
         assert supports("composio", "gmail.send") is True
-        assert supports("composio", "drive.upload") is False  # GDrive upload needs COMPOSIO_API_KEY staging
+        assert supports("composio", "drive.upload") is True  # binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert supports("composio", "calendar.cancel") is False
 
     def test_unsupported_actions(self):
@@ -99,7 +92,7 @@ class TestCapabilities:
         assert "calendar.cancel" in composio_unsup
         assert "gmail.send" not in composio_unsup
         assert "files.trash" not in composio_unsup   # GDrive trash execution-verified 2026-07-16
-        assert "files.upload" in composio_unsup       # binary needs COMPOSIO_API_KEY
+        assert "files.upload" not in composio_unsup   # binary via MCP sandbox staging (PR #14)
 
     def test_unknown_provider_returns_empty(self):
         from workspace_capabilities import get_capabilities, supports
@@ -121,7 +114,7 @@ class TestCapabilities:
         from workspace_capabilities import UNSUPPORTED_REASONS
         assert ("google_api", "gmail.draft") not in UNSUPPORTED_REASONS
         assert ("composio:mcp", "calendar.cancel") in UNSUPPORTED_REASONS
-        assert ("composio:mcp", "files.upload") in UNSUPPORTED_REASONS  # binary needs COMPOSIO_API_KEY
+        assert ("composio:mcp", "files.upload") not in UNSUPPORTED_REASONS  # supported via MCP sandbox staging (PR #14)
         assert ("composio:mcp", "files.trash") not in UNSUPPORTED_REASONS  # execution-verified True
 
     def test_provider_recommendations_exist(self):

@@ -226,7 +226,7 @@ class TestCapabilitiesPhase1And2:
         assert caps["mail.untrash"] is True
         assert caps["mail.unarchive"] is True
         assert caps["files.trash"] is True
-        assert caps["files.upload"] is False   # binary needs COMPOSIO_API_KEY
+        assert caps["files.upload"] is True    # text + binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert caps["files.download"] is True
         assert supports("composio_microsoft:mcp", "drive.trash") is True
 
@@ -237,7 +237,7 @@ class TestCapabilitiesPhase1And2:
         assert client.supports("mail.draft") is True
         assert client.supports("mail.archive") is True
         assert client.supports("files.trash") is True
-        assert client.supports("files.upload") is False
+        assert client.supports("files.upload") is True   # MCP sandbox staging (PR #14)
 
 
 class TestVerifyWritesPhase2:
@@ -329,11 +329,11 @@ class TestVerifyWritesPhase2:
         assert "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE" not in slugs
         assert "ONE_DRIVE_DELETE_ITEM" in slugs
 
-    def test_verify_writes_default_skips_files_as_not_tested(self, mcp_key, tmp_project):
-        # Default reality (files.upload False — binary needs COMPOSIO_API_KEY):
-        # files_write is skipped as not_tested and NO OneDrive upload of any kind
-        # is attempted. Draft + tags + mail-move still run, so write_ready stays
-        # "yes".
+    def test_verify_writes_runs_files_via_text_path(self, mcp_key, tmp_project):
+        # PR #14 reality (files.upload True): files_write RUNS. The verify harness
+        # uploads a throwaway .txt, which takes the MCP-native text path
+        # (ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE — no sandbox staging), then trashes
+        # it via ONE_DRIVE_DELETE_ITEM. Draft + tags + mail-move also run.
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         from workspace_verify import run_verification
 
@@ -356,6 +356,10 @@ class TestVerifyWritesPhase2:
             if slug == "OUTLOOK_MOVE_MESSAGE":
                 dest = args.get("destination_id") or args.get("destinationFolderId")
                 return _ok({"id": f"draft-{dest or 'moved'}", "restore_target": "draft-1"})
+            if slug == "ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE":
+                return _ok({"id": "file-1"})
+            if slug == "ONE_DRIVE_DELETE_ITEM":
+                return _ok({})
             if slug in (
                 "OUTLOOK_QUERY_EMAILS",
                 "OUTLOOK_GET_CALENDAR_VIEW",
@@ -376,16 +380,17 @@ class TestVerifyWritesPhase2:
         assert rep["checks"]["mail_draft"]["status"] == "pass"
         assert rep["checks"]["mail_tag_write"]["status"] == "pass"
         assert rep["checks"]["mail_move_write"]["status"] == "pass"
-        assert rep["checks"]["files_write"]["status"] == "not_tested"
-        assert "files.upload" in rep["checks"]["files_write"]["detail"]
+        assert rep["checks"]["files_write"]["status"] == "pass"
         assert rep["write_ready"] == "yes"
         slugs = [
             c[0][1]["tools"][0]["tool_slug"]
             for c in mock.call_tool.call_args_list
             if c[0][0] == "COMPOSIO_MULTI_EXECUTE_TOOL"
         ]
+        # The verify harness uploads a .txt → text path, not binary staging.
+        assert "ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE" in slugs
+        assert "ONE_DRIVE_DELETE_ITEM" in slugs
         assert "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE" not in slugs
-        assert "ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE" not in slugs
 
     def test_calendar_write_opt_in_create_update_delete(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
