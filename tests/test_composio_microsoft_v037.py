@@ -317,7 +317,7 @@ class TestMicrosoftWriteArgs:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         return ComposioMCPWorkspaceClient(_ms_workspace())
 
-    def test_microsoft_draft_args_match_graph_schema(self, mcp_key, tmp_project):
+    def test_microsoft_draft_args_match_composio_catalog(self, mcp_key, tmp_project):
         client = self._client()
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"id": "draft"})
@@ -328,13 +328,15 @@ class TestMicrosoftWriteArgs:
         call = mock.call_tool.call_args[0][1]["tools"][0]
         assert call["tool_slug"] == "OUTLOOK_CREATE_DRAFT"
         args = call["arguments"]
-        assert args["toRecipients"] == [{"emailAddress": {"address": "a@b.com"}}]
-        assert args["ccRecipients"] == [{"emailAddress": {"address": "c@d.com"}}]
-        assert args["body"] == {"contentType": "HTML", "content": "B"}
-        assert "to_recipients" not in args
+        assert args["to_recipients"] == ["a@b.com"]
+        assert args["cc_recipients"] == ["c@d.com"]
+        assert args["body"] == "B"
+        assert args["is_html"] is True
+        assert "toRecipients" not in args
         assert res["tool_slug"] == "OUTLOOK_CREATE_DRAFT"
+        assert res["data"]["id"] == "draft"
 
-    def test_microsoft_calendar_create_args_match_graph_schema(self, mcp_key, tmp_project):
+    def test_microsoft_calendar_create_args_match_composio_catalog(self, mcp_key, tmp_project):
         client = self._client()
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"id": "evt"})
@@ -349,13 +351,15 @@ class TestMicrosoftWriteArgs:
         assert call["tool_slug"] == "OUTLOOK_CALENDAR_CREATE_EVENT"
         args = call["arguments"]
         assert args["subject"] == "Sync"
-        assert args["start"] == {"dateTime": "2026-07-10T00:00:00Z", "timeZone": "UTC"}
-        assert args["end"] == {"dateTime": "2026-07-10T23:59:59Z", "timeZone": "UTC"}
-        assert args["attendees"] == [{"emailAddress": {"address": "a@x.com"}, "type": "required"}]
-        assert args["body"] == {"contentType": "HTML", "content": "Discuss"}
-        assert "start_datetime" not in args
+        assert args["start_datetime"] == "2026-07-10T10:00:00"
+        assert args["end_datetime"] == "2026-07-10T11:00:00"
+        assert args["time_zone"] == "UTC"
+        assert args["attendees_info"] == ["a@x.com"]
+        assert args["body"] == "Discuss"
+        assert args["is_html"] is True
+        assert "start" not in args
 
-    def test_microsoft_calendar_update_args_match_graph_schema(self, mcp_key, tmp_project):
+    def test_microsoft_calendar_update_args_match_composio_catalog(self, mcp_key, tmp_project):
         client = self._client()
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"id": "evt"})
@@ -368,9 +372,11 @@ class TestMicrosoftWriteArgs:
         args = call["arguments"]
         assert args["event_id"] == "e1"
         assert args["subject"] == "New"
-        assert args["start"] == {"dateTime": "2026-07-10T00:00:00Z", "timeZone": "UTC"}
+        assert args["start_datetime"] == "2026-07-10T10:00:00"
+        assert args["time_zone"] == "UTC"
         assert args["body"] == {"contentType": "HTML", "content": "Updated"}
         assert "title" not in args
+        assert "start" not in args
 
     def test_microsoft_files_upload_args_are_not_google_shape(self, mcp_key, tmp_project):
         client = self._client()
@@ -385,11 +391,11 @@ class TestMicrosoftWriteArgs:
         args = call["arguments"]
         assert args == {
             "file": "/tmp/x.pdf",
-            "name": "x.pdf",
-            "parentReference": {"id": "folder"},
+            "folder": "folder",
         }
         assert "file_path" not in args
         assert "parent_id" not in args
+        assert "parentReference" not in args
 
     def test_audit_slug_matches_family_microsoft(self, mcp_key, tmp_project):
         client = self._client()
@@ -636,18 +642,29 @@ class TestMicrosoftNormalizers:
 # ── capabilities honesty ─────────────────────────────────────────────────────
 
 class TestCapabilities:
+    # Capability expectations reflect the LIVE WRITE VERIFICATION run of
+    # 2026-07-16 (PR #6): a write is True only if it EXECUTED successfully live.
     def test_composio_microsoft_supported_set(self):
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
-        assert caps["mail.draft"] is False
+        assert caps["mail.draft"] is True          # OUTLOOK_CREATE_DRAFT executed
         assert caps["calendar.list"] is True
-        assert caps["calendar.create"] is False
-        assert caps["calendar.update"] is False
+        assert caps["calendar.create"] is True     # executed
+        assert caps["calendar.update"] is True     # executed
+        assert caps["calendar.delete"] is True     # executed
+        # mail-trash (move → deleteditems) executed live.
+        assert caps["mail.trash"] is True
+        # legacy aliases resolve too
+        assert caps["gmail.draft"] is True
+        assert caps["gmail.trash"] is True
+        # OneDrive writes did NOT execute live (FileUploadable upload blocker).
         assert caps["files.upload"] is False
         assert caps["files.download"] is False
-        # legacy aliases resolve too
-        assert caps["gmail.draft"] is False
+        assert caps["files.trash"] is False
+        assert caps["drive.trash"] is False
+        # mail-move archive/inbox destinations were not exercised.
+        assert caps["mail.archive"] is False
 
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
@@ -655,15 +672,24 @@ class TestCapabilities:
         assert caps["mail.send"] is False
         reason = get_unsupported_reason("composio_microsoft:mcp", "mail.send")
         assert "intentionally disabled" in reason
-        # archive/trash/tags/cancel are honestly unsupported (no Composio slug).
-        for op in ("mail.archive", "mail.trash", "mail.tag", "calendar.cancel", "files.trash"):
+        # Tags/cancel remain unsupported (Phase 4 / policy).
+        for op in ("mail.tag", "calendar.cancel"):
             assert caps[op] is False
+        # Live-verified writes.
+        assert caps["mail.trash"] is True
+        assert caps["mail.draft"] is True
+        # Not execution-verified writes carry a specific (non-generic) reason.
+        for op in ("files.upload", "files.trash", "mail.archive"):
+            assert caps[op] is False
+            assert "2026-07-16" in get_unsupported_reason("composio_microsoft:mcp", op)
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         assert client.supports("mail.search") is True
         assert client.supports("mail.send") is False
+        assert client.supports("mail.draft") is True      # executed live
+        assert client.supports("files.upload") is False    # live FileUploadable blocker
 
 
 # ── connect flow accepts outlook / one_drive ─────────────────────────────────

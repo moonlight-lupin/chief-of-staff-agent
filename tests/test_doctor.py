@@ -434,10 +434,16 @@ def test_doctor_microsoft_capability_key(tmp_path):
     assert "composio_microsoft:mcp" in result.detail
     supported = result.detail.split("supported:", 1)[1].split("; unsupported:", 1)[0]
     unsupported = result.detail.split("; unsupported:", 1)[1]
-    assert "mail.draft" not in supported
-    assert "calendar.create" not in supported
-    assert "mail.draft" in unsupported
-    assert "calendar.create" in unsupported
+    # Updated for the LIVE WRITE VERIFICATION run of 2026-07-16 (PR #6): the
+    # writes that executed successfully live (draft, mail-trash, calendar
+    # create/update/delete) are now advertised as supported; the OneDrive write
+    # chain (blocked by the FileUploadable upload arg) stays unsupported.
+    assert "mail.draft" in supported
+    assert "calendar.create" in supported
+    assert "mail.draft" not in unsupported
+    assert "calendar.create" not in unsupported
+    assert "files.upload" in unsupported
+    assert "files.upload" not in supported
 
 
 def test_doctor_validates_overlay_when_present(monkeypatch, tmp_path):

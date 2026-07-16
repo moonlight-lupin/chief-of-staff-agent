@@ -450,7 +450,7 @@ def test_missing_trash_capability_skips_write(monkeypatch):
     assert client.called("files_upload") == []
 
 
-def test_mail_send_and_calendar_write_always_not_tested(monkeypatch):
+def test_mail_send_and_calendar_write_default_not_tested(monkeypatch):
     client = FakeClient(
         supports_map={"mail.draft": True, "mail.create_tag": True,
                       "mail.tag": True, "files.upload": True},
@@ -464,6 +464,29 @@ def test_mail_send_and_calendar_write_always_not_tested(monkeypatch):
     rep = wv.run_verification({}, include_writes=True)
     assert rep["checks"]["mail_send"]["status"] == "not_tested"
     assert rep["checks"]["calendar_write"]["status"] == "not_tested"
+
+
+def test_draft_cleaned_up_when_tags_unsupported(monkeypatch):
+    """Composio MS: draft+trash without tags must not leave the draft behind."""
+    client = FakeClient(
+        supports_map={
+            "mail.draft": True, "mail.trash": True,
+            "mail.create_tag": False, "mail.tag": False,
+            "files.upload": False, "files.trash": False,
+        },
+        writes={
+            "mail_create_draft": _ok({"id": "draft-x"}),
+            "mail_trash": _ok({"id": "draft-x"}),
+        },
+    )
+    _patch_client(monkeypatch, client)
+    rep = wv.run_verification(
+        {"user": {"email": "op@x.com"}}, include_writes=True,
+    )
+    assert rep["checks"]["mail_draft"]["status"] == "pass"
+    assert rep["checks"]["mail_tag_write"]["status"] == "not_tested"
+    assert client.called("mail_trash") == [("mail_trash", ("draft-x",))]
+    assert rep["write_ready"] == "yes"
 
 
 def test_check_names_contract():

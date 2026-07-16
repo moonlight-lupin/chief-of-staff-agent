@@ -202,22 +202,38 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > Composio's live catalog (2026-07-13)**, and the three reads — `mail_search`
 > (`OUTLOOK_QUERY_EMAILS`), `calendar_list` (`OUTLOOK_GET_CALENDAR_VIEW`), and
 > `files_search` (`ONE_DRIVE_SEARCH_ITEMS`) — are **execution-verified** against a
-> live Outlook + OneDrive connection (`read_ready: true`). The write slugs
-> (`OUTLOOK_CREATE_DRAFT`, `OUTLOOK_CALENDAR_CREATE_EVENT`,
-> `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE`, …) are catalog/schema-verified but not yet
-> execution-verified. They are intentionally advertised as unsupported in the
-> Composio Microsoft capability matrix until a live write/cleanup probe exists.
-> `--verify-writes` is not an acceptance test for Composio Microsoft writes today:
-> the verifier skips write probes when cleanup capabilities such as mail/file
-> trash are unavailable.
+> live Outlook + OneDrive connection (`read_ready: true`).
+>
+> **Cleanup + writes (v0.3.9 Phase 1+2)** are capability-True for Composio
+> Microsoft:
+>
+> - Cleanup: `mail.archive` / `mail.trash` / restore via `OUTLOOK_MOVE_MESSAGE`
+>   (well-known `archive`, `deleteditems`, `inbox` — not permanent
+>   `OUTLOOK_DELETE_MESSAGE`); `files.trash` via `ONE_DRIVE_DELETE_ITEM`.
+> - Content writes use **Composio catalog arg shapes** (not raw Graph JSON):
+>   `OUTLOOK_CREATE_DRAFT` (`to_recipients` / `body`+`is_html`),
+>   `OUTLOOK_CALENDAR_CREATE_EVENT` (`start_datetime`/`time_zone`/`attendees_info`),
+>   `OUTLOOK_UPDATE_CALENDAR_EVENT`, `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` (`file`/`folder`),
+>   `ONE_DRIVE_DOWNLOAD_FILE` (`item_id`/`file_name`).
+>
+> Run write smoke after connect:
+> ```bash
+> python shared/scripts/connect_workspace.py --verify-writes
+> # optional calendar create→update→delete of a marked [CoS verify] event:
+> python shared/scripts/connect_workspace.py --verify-calendar-writes
+> ```
+> `--verify-writes` creates a draft and a tiny OneDrive file, then trashes both
+> (tags stay unsupported until Phase 4 — the draft is still cleaned up). Calendar
+> probe is opt-in because delete is destructive for the artefact just created.
+>
 > Every slug remains **config-overridable** via `integrations.workspace.tool_slugs`
 > in case Composio renames one: a wrong slug reports *itself*, naming the failing
 > slug and the exact `tool_slugs` key to fix. Gmail-syntax queries are translated
 > to Outlook automatically
 > (`in:inbox`, `is:unread`, `from:`, `newer_than:` …); a dict query with a
 > `raw: {m365: {...}}` override is passed through verbatim. `mail.send` is
-> intentionally disabled; archive/trash/categories/cancel are not exposed via
-> Composio (capabilities report them honestly as unsupported).
+> intentionally disabled; categories/cancel are not yet exposed via Composio
+> (capabilities report them honestly as unsupported).
 
 ### Option 3: Microsoft 365 (Graph API)
 
