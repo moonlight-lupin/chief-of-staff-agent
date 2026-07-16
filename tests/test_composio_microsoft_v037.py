@@ -646,8 +646,14 @@ class TestCapabilities:
         assert caps["calendar.update"] is False
         assert caps["files.upload"] is False
         assert caps["files.download"] is False
+        # Phase 1 cleanup primitives are capability-True (catalog-wired).
+        assert caps["mail.archive"] is True
+        assert caps["mail.trash"] is True
+        assert caps["files.trash"] is True
         # legacy aliases resolve too
         assert caps["gmail.draft"] is False
+        assert caps["gmail.trash"] is True
+        assert caps["drive.trash"] is True
 
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
@@ -655,9 +661,11 @@ class TestCapabilities:
         assert caps["mail.send"] is False
         reason = get_unsupported_reason("composio_microsoft:mcp", "mail.send")
         assert "intentionally disabled" in reason
-        # archive/trash/tags/cancel are honestly unsupported (no Composio slug).
-        for op in ("mail.archive", "mail.trash", "mail.tag", "calendar.cancel", "files.trash"):
+        # Tags/cancel remain unsupported; cleanup is Phase 1 (wired).
+        for op in ("mail.tag", "calendar.cancel"):
             assert caps[op] is False
+        assert caps["mail.trash"] is True
+        assert caps["files.trash"] is True
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

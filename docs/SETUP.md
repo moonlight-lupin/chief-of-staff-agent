@@ -202,22 +202,28 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > Composio's live catalog (2026-07-13)**, and the three reads — `mail_search`
 > (`OUTLOOK_QUERY_EMAILS`), `calendar_list` (`OUTLOOK_GET_CALENDAR_VIEW`), and
 > `files_search` (`ONE_DRIVE_SEARCH_ITEMS`) — are **execution-verified** against a
-> live Outlook + OneDrive connection (`read_ready: true`). The write slugs
-> (`OUTLOOK_CREATE_DRAFT`, `OUTLOOK_CALENDAR_CREATE_EVENT`,
-> `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE`, …) are catalog/schema-verified but not yet
-> execution-verified. They are intentionally advertised as unsupported in the
-> Composio Microsoft capability matrix until a live write/cleanup probe exists.
-> `--verify-writes` is not an acceptance test for Composio Microsoft writes today:
-> the verifier skips write probes when cleanup capabilities such as mail/file
-> trash are unavailable.
+> live Outlook + OneDrive connection (`read_ready: true`).
+>
+> **Cleanup (v0.3.9 Phase 1)** is wired and capability-True: `mail.archive` /
+> `mail.trash` / restore use `OUTLOOK_MOVE_MESSAGE` (well-known destinations
+> `archive`, `deleteditems`, `inbox` — soft-delete, not permanent
+> `OUTLOOK_DELETE_MESSAGE`); `files.trash` uses `ONE_DRIVE_DELETE_ITEM` (recycle
+> bin). This unblocks `--verify-writes` cleanup preconditions.
+>
+> Content **write** slugs (`OUTLOOK_CREATE_DRAFT`, `OUTLOOK_CALENDAR_CREATE_EVENT`,
+> `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE`, …) remain catalog/schema-verified but not
+> execution-verified, so they stay advertised as unsupported until a live
+> write+cleanup probe passes (Phase 2). `--verify-writes` still skips those
+> probes today because `mail.draft` / `files.upload` capabilities are False.
+>
 > Every slug remains **config-overridable** via `integrations.workspace.tool_slugs`
 > in case Composio renames one: a wrong slug reports *itself*, naming the failing
 > slug and the exact `tool_slugs` key to fix. Gmail-syntax queries are translated
 > to Outlook automatically
 > (`in:inbox`, `is:unread`, `from:`, `newer_than:` …); a dict query with a
 > `raw: {m365: {...}}` override is passed through verbatim. `mail.send` is
-> intentionally disabled; archive/trash/categories/cancel are not exposed via
-> Composio (capabilities report them honestly as unsupported).
+> intentionally disabled; categories/cancel are not yet exposed via Composio
+> (capabilities report them honestly as unsupported).
 
 ### Option 3: Microsoft 365 (Graph API)
 

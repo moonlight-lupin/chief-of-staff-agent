@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.3.9 — Composio Microsoft cleanup primitives (Phase 1)
+
+### Features
+
+- **Composio Microsoft mail cleanup** via catalog slug `OUTLOOK_MOVE_MESSAGE`:
+  `mail_archive` → `archive`, `mail_trash` → `deleteditems` (soft-delete),
+  `mail_unarchive` / `mail_untrash` → `inbox`. Returns `restore_target` like
+  native m365. Does **not** use permanent `OUTLOOK_DELETE_MESSAGE`.
+- **Composio Microsoft OneDrive trash** via `ONE_DRIVE_DELETE_ITEM` (recycle bin,
+  not `ONE_DRIVE_DELETE_ITEM_PERMANENTLY`).
+- **Capability matrix** for `composio_microsoft` / `composio_microsoft:mcp` now
+  reports `mail.archive`, `mail.trash`, `mail.unarchive`, `mail.untrash`, and
+  `files.trash` as supported so `--verify-writes` is no longer blocked on missing
+  cleanup. Content writes (`mail.draft`, calendar create/update, files
+  upload/download) remain `False` until Phase 2 live verification.
+- Slugs are overridable via `integrations.workspace.tool_slugs.mail_move` /
+  `files_trash`. Google Composio family still refuses these methods
+  (`NotImplementedError` → ActionResult error).
+
+### Docs
+
+- `docs/SETUP.md` Composio Microsoft verification note updated for Phase 1 cleanup.
+
 ## v0.3.8 — Code review fixes (v0.3.5→v0.3.7 review findings)
 
 ### Breaking changes

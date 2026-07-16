@@ -59,19 +59,23 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
     # catalog (v0.3.7 acceptance test, 2026-07). The reads (mail_search,
     # calendar_list) were execution-verified against an active Outlook connection;
     # the writes and files_search were confirmed to exist in the catalog via
-    # COMPOSIO_SEARCH_TOOLS / COMPOSIO_GET_TOOL_SCHEMAS. The earlier defaults used
-    # a doubled toolkit prefix (OUTLOOK_OUTLOOK_*, ONE_DRIVE_ONE_DRIVE_*) that no
-    # real slug carries. Any slug is still overridable per-operation via
+    # COMPOSIO_SEARCH_TOOLS / COMPOSIO_GET_TOOL_SCHEMAS. Cleanup primitives
+    # (mail_move → archive/trash, files_trash) were catalog-verified against
+    # docs.composio.dev Outlook/OneDrive toolkits (v0.3.9). The earlier defaults
+    # used a doubled toolkit prefix (OUTLOOK_OUTLOOK_*, ONE_DRIVE_ONE_DRIVE_*)
+    # that no real slug carries. Any slug is still overridable per-operation via
     # integrations.workspace.tool_slugs without a code change.
     "microsoft": {
         "mail_search": "OUTLOOK_QUERY_EMAILS",
         "mail_create_draft": "OUTLOOK_CREATE_DRAFT",
+        "mail_move": "OUTLOOK_MOVE_MESSAGE",
         "calendar_list": "OUTLOOK_GET_CALENDAR_VIEW",
         "calendar_create": "OUTLOOK_CALENDAR_CREATE_EVENT",
         "calendar_update": "OUTLOOK_UPDATE_CALENDAR_EVENT",
         "files_search": "ONE_DRIVE_SEARCH_ITEMS",
         "files_upload": "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
         "files_download": "ONE_DRIVE_DOWNLOAD_FILE",
+        "files_trash": "ONE_DRIVE_DELETE_ITEM",
     },
 }
 
@@ -327,6 +331,30 @@ def _ms_datetime(value: str, *, is_end: bool = False) -> dict[str, str]:
 
 def _ms_attendee(address: str) -> dict[str, Any]:
     return {"emailAddress": {"address": address}, "type": "required"}
+
+
+def _ms_moved_message_id(data: Any, fallback: str) -> str:
+    """Extract the post-move message id from an OUTLOOK_MOVE_MESSAGE payload.
+
+    Graph move returns a new message object (id changes). Prefer an explicit
+    top-level ``id``, then common nested envelopes, else the pre-move id.
+    """
+    if isinstance(data, Mapping):
+        top = data.get("id")
+        if isinstance(top, str) and top:
+            return top
+        for key in ("data", "response_data", "result", "message"):
+            nested = data.get(key)
+            if isinstance(nested, Mapping):
+                nid = nested.get("id")
+                if isinstance(nid, str) and nid:
+                    return nid
+        value = data.get("value")
+        if isinstance(value, Mapping):
+            nid = value.get("id")
+            if isinstance(nid, str) and nid:
+                return nid
+    return fallback
 
 
 def _get_session_store_path(config: Any) -> Path:
@@ -758,6 +786,73 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         data = self._execute_composio_tool(slug, args, operation="mail_create_draft")
         return data if isinstance(data, dict) else {}
 
+    def _require_microsoft_cleanup(self, operation: str) -> None:
+        """Cleanup/organise mail+file mutations are Microsoft-family only today.
+
+        Google Composio MCP still reports archive/trash unsupported (no wired
+        Gmail slug). Callers on the google family get a clear NotImplementedError
+        instead of a KeyError from FAMILY_SLUGS.
+        """
+        if self.family != "microsoft":
+            raise NotImplementedError(
+                f"{operation} is only implemented for Composio Microsoft "
+                f"(Outlook/OneDrive); current family is {self.family!r}"
+            )
+
+    def _ms_mail_move(self, message_id: str, destination: str) -> dict[str, Any]:
+        """Move an Outlook message via OUTLOOK_MOVE_MESSAGE (well-known folder).
+
+        Destinations match Graph well-known names used by the native m365
+        provider: ``inbox``, ``archive``, ``deleteditems``. Some tenants prefer
+        folder IDs over well-known names — override ``tool_slugs.mail_move`` or
+        pass a folder id once Phase 3 folder listing lands.
+        """
+        self._require_microsoft_cleanup("mail_move")
+        slug = self._slug_for("mail_move")
+        data = self._execute_composio_tool(
+            slug,
+            {"message_id": message_id, "destination_id": destination},
+            operation="mail_move",
+        )
+        moved_id = _ms_moved_message_id(data, message_id)
+        return {
+            "id": moved_id,
+            "destination": destination,
+            "restore_target": moved_id,
+            "reversible": True,
+        }
+
+    def _ms_cleanup_slug(self, operation: str) -> str:
+        """Resolve a Microsoft cleanup slug without KeyError on google family."""
+        if self.family != "microsoft":
+            return operation
+        return self._slug_for(operation)
+
+    @guarded("mail.archive", target_arg="message_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+    def mail_archive(self, message_id: str) -> dict[str, Any]:
+        return self._ms_mail_move(message_id, "archive")
+
+    @guarded("mail.unarchive", target_arg="message_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+    def mail_unarchive(self, message_id: str) -> dict[str, Any]:
+        return self._ms_mail_move(message_id, "inbox")
+
+    @guarded("mail.trash", target_arg="message_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+    def mail_trash(self, message_id: str) -> dict[str, Any]:
+        """Soft-delete via move to Deleted Items (not OUTLOOK_DELETE_MESSAGE)."""
+        return self._ms_mail_move(message_id, "deleteditems")
+
+    @guarded("mail.untrash", target_arg="message_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+    def mail_untrash(self, message_id: str) -> dict[str, Any]:
+        return self._ms_mail_move(message_id, "inbox")
+
     # --- Calendar ---
 
     def calendar_list(self, start: str, end: str) -> list[dict[str, Any]]:
@@ -882,6 +977,21 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             args = {"file_id": file_id, "output_path": output_path}
         data = self._execute_composio_tool(slug, args, operation="files_download")
         return {"path": output_path, **(data if isinstance(data, dict) else {})}
+
+    @guarded("files.trash", target_arg="file_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("files_trash"),
+             tool_slug=lambda self: self._ms_cleanup_slug("files_trash"))
+    def files_trash(self, file_id: str) -> dict[str, Any]:
+        """Move a OneDrive item to the recycle bin (ONE_DRIVE_DELETE_ITEM).
+
+        Uses the soft-delete slug, not ONE_DRIVE_DELETE_ITEM_PERMANENTLY.
+        """
+        self._require_microsoft_cleanup("files_trash")
+        slug = self._slug_for("files_trash")
+        self._execute_composio_tool(
+            slug, {"item_id": file_id}, operation="files_trash",
+        )
+        return {"id": file_id, "reversible": True}
 
     # --- Health ---
 

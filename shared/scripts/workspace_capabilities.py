@@ -90,14 +90,18 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
     # reports provider_name "composio_microsoft:mcp". Reads are execution-verified.
-    # Write slugs are catalog-verified but not execution-verified, so write
-    # capabilities stay False until a live write/cleanup probe proves them safe.
+    # Cleanup (archive/trash via OUTLOOK_MOVE_MESSAGE, files.trash via
+    # ONE_DRIVE_DELETE_ITEM) is wired and capability-True so --verify-writes can
+    # clean up artefacts (v0.3.9 Phase 1). Content writes (draft/calendar/files
+    # upload) stay False until a live write+cleanup probe proves them safe.
     "composio_microsoft": {
         "mail.search": True,
         "mail.draft": False,
         "mail.send": False,
-        "mail.archive": False,
-        "mail.trash": False,
+        "mail.archive": True,       # OUTLOOK_MOVE_MESSAGE → archive
+        "mail.unarchive": True,     # OUTLOOK_MOVE_MESSAGE → inbox
+        "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems (soft)
+        "mail.untrash": True,       # OUTLOOK_MOVE_MESSAGE → inbox
         "mail.list_tags": False,
         "mail.tag": False,
         "mail.create_tag": False,
@@ -108,7 +112,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.search": True,
         "files.upload": False,
         "files.download": False,
-        "files.trash": False,
+        "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -116,8 +120,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,
         "mail.draft": False,
         "mail.send": False,
-        "mail.archive": False,
-        "mail.trash": False,
+        "mail.archive": True,
+        "mail.unarchive": True,
+        "mail.trash": True,
+        "mail.untrash": True,
         "mail.list_tags": False,
         "mail.tag": False,
         "mail.create_tag": False,
@@ -128,7 +134,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.search": True,
         "files.upload": False,
         "files.download": False,
-        "files.trash": False,
+        "files.trash": True,
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
