@@ -203,7 +203,10 @@ class TestConnectWorkspaceConfigDiscovery:
 
         captured = {}
 
-        def fake_run(config, include_writes=False):
+        # run_verification gained include_calendar_writes (opt-in calendar
+        # create→update→delete) in the Composio MS write-verification work; the
+        # CLI now always passes it, so the mock must accept it.
+        def fake_run(config, include_writes=False, include_calendar_writes=False):
             captured["provider"] = (
                 config.get("integrations", {}).get("workspace", {}).get("provider")
             )

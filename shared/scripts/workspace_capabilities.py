@@ -93,49 +93,56 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # v0.3.9 Phase 1+2: cleanup + content writes are wired to catalog slugs with
     # Composio-shaped args. mail.send / calendar.cancel stay False (policy /
     # no restore path). Categories (mail.tag*) remain Phase 4.
+    # LIVE WRITE VERIFICATION 2026-07-16 (PR #6, Composio MS Phase 1+2): each
+    # write below is True ONLY if it EXECUTED successfully against a live Outlook
+    # + OneDrive connection. Draft, mail-trash (move → deleteditems) and calendar
+    # create/update/delete executed and cleaned up. OneDrive writes and the
+    # archive/inbox mail-move destinations did NOT execute (see UNSUPPORTED_REASONS)
+    # and honestly stay False. Reads (mail/calendar/files search) remain
+    # execution-verified from the v0.3.7 read run.
     "composio_microsoft": {
-        "mail.search": True,
-        "mail.draft": True,         # OUTLOOK_CREATE_DRAFT
+        "mail.search": True,        # OUTLOOK_QUERY_EMAILS — execution-verified (read)
+        "mail.draft": True,         # OUTLOOK_CREATE_DRAFT — execution-verified 2026-07-16
         "mail.send": False,
-        "mail.archive": True,       # OUTLOOK_MOVE_MESSAGE → archive
-        "mail.unarchive": True,     # OUTLOOK_MOVE_MESSAGE → inbox
-        "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems (soft)
-        "mail.untrash": True,       # OUTLOOK_MOVE_MESSAGE → inbox
+        "mail.archive": False,      # OUTLOOK_MOVE_MESSAGE 'archive' dest NOT exercised live
+        "mail.unarchive": False,    # OUTLOOK_MOVE_MESSAGE 'inbox' dest NOT exercised live
+        "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems — execution-verified 2026-07-16
+        "mail.untrash": False,      # OUTLOOK_MOVE_MESSAGE 'inbox' dest NOT exercised live
         "mail.list_tags": False,
         "mail.tag": False,
         "mail.create_tag": False,
-        "calendar.list": True,
-        "calendar.create": True,    # OUTLOOK_CALENDAR_CREATE_EVENT
-        "calendar.update": True,    # OUTLOOK_UPDATE_CALENDAR_EVENT
+        "calendar.list": True,      # OUTLOOK_GET_CALENDAR_VIEW — execution-verified (read)
+        "calendar.create": True,    # OUTLOOK_CALENDAR_CREATE_EVENT — execution-verified 2026-07-16
+        "calendar.update": True,    # OUTLOOK_UPDATE_CALENDAR_EVENT — execution-verified 2026-07-16
         "calendar.cancel": False,
-        "calendar.delete": True,    # OUTLOOK_DELETE_CALENDAR_EVENT (verify cleanup)
-        "files.search": True,
-        "files.upload": True,       # ONE_DRIVE_ONEDRIVE_UPLOAD_FILE
-        "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE
-        "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin
+        "calendar.delete": True,    # OUTLOOK_DELETE_CALENDAR_EVENT — execution-verified 2026-07-16
+        "files.search": True,       # ONE_DRIVE_SEARCH_ITEMS — execution-verified (read)
+        "files.upload": False,      # ONE_DRIVE_ONEDRIVE_UPLOAD_FILE FileUploadable/s3key blocker (live FAIL 2026-07-16)
+        "files.download": False,    # NOT execution-verified (blocked by files.upload)
+        "files.trash": False,       # NOT execution-verified (no self-created artifact to trash)
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
     "composio_microsoft:mcp": {
-        "mail.search": True,
-        "mail.draft": True,
+        "mail.search": True,        # execution-verified (read)
+        "mail.draft": True,         # execution-verified 2026-07-16
         "mail.send": False,
-        "mail.archive": True,
-        "mail.unarchive": True,
-        "mail.trash": True,
-        "mail.untrash": True,
+        "mail.archive": False,      # move 'archive' dest NOT exercised live
+        "mail.unarchive": False,    # move 'inbox' dest NOT exercised live
+        "mail.trash": True,         # execution-verified 2026-07-16 (move → deleteditems)
+        "mail.untrash": False,      # move 'inbox' dest NOT exercised live
         "mail.list_tags": False,
         "mail.tag": False,
         "mail.create_tag": False,
-        "calendar.list": True,
-        "calendar.create": True,
-        "calendar.update": True,
+        "calendar.list": True,      # execution-verified (read)
+        "calendar.create": True,    # execution-verified 2026-07-16
+        "calendar.update": True,    # execution-verified 2026-07-16
         "calendar.cancel": False,
-        "calendar.delete": True,
-        "files.search": True,
-        "files.upload": True,
-        "files.download": True,
-        "files.trash": True,
+        "calendar.delete": True,    # execution-verified 2026-07-16
+        "files.search": True,       # execution-verified (read)
+        "files.upload": False,      # FileUploadable/s3key blocker (live FAIL 2026-07-16)
+        "files.download": False,    # NOT execution-verified (blocked by files.upload)
+        "files.trash": False,       # NOT execution-verified (no self-created artifact)
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -213,6 +220,50 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                  "be honoured behind the reversible soft-delete promise — "
                                  "cancel the event via Outlook, or delete and recreate it",
 }
+
+# ── Live write verification 2026-07-16 (PR #6): honest Composio-MS gaps ───────
+# The OneDrive write chain could not execute over the raw MCP transport: the
+# ONE_DRIVE_ONEDRIVE_UPLOAD_FILE 'file' arg is a Composio FileUploadable
+# (name+mimetype+s3key) or a public source_url, so a local temp file cannot be
+# turned into an s3key without Composio's SDK-side file store (not reachable via
+# COMPOSIO_MULTI_EXECUTE_TOOL). download/trash then had no self-created artifact
+# to act on. The mail-move archive/inbox destinations were not exercised (only
+# 'deleteditems' ran, via mail.trash). Reasons are registered for both the
+# neutral and legacy (drive.*/gmail.*) action ids because get_unsupported_reason
+# does an exact (provider, action) lookup.
+_MS_FILE_UPLOAD_REASON = (
+    "not execution-verified in the 2026-07-16 live write run: "
+    "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE expects a Composio FileUploadable "
+    "(name+mimetype+s3key) or a public source_url, so a local temp file cannot be "
+    "uploaded over the raw MCP transport (live error: 'Input should be a valid "
+    "dictionary or instance of FileUploadable on parameter file')"
+)
+_MS_FILE_DOWNLOAD_REASON = (
+    "not execution-verified in the 2026-07-16 live write run: blocked by "
+    "files.upload — no self-created OneDrive item to download without touching "
+    "real user files"
+)
+_MS_FILE_TRASH_REASON = (
+    "not execution-verified in the 2026-07-16 live write run: blocked by "
+    "files.upload — no self-created OneDrive item to trash without touching "
+    "real user files"
+)
+_MS_MAIL_MOVE_DEST_REASON = (
+    "OUTLOOK_MOVE_MESSAGE is execution-verified only for the 'deleteditems' "
+    "destination (mail.trash, 2026-07-16); the 'archive'/'inbox' destinations "
+    "were not exercised in the conservative live write run"
+)
+for _prov in ("composio_microsoft", "composio_microsoft:mcp"):
+    UNSUPPORTED_REASONS[(_prov, "files.upload")] = _MS_FILE_UPLOAD_REASON
+    UNSUPPORTED_REASONS[(_prov, "drive.upload")] = _MS_FILE_UPLOAD_REASON
+    UNSUPPORTED_REASONS[(_prov, "files.download")] = _MS_FILE_DOWNLOAD_REASON
+    UNSUPPORTED_REASONS[(_prov, "drive.download")] = _MS_FILE_DOWNLOAD_REASON
+    UNSUPPORTED_REASONS[(_prov, "files.trash")] = _MS_FILE_TRASH_REASON
+    UNSUPPORTED_REASONS[(_prov, "drive.trash")] = _MS_FILE_TRASH_REASON
+    UNSUPPORTED_REASONS[(_prov, "mail.archive")] = _MS_MAIL_MOVE_DEST_REASON
+    UNSUPPORTED_REASONS[(_prov, "gmail.archive")] = _MS_MAIL_MOVE_DEST_REASON
+    UNSUPPORTED_REASONS[(_prov, "mail.unarchive")] = _MS_MAIL_MOVE_DEST_REASON
+    UNSUPPORTED_REASONS[(_prov, "mail.untrash")] = _MS_MAIL_MOVE_DEST_REASON
 
 # Provider recommendations for each action/workflow.
 PROVIDER_RECOMMENDATIONS: dict[str, str] = {

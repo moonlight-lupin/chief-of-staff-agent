@@ -204,35 +204,53 @@ class TestFilesTrash:
 
 
 class TestCapabilitiesPhase1And2:
-    def test_cleanup_and_content_writes_supported(self):
+    # Updated to the LIVE WRITE VERIFICATION run of 2026-07-16 (PR #6): the Phase
+    # 1+2 slugs were wired against the catalog, but only those that EXECUTED
+    # successfully live are advertised True. Mail draft, mail-trash (move →
+    # deleteditems) and calendar create/update/delete executed; the OneDrive write
+    # chain (FileUploadable upload blocker) and the archive/inbox mail-move
+    # destinations did not, and honestly stay False.
+    def test_cleanup_and_content_writes_live_verified(self):
         from workspace_capabilities import get_capabilities, supports
         caps = get_capabilities("composio_microsoft:mcp")
+        # Executed live → True.
         assert caps["mail.trash"] is True
-        assert caps["mail.archive"] is True
-        assert caps["mail.untrash"] is True
-        assert caps["mail.unarchive"] is True
-        assert caps["files.trash"] is True
         assert caps["mail.draft"] is True
-        assert caps["files.upload"] is True
-        assert caps["files.download"] is True
         assert caps["calendar.create"] is True
         assert caps["calendar.update"] is True
+        assert caps["calendar.delete"] is True
         assert supports("composio_microsoft:mcp", "gmail.trash") is True
-        assert supports("composio_microsoft:mcp", "drive.trash") is True
+        # Not execution-verified → False.
+        assert caps["mail.archive"] is False
+        assert caps["mail.untrash"] is False
+        assert caps["mail.unarchive"] is False
+        assert caps["files.trash"] is False
+        assert caps["files.upload"] is False
+        assert caps["files.download"] is False
+        assert supports("composio_microsoft:mcp", "drive.trash") is False
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
+        # Live-verified writes.
         assert client.supports("mail.trash") is True
-        assert client.supports("files.trash") is True
         assert client.supports("mail.draft") is True
-        assert client.supports("files.upload") is True
+        # OneDrive writes not execution-verified (FileUploadable upload blocker).
+        assert client.supports("files.trash") is False
+        assert client.supports("files.upload") is False
 
 
 class TestVerifyWritesPhase2:
-    """With Phase 1+2 caps, --verify-writes exercises draft/upload + cleanup."""
+    """--verify-writes exercises the LIVE-VERIFIED writes only.
 
-    def test_verify_writes_draft_and_files_then_cleanup(self, mcp_key, tmp_project):
+    Per the 2026-07-16 live write run, mail draft (create + trash-cleanup)
+    executed but the OneDrive upload could not (FileUploadable/s3key arg), so
+    files.upload/files.trash are False. The harness therefore runs the mail draft
+    check and SKIPS the files check (not_tested) — it never touches the OneDrive
+    slugs, which is exactly what the honest capabilities enforce.
+    """
+
+    def test_verify_writes_draft_then_cleanup_files_skipped(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         from workspace_verify import run_verification
 
@@ -245,10 +263,6 @@ class TestVerifyWritesPhase2:
                 return _ok({"id": "draft-1"})
             if slug == "OUTLOOK_MOVE_MESSAGE":
                 return _ok({"id": "draft-trashed"})
-            if slug == "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE":
-                return _ok({"id": "file-1"})
-            if slug == "ONE_DRIVE_DELETE_ITEM":
-                return _ok({})
             if slug in (
                 "OUTLOOK_QUERY_EMAILS",
                 "OUTLOOK_GET_CALENDAR_VIEW",
@@ -268,7 +282,9 @@ class TestVerifyWritesPhase2:
 
         assert rep["checks"]["mail_draft"]["status"] == "pass"
         assert rep["checks"]["mail_tag_write"]["status"] == "not_tested"
-        assert rep["checks"]["files_write"]["status"] == "pass"
+        # files.upload is honestly unsupported (live FileUploadable blocker) → skipped.
+        assert rep["checks"]["files_write"]["status"] == "not_tested"
+        # mail_draft passed and no tested write failed → write_ready yes.
         assert rep["write_ready"] == "yes"
         slugs = [
             c[0][1]["tools"][0]["tool_slug"]
@@ -277,8 +293,9 @@ class TestVerifyWritesPhase2:
         ]
         assert "OUTLOOK_CREATE_DRAFT" in slugs
         assert "OUTLOOK_MOVE_MESSAGE" in slugs
-        assert "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE" in slugs
-        assert "ONE_DRIVE_DELETE_ITEM" in slugs
+        # OneDrive write slugs are never called — capability gate skips files_write.
+        assert "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE" not in slugs
+        assert "ONE_DRIVE_DELETE_ITEM" not in slugs
 
     def test_calendar_write_opt_in_create_update_delete(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

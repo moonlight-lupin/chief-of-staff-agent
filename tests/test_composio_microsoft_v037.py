@@ -642,24 +642,29 @@ class TestMicrosoftNormalizers:
 # ── capabilities honesty ─────────────────────────────────────────────────────
 
 class TestCapabilities:
+    # Capability expectations reflect the LIVE WRITE VERIFICATION run of
+    # 2026-07-16 (PR #6): a write is True only if it EXECUTED successfully live.
     def test_composio_microsoft_supported_set(self):
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
-        assert caps["mail.draft"] is True
+        assert caps["mail.draft"] is True          # OUTLOOK_CREATE_DRAFT executed
         assert caps["calendar.list"] is True
-        assert caps["calendar.create"] is True
-        assert caps["calendar.update"] is True
-        assert caps["files.upload"] is True
-        assert caps["files.download"] is True
-        # Phase 1 cleanup primitives
-        assert caps["mail.archive"] is True
+        assert caps["calendar.create"] is True     # executed
+        assert caps["calendar.update"] is True     # executed
+        assert caps["calendar.delete"] is True     # executed
+        # mail-trash (move → deleteditems) executed live.
         assert caps["mail.trash"] is True
-        assert caps["files.trash"] is True
         # legacy aliases resolve too
         assert caps["gmail.draft"] is True
         assert caps["gmail.trash"] is True
-        assert caps["drive.trash"] is True
+        # OneDrive writes did NOT execute live (FileUploadable upload blocker).
+        assert caps["files.upload"] is False
+        assert caps["files.download"] is False
+        assert caps["files.trash"] is False
+        assert caps["drive.trash"] is False
+        # mail-move archive/inbox destinations were not exercised.
+        assert caps["mail.archive"] is False
 
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
@@ -670,17 +675,21 @@ class TestCapabilities:
         # Tags/cancel remain unsupported (Phase 4 / policy).
         for op in ("mail.tag", "calendar.cancel"):
             assert caps[op] is False
+        # Live-verified writes.
         assert caps["mail.trash"] is True
-        assert caps["files.trash"] is True
         assert caps["mail.draft"] is True
+        # Not execution-verified writes carry a specific (non-generic) reason.
+        for op in ("files.upload", "files.trash", "mail.archive"):
+            assert caps[op] is False
+            assert "2026-07-16" in get_unsupported_reason("composio_microsoft:mcp", op)
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         assert client.supports("mail.search") is True
         assert client.supports("mail.send") is False
-        assert client.supports("mail.draft") is True
-        assert client.supports("files.upload") is True
+        assert client.supports("mail.draft") is True      # executed live
+        assert client.supports("files.upload") is False    # live FileUploadable blocker
 
 
 # ── connect flow accepts outlook / one_drive ─────────────────────────────────
