@@ -65,7 +65,8 @@ class TestFamilySlugsPhase3:
         assert ms["mail_send"] == "OUTLOOK_SEND_EMAIL"
         assert ms["mail_list_folders"] == "OUTLOOK_LIST_MAIL_FOLDERS"
         assert ms["mail_move"] == "OUTLOOK_MOVE_MESSAGE"
-        assert "mail_send" not in FAMILY_SLUGS["google"]
+        # Google has mail_send (v0.3.13); folders/move stay Microsoft-only.
+        assert FAMILY_SLUGS["google"]["mail_send"] == "GMAIL_SEND_EMAIL"
         assert "mail_list_folders" not in FAMILY_SLUGS["google"]
 
 
@@ -213,11 +214,9 @@ class TestCapabilitiesPhase3:
         assert caps["mail.move"] is True
         assert caps["mail.send"] is True
         assert supports("composio_microsoft:mcp", "mail.send") is True
-        # Google Composio still disabled for send
-        assert get_capabilities("composio:mcp")["mail.send"] is False
-        reason = get_unsupported_reason("composio:mcp", "gmail.send")
-        assert "intentionally disabled" in reason
-        # No intentional-disable entry for MS send anymore
+        # Google Composio send is approval-gated (v0.3.13), same product model as MS.
+        assert get_capabilities("composio:mcp")["mail.send"] is True
+        # No intentional-disable entry for MS send
         assert "intentionally disabled" not in get_unsupported_reason(
             "composio_microsoft:mcp", "mail.send"
         )

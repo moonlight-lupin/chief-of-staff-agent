@@ -27,8 +27,11 @@ class TestCapabilities:
         caps = get_capabilities("composio")
         assert caps["gmail.search"] is True
         assert caps["gmail.draft"] is True
-        assert caps["gmail.send"] is False
+        assert caps["gmail.send"] is True          # execution-verified 2026-07-16
+        assert caps["mail.list_tags"] is True      # execution-verified 2026-07-16
+        assert caps["mail.archive"] is False       # wired; pending live re-verify (draft-id fix)
         assert caps["drive.search"] is True
+        assert caps["calendar.cancel"] is False
 
     def test_composio_microsoft_writes_reflect_live_execution(self):
         # A write is True ONLY if it EXECUTED successfully against the live
@@ -83,8 +86,9 @@ class TestCapabilities:
     def test_supports(self):
         from workspace_capabilities import supports
         assert supports("google_api", "gmail.send") is True
-        assert supports("composio", "gmail.send") is False
+        assert supports("composio", "gmail.send") is True
         assert supports("composio", "drive.upload") is True
+        assert supports("composio", "calendar.cancel") is False
 
     def test_unsupported_actions(self):
         from workspace_capabilities import unsupported_actions
@@ -92,7 +96,8 @@ class TestCapabilities:
         assert "gmail.draft" in google_unsup  # now False
         assert "gmail.send" not in google_unsup
         composio_unsup = unsupported_actions("composio")
-        assert "gmail.send" in composio_unsup
+        assert "calendar.cancel" in composio_unsup
+        assert "gmail.send" not in composio_unsup
 
     def test_unknown_provider_returns_empty(self):
         from workspace_capabilities import get_capabilities, supports
@@ -113,7 +118,7 @@ class TestCapabilities:
     def test_unsupported_reasons_exist(self):
         from workspace_capabilities import UNSUPPORTED_REASONS
         assert ("google_api", "gmail.draft") in UNSUPPORTED_REASONS
-        assert ("composio:mcp", "gmail.send") in UNSUPPORTED_REASONS
+        assert ("composio:mcp", "calendar.cancel") in UNSUPPORTED_REASONS
 
     def test_provider_recommendations_exist(self):
         from workspace_capabilities import PROVIDER_RECOMMENDATIONS

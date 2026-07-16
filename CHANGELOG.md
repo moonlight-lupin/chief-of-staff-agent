@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.3.13 — Hermes Composio reads + Google Composio cleanup/tags/send
+
+### Features
+
+- **Hermes Composio MCP as read front-end**: document the fetch/compute split when
+  Hermes already has Composio MCP connected — agent fetches reads →
+  `schemas.py` envelope → `--input`; writes stay on `get_workspace_client`
+  (`@guarded` + audit). Updated `agent` provider guidance, daily-briefing /
+  weekly-review / meeting-prep Workspace Access, and `docs/SETUP.md`.
+- **Google Composio parity** (catalog-wired from docs.composio.dev/toolkits/gmail):
+  - `mail_list_tags` → `GMAIL_LIST_LABELS`
+  - `mail_create_tag` → `GMAIL_CREATE_LABEL`
+  - `mail_tag` / archive / unarchive → `GMAIL_ADD_LABEL_TO_EMAIL`
+  - `mail_trash` / `mail_untrash` → `GMAIL_MOVE_TO_TRASH` / `GMAIL_UNTRASH_MESSAGE`
+  - `mail_send` → `GMAIL_SEND_EMAIL` (approval-gated, same model as MS)
+  - **Execution-verified 2026-07-16 (live Gmail):** `mail.list_tags`
+    (`GMAIL_LIST_LABELS`), `mail.create_tag` (`GMAIL_CREATE_LABEL`), `mail.send`
+    (`GMAIL_SEND_EMAIL`, sent + received) → capabilities True.
+  - **Wired but NOT yet verified → False:** `mail.tag` / `mail.archive` /
+    `mail.unarchive` / `mail.trash` / `mail.untrash`. The live probe rejected a
+    Gmail draft id where a hex message id is required; `mail_create_draft` now
+    surfaces the underlying `message.id` (the fix), and these flip True once
+    `--verify-writes` re-runs green on `family: google`.
+  - Still False: `mail.list_folders` / `mail.move`, `calendar.cancel`, `files.trash`
+- **email-organisation**: skill + live checklist cover Composio Microsoft
+  Outlook categories (Phase 4) and the CoS-only write path.
+
+### Unchanged on purpose
+
+- `calendar.cancel` remains False (no restore-path parity).
+- Composio Microsoft `files.upload` remains False until `COMPOSIO_API_KEY`
+  enables binary filing (text `CREATE_TEXT_FILE` still works when called).
+
 ## v0.3.12 — Composio Microsoft Phase 4 categories + MCP-native OneDrive text upload
 
 ### Features

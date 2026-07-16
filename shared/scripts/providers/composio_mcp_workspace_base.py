@@ -48,6 +48,13 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
     "google": {
         "mail_search": "GMAIL_FETCH_EMAILS",
         "mail_create_draft": "GMAIL_CREATE_EMAIL_DRAFT",
+        # Catalog-verified against docs.composio.dev/toolkits/gmail (v0.3.13).
+        "mail_send": "GMAIL_SEND_EMAIL",
+        "mail_list_tags": "GMAIL_LIST_LABELS",
+        "mail_create_tag": "GMAIL_CREATE_LABEL",
+        "mail_modify_labels": "GMAIL_ADD_LABEL_TO_EMAIL",  # archive/unarchive/tag
+        "mail_trash": "GMAIL_MOVE_TO_TRASH",
+        "mail_untrash": "GMAIL_UNTRASH_MESSAGE",
         "calendar_list": "GOOGLECALENDAR_FIND_EVENT",
         "calendar_create": "GOOGLECALENDAR_CREATE_EVENT",
         "calendar_update": "GOOGLECALENDAR_UPDATE_EVENT",
@@ -232,7 +239,7 @@ def _ms_extract_records(data: Any) -> list[Any]:
         return data
     if not isinstance(data, Mapping):
         return []
-    for key in ("value", "messages", "events", "files", "items", "results"):
+    for key in ("value", "messages", "events", "files", "items", "results", "labels"):
         val = data.get(key)
         if isinstance(val, list):
             return val
@@ -844,13 +851,30 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             if cc:
                 args["cc"] = cc
         data = self._execute_composio_tool(slug, args, operation="mail_create_draft")
-        return _ms_with_id(data) if self.family == "microsoft" else (
-            data if isinstance(data, dict) else {}
-        )
+        if self.family == "microsoft":
+            return _ms_with_id(data)
+        # Google: GMAIL_CREATE_EMAIL_DRAFT returns a DRAFT object whose top-level
+        # id is a draft id (r-…), NOT a Gmail message id. Downstream label/move/
+        # trash tools (GMAIL_ADD_LABEL_TO_EMAIL / GMAIL_MOVE_TO_TRASH) require the
+        # underlying hex message id, so surface it as `id` (keeping draft_id).
+        d = data if isinstance(data, dict) else {}
+        inner = d.get("data") if isinstance(d.get("data"), Mapping) else d
+        msg = inner.get("message") if isinstance(inner, Mapping) else None
+        msg_id = None
+        if isinstance(msg, Mapping):
+            msg_id = msg.get("id") or msg.get("messageId")
+        if not msg_id and isinstance(inner, Mapping):
+            msg_id = inner.get("messageId")
+        out = dict(inner) if isinstance(inner, Mapping) else {}
+        if msg_id:
+            out["draft_id"] = out.get("id")
+            out["id"] = str(msg_id)
+            out["message_id"] = str(msg_id)
+        return out
 
     @guarded("mail.send", target_arg="to", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_send"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_send"),
+             audit_tool=lambda self: self._cleanup_slug("mail_send"),
+             tool_slug=lambda self: self._cleanup_slug("mail_send"),
              block_error=(
                  "cancelled by guardrail (requires explicit user approval; "
                  "use send_email.py prepare→approve→execute or set "
@@ -858,34 +882,71 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
              ))
     def mail_send(self, to: str, subject: str, body: str,
                   cc: str | None = None) -> dict[str, Any]:
-        """Send email via OUTLOOK_SEND_EMAIL (destructive / approval-gated)."""
-        self._require_microsoft_cleanup("mail_send")
+        """Send email (destructive / approval-gated).
+
+        Microsoft → ``OUTLOOK_SEND_EMAIL``; Google → ``GMAIL_SEND_EMAIL``.
+        """
         slug = self._slug_for("mail_send")
-        # Catalog shape: to/subject/body strings; cc_emails is a string array.
-        args: dict[str, Any] = {
-            "to": to,
-            "subject": subject,
-            "body": body,
-            "is_html": False,
-            "save_to_sent_items": True,
-        }
-        if cc:
-            args["cc_emails"] = [part.strip() for part in cc.split(",") if part.strip()]
+        if self.family == "microsoft":
+            args: dict[str, Any] = {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "is_html": False,
+                "save_to_sent_items": True,
+            }
+            if cc:
+                args["cc_emails"] = [
+                    part.strip() for part in cc.split(",") if part.strip()
+                ]
+        else:
+            args = {
+                "recipient_email": to,
+                "subject": subject,
+                "body": body,
+                "is_html": False,
+            }
+            if cc:
+                args["cc"] = [
+                    part.strip() for part in cc.split(",") if part.strip()
+                ]
         self._execute_composio_tool(slug, args, operation="mail_send")
         return {"status": "sent", "to": to}
 
     def _require_microsoft_cleanup(self, operation: str) -> None:
-        """Cleanup/organise mail+file mutations are Microsoft-family only today.
+        """Ops that remain Microsoft-only (Outlook folders / calendar delete / …).
 
-        Google Composio MCP still reports archive/trash unsupported (no wired
-        Gmail slug). Callers on the google family get a clear NotImplementedError
-        instead of a KeyError from FAMILY_SLUGS.
+        Google Gmail archive/trash/tags/send are wired separately (v0.3.13).
         """
         if self.family != "microsoft":
             raise NotImplementedError(
                 f"{operation} is only implemented for Composio Microsoft "
                 f"(Outlook/OneDrive); current family is {self.family!r}"
             )
+
+    def _cleanup_slug(self, operation: str) -> str:
+        """Resolve a cleanup/organise slug for the active family."""
+        try:
+            return self._slug_for(operation)
+        except KeyError:
+            return operation
+
+    def _google_modify_labels(
+        self,
+        message_id: str,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """GMAIL_ADD_LABEL_TO_EMAIL — archive/unarchive/tag via label ids."""
+        slug = self._slug_for("mail_modify_labels")
+        args: dict[str, Any] = {"message_id": message_id}
+        if add:
+            args["add_label_ids"] = add
+        if remove:
+            args["remove_label_ids"] = remove
+        self._execute_composio_tool(slug, args, operation="mail_modify_labels")
+        return {"id": message_id, "add_label_ids": add or [], "remove_label_ids": remove or []}
 
     def mail_list_folders(self, include_hidden: bool = False,
                           max_results: int = 100) -> list[dict[str, Any]]:
@@ -964,30 +1025,53 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return self._ms_mail_move(message_id, folder_id)
 
     def mail_list_tags(self) -> list[dict[str, Any]]:
-        """List Outlook master categories (OUTLOOK_GET_MASTER_CATEGORIES).
-
-        Tag id IS the category ``displayName`` (same contract as native m365).
-        """
-        self._require_microsoft_cleanup("mail_list_tags")
+        """List tags: Outlook master categories or Gmail labels."""
         slug = self._slug_for("mail_list_tags")
         try:
+            if self.family == "microsoft":
+                data = self._execute_composio_tool(
+                    slug, {"top": 100}, operation="mail_list_tags",
+                )
+                records = _ms_extract_records(data)
+                out: list[dict[str, Any]] = []
+                for c in records:
+                    if not isinstance(c, Mapping):
+                        continue
+                    name = str(c.get("displayName") or c.get("name") or "")
+                    if not name:
+                        continue
+                    # Tag id IS the category displayName (native m365 contract).
+                    out.append({
+                        "id": name,
+                        "name": name,
+                        "displayName": name,
+                        "type": "user",
+                        "color": c.get("color"),
+                        "graph_id": c.get("id"),
+                    })
+                return out
+
             data = self._execute_composio_tool(
-                slug, {"top": 100}, operation="mail_list_tags",
+                slug, {}, operation="mail_list_tags",
             )
             records = _ms_extract_records(data)
-            out: list[dict[str, Any]] = []
+            if not records and isinstance(data, Mapping):
+                # GMAIL_LIST_LABELS often returns {labels: [...]}
+                labels = data.get("labels")
+                if isinstance(labels, list):
+                    records = labels
+            out = []
             for c in records:
                 if not isinstance(c, Mapping):
                     continue
-                name = str(c.get("displayName") or c.get("name") or "")
-                if not name:
+                lid = str(c.get("id") or "")
+                name = str(c.get("name") or "")
+                if not lid and not name:
                     continue
                 out.append({
-                    "id": name,
-                    "name": name,
-                    "displayName": name,
-                    "color": c.get("color"),
-                    "graph_id": c.get("id"),
+                    "id": lid or name,
+                    "name": name or lid,
+                    "type": str(c.get("type") or "user"),
                 })
             return out
         except (ComposioConnectionError, ComposioToolError):
@@ -996,87 +1080,165 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             raise ComposioReadError("mail_list_tags", exc) from exc
 
     @guarded("mail.create_tag", target_arg="name", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_create_tag"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_create_tag"))
+             audit_tool=lambda self: self._cleanup_slug("mail_create_tag"),
+             tool_slug=lambda self: self._cleanup_slug("mail_create_tag"))
     def mail_create_tag(self, name: str) -> dict[str, Any]:
-        """Create an Outlook master category (OUTLOOK_CREATE_USER_MASTER_CATEGORY)."""
-        self._require_microsoft_cleanup("mail_create_tag")
+        """Create Outlook master category or Gmail label."""
         slug = self._slug_for("mail_create_tag")
+        if self.family == "microsoft":
+            data = self._execute_composio_tool(
+                slug,
+                {"display_name": name, "color": "preset0"},
+                operation="mail_create_tag",
+            )
+            payload = data if isinstance(data, Mapping) else {}
+            return {
+                "id": name,
+                "name": name,
+                "graph_id": payload.get("id") if isinstance(payload, Mapping) else None,
+            }
+
         data = self._execute_composio_tool(
-            slug,
-            {"display_name": name, "color": "preset0"},
-            operation="mail_create_tag",
+            slug, {"label_name": name}, operation="mail_create_tag",
         )
         payload = data if isinstance(data, Mapping) else {}
-        return {
-            "id": name,
-            "name": name,
-            "graph_id": payload.get("id") if isinstance(payload, Mapping) else None,
-        }
+        label_id = (
+            payload.get("id")
+            or payload.get("labelId")
+            or payload.get("label_id")
+            or name
+        )
+        return {"id": label_id, "name": name}
 
     @guarded("mail.tag", target_arg="message_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_update"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_update"))
+             audit_tool=lambda self: (
+                 self._cleanup_slug("mail_update")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_modify_labels")
+             ),
+             tool_slug=lambda self: (
+                 self._cleanup_slug("mail_update")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_modify_labels")
+             ))
     def mail_tag(self, message_id: str, tag_id: str) -> dict[str, Any]:
-        """Append an Outlook category to a message (OUTLOOK_UPDATE_EMAIL).
+        """Apply a tag: Outlook category (append) or Gmail label id."""
+        if self.family == "microsoft":
+            get_slug = self._slug_for("mail_get_message")
+            current = self._execute_composio_tool(
+                get_slug,
+                {"message_id": message_id, "select": ["categories"]},
+                operation="mail_get_message",
+            )
+            existing: list[str] = []
+            if isinstance(current, Mapping):
+                cats = current.get("categories")
+                if cats is None and isinstance(current.get("data"), Mapping):
+                    cats = current["data"].get("categories")
+                if isinstance(cats, list):
+                    existing = [str(c) for c in cats if c]
+            if tag_id not in existing:
+                existing.append(tag_id)
+            update_slug = self._slug_for("mail_update")
+            self._execute_composio_tool(
+                update_slug,
+                {"message_id": message_id, "categories": existing},
+                operation="mail_tag",
+            )
+            return {"id": message_id, "categories": existing}
 
-        Fetches current categories first so we append rather than replace.
-        ``tag_id`` is the category displayName.
-        """
-        self._require_microsoft_cleanup("mail_tag")
-        get_slug = self._slug_for("mail_get_message")
-        current = self._execute_composio_tool(
-            get_slug,
-            {"message_id": message_id, "select": ["categories"]},
-            operation="mail_get_message",
-        )
-        existing: list[str] = []
-        if isinstance(current, Mapping):
-            cats = current.get("categories")
-            if cats is None and isinstance(current.get("data"), Mapping):
-                cats = current["data"].get("categories")
-            if isinstance(cats, list):
-                existing = [str(c) for c in cats if c]
-        if tag_id not in existing:
-            existing.append(tag_id)
-        update_slug = self._slug_for("mail_update")
-        self._execute_composio_tool(
-            update_slug,
-            {"message_id": message_id, "categories": existing},
-            operation="mail_tag",
-        )
-        return {"id": message_id, "categories": existing}
+        # Gmail: tag_id must be a label id (Label_…), not the display name.
+        result = self._google_modify_labels(message_id, add=[tag_id])
+        return {"id": message_id, "label_id": tag_id, **result}
 
+    # Back-compat alias used by older @guarded call sites / tests.
     def _ms_cleanup_slug(self, operation: str) -> str:
-        """Resolve a Microsoft cleanup slug without KeyError on google family."""
-        if self.family != "microsoft":
-            return operation
-        return self._slug_for(operation)
+        return self._cleanup_slug(operation)
 
     @guarded("mail.archive", target_arg="message_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+             audit_tool=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_modify_labels")
+             ),
+             tool_slug=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_modify_labels")
+             ))
     def mail_archive(self, message_id: str) -> dict[str, Any]:
-        return self._ms_mail_move(message_id, "archive")
+        if self.family == "microsoft":
+            return self._ms_mail_move(message_id, "archive")
+        out = self._google_modify_labels(message_id, remove=["INBOX"])
+        return {**out, "destination": "archive", "restore_target": message_id, "reversible": True}
 
     @guarded("mail.unarchive", target_arg="message_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+             audit_tool=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_modify_labels")
+             ),
+             tool_slug=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_modify_labels")
+             ))
     def mail_unarchive(self, message_id: str) -> dict[str, Any]:
-        return self._ms_mail_move(message_id, "inbox")
+        if self.family == "microsoft":
+            return self._ms_mail_move(message_id, "inbox")
+        out = self._google_modify_labels(message_id, add=["INBOX"])
+        return {**out, "destination": "inbox", "restore_target": message_id, "reversible": True}
 
     @guarded("mail.trash", target_arg="message_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+             audit_tool=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_trash")
+             ),
+             tool_slug=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_trash")
+             ))
     def mail_trash(self, message_id: str) -> dict[str, Any]:
-        """Soft-delete via move to Deleted Items (not OUTLOOK_DELETE_MESSAGE)."""
-        return self._ms_mail_move(message_id, "deleteditems")
+        """Soft-delete: Outlook deleteditems, or GMAIL_MOVE_TO_TRASH."""
+        if self.family == "microsoft":
+            return self._ms_mail_move(message_id, "deleteditems")
+        slug = self._slug_for("mail_trash")
+        self._execute_composio_tool(
+            slug, {"message_id": message_id}, operation="mail_trash",
+        )
+        return {
+            "id": message_id,
+            "destination": "trash",
+            "restore_target": message_id,
+            "reversible": True,
+        }
 
     @guarded("mail.untrash", target_arg="message_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+             audit_tool=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_untrash")
+             ),
+             tool_slug=lambda self: (
+                 self._cleanup_slug("mail_move")
+                 if self.family == "microsoft"
+                 else self._cleanup_slug("mail_untrash")
+             ))
     def mail_untrash(self, message_id: str) -> dict[str, Any]:
-        return self._ms_mail_move(message_id, "inbox")
+        if self.family == "microsoft":
+            return self._ms_mail_move(message_id, "inbox")
+        slug = self._slug_for("mail_untrash")
+        self._execute_composio_tool(
+            slug, {"message_id": message_id}, operation="mail_untrash",
+        )
+        return {
+            "id": message_id,
+            "destination": "inbox",
+            "restore_target": message_id,
+            "reversible": True,
+        }
 
     # --- Calendar ---
 

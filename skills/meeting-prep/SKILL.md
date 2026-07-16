@@ -57,9 +57,9 @@ python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "m
 
 Normalize records to the canonical `message`, `event`, and `file` shapes in `shared/scripts/schemas.py`. Obtain the data through the first available path in this order:
 
-1. **Native connector tools** in the agent's environment — Gmail / Google Calendar / Google Drive connectors, or Microsoft 365 connectors (Outlook Mail / Outlook Calendar, OneDrive / SharePoint).
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).mail_search(...)`, `.calendar_list(start, end)`, `.files_search(...)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
-3. **Pre-fetched data via `--input`** — when the agent has already gathered the context with its own tools, pass it to `workspace_actions.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
+1. **Agent-side connectors** — native Gmail / Calendar / Drive / Microsoft 365 connectors, **or an already-authed Hermes Composio MCP session** (mail/calendar/files read tools). Use as a **read front-end only**; CoS writes still go through `get_workspace_client`.
+2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).mail_search(...)`, `.calendar_list(start, end)`, `.files_search(...)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365` | `agent`).
+3. **Pre-fetched data via `--input`** — when the agent has already gathered the context with path 1, pass it to `workspace_actions.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
 
 For ad hoc attendee searches when there is no pipeline client name, use a narrow attendee email query. The template below is the Gmail search dialect; the `m365` provider translates the same intent to Microsoft Graph, and native connectors accept natural-language equivalents:
 

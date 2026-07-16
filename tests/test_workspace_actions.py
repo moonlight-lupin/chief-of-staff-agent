@@ -57,7 +57,7 @@ class TestProviderCapabilities:
         client = ComposioMCPWorkspaceClient(composio_config)
         assert client.provider_name == "composio:mcp"
         assert client.supports("gmail.search") is True
-        assert client.supports("gmail.send") is False
+        assert client.supports("gmail.send") is True
         assert client.supports("drive.upload") is True
 
     def test_google_supports(self):
@@ -72,7 +72,7 @@ class TestProviderCapabilities:
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
         assert caps["gmail.search"] is True
-        assert caps["gmail.send"] is False
+        assert caps["gmail.send"] is True
 
     def test_capabilities_matrix_no_sdk(self):
         """composio:sdk should no longer exist in capabilities."""
