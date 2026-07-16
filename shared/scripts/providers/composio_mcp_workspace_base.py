@@ -891,9 +891,12 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def mail_resolve_folder(self, name_or_id: str) -> dict[str, Any] | None:
         """Resolve a folder display name or id to ``{id, name, ...}``.
 
-        Well-known names (``inbox``, ``archive``, …) and opaque folder ids are
-        returned as synthetic entries. Display names are matched
-        case-insensitively against ``mail_list_folders`` (first exact match).
+        Resolution order: well-known names (``inbox``, ``archive``, …) →
+        case-insensitive display-name match against ``mail_list_folders`` →
+        otherwise assume the token is already an opaque folder id. The
+        display-name lookup runs BEFORE the id fallback so a long, space-free
+        folder name (e.g. ``Newsletters_and_Promotions``) is not mistaken for
+        an opaque id and silently turned into an invalid destination.
         """
         token = (name_or_id or "").strip()
         if not token:
@@ -901,14 +904,18 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         lower = token.lower()
         if lower in _MS_WELL_KNOWN_FOLDERS:
             return {"id": lower, "name": lower, "well_known": True}
-        # Opaque Graph/Composio folder ids are long base64-ish strings.
+        matches = [
+            f for f in self.mail_list_folders(max_results=200)
+            if str(f.get("name", "")).lower() == lower
+        ]
+        if matches:
+            return matches[0]
+        # Not a visible display name — assume it is already a folder id. Opaque
+        # Graph/Composio ids are long, space-free strings; a short token with
+        # spaces is neither a name we can see nor a plausible id.
         if len(token) >= 20 and " " not in token:
             return {"id": token, "name": token, "well_known": False}
-        folders = self.mail_list_folders(max_results=200)
-        matches = [f for f in folders if str(f.get("name", "")).lower() == lower]
-        if not matches:
-            return None
-        return matches[0]
+        return None
 
     def _ms_mail_move(self, message_id: str, destination: str) -> dict[str, Any]:
         """Move an Outlook message via OUTLOOK_MOVE_MESSAGE.

@@ -246,12 +246,14 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > (`in:inbox`, `is:unread`, `from:`, `newer_than:` …); a dict query with a
 > `raw: {m365: {...}}` override is passed through verbatim.
 >
-> **Phase 3 organise:** `mail_list_folders` / `mail_move_to_folder` let you file
-> into custom Outlook folders (use folder **ids** from the list — display names
-> are not valid `destination_id`s). Well-known names (`inbox`, `archive`, …)
-> still work.
+> **Phase 3 organise (execution-verified 2026-07-16):** `mail_list_folders` /
+> `mail_move_to_folder` let you file into custom Outlook folders (use folder
+> **ids** from the list — display names are not valid `destination_id`s).
+> Well-known names (`inbox`, `archive`, …) still work. Verified live: 26 folders
+> listed, and a draft moved into a real custom folder id and cleaned up.
 >
-> **`mail.send` is approval-gated (destructive).** Prefer:
+> **`mail.send` is approval-gated (destructive) — execution-verified 2026-07-16**
+> (`OUTLOOK_SEND_EMAIL` executed and the message was actually received). Prefer:
 > ```bash
 > python skills/document-preparer/scripts/send_email.py prepare \
 >   --to someone@example.com --subject "…" --body "…"

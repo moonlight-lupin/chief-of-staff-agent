@@ -73,7 +73,10 @@ class TestCapabilities:
             "composio_microsoft:mcp", "files.upload"
         )
 
-        # v0.3.11: mail.send is capability-True but destructive / approval-gated.
+        # v0.3.11 execution-verified 2026-07-16 (live Outlook): mail.send
+        # (OUTLOOK_SEND_EMAIL sent AND received at a controlled address),
+        # mail.list_folders (26 folders), mail.move (draft → custom folder id →
+        # cleaned up). mail.send stays destructive / approval-gated.
         assert caps["mail.send"] is True
         assert caps["mail.list_folders"] is True
         assert caps["mail.move"] is True

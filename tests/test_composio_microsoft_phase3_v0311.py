@@ -139,6 +139,35 @@ class TestMailFoldersAndMove:
         assert found == {"id": "archive", "name": "archive", "well_known": True}
         mock.call_tool.assert_not_called()
 
+    def test_resolve_long_display_name_not_mistaken_for_id(self, mcp_key, tmp_project):
+        # A 26-char, space-free *display name* must resolve via the folder list,
+        # not be silently treated as an opaque folder id (regression: the old
+        # length>=20 heuristic short-circuited before the name lookup).
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({
+            "value": [{"id": "AAMkREALID", "displayName": "Newsletters_and_Promotions"}]
+        })
+        client._mcp_client = mock
+        found = client.mail_resolve_folder("Newsletters_and_Promotions")
+        assert found["id"] == "AAMkREALID"
+        assert found["name"] == "Newsletters_and_Promotions"
+        assert found.get("well_known") is not True
+
+    def test_resolve_opaque_id_falls_through_when_unlisted(self, mcp_key, tmp_project):
+        # A long space-free token that is not a visible display name is assumed
+        # to be a folder id.
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({"value": []})
+        client._mcp_client = mock
+        found = client.mail_resolve_folder("AAMkAGI0longopaqueid1234567")
+        assert found == {
+            "id": "AAMkAGI0longopaqueid1234567",
+            "name": "AAMkAGI0longopaqueid1234567",
+            "well_known": False,
+        }
+
 
 class TestMailSendApprovalGated:
     def _client(self):

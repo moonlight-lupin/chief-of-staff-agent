@@ -108,16 +108,19 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # 2026-07-16: staging returned HTTP 401 before anything reached OneDrive).
     # The staging code (composio_files.py) ships, but the capability is NOT
     # execution-verified end-to-end, so it must not report True yet.
-    # v0.3.11 Phase 3: mail.list_folders + mail.move (folder-first organise).
-    # mail.send is True but destructive — pending-action approve or
+    # v0.3.11 Phase 3 — execution-verified 2026-07-16 (live Outlook):
+    # mail.list_folders (26 folders listed), mail.move (throwaway draft moved to
+    # a real custom folder id, then cleaned up), and mail.send (OUTLOOK_SEND_EMAIL
+    # executed AND the email was actually received at a controlled address).
+    # mail.send stays destructive — routed via pending-action approve or
     # CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1. calendar.cancel stays False.
     # Categories (mail.tag*) remain Phase 4.
     "composio_microsoft": {
         "mail.search": True,        # OUTLOOK_QUERY_EMAILS — execution-verified (read)
         "mail.draft": True,         # OUTLOOK_CREATE_DRAFT — execution-verified 2026-07-16
-        "mail.send": True,          # OUTLOOK_SEND_EMAIL — approval-gated (destructive)
-        "mail.list_folders": True,  # OUTLOOK_LIST_MAIL_FOLDERS — Phase 3
-        "mail.move": True,          # OUTLOOK_MOVE_MESSAGE → folder id / well-known
+        "mail.send": True,          # OUTLOOK_SEND_EMAIL — execution-verified 2026-07-16 (approval-gated / destructive)
+        "mail.list_folders": True,  # OUTLOOK_LIST_MAIL_FOLDERS — execution-verified 2026-07-16
+        "mail.move": True,          # OUTLOOK_MOVE_MESSAGE → folder id / well-known — execution-verified 2026-07-16
         "mail.archive": True,       # OUTLOOK_MOVE_MESSAGE → archive — execution-verified 2026-07-16
         "mail.unarchive": True,     # OUTLOOK_MOVE_MESSAGE → inbox — execution-verified 2026-07-16
         "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems — execution-verified 2026-07-16
