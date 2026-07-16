@@ -104,11 +104,15 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # OUTLOOK_MOVE_MESSAGE slug and cleaned up.
     # v0.3.11 Phase 3 — execution-verified 2026-07-16 (live Outlook):
     # mail.list_folders, mail.move, mail.send (approval-gated).
-    # v0.3.12 Phase 4 — categories via OUTLOOK_GET_MASTER_CATEGORIES /
-    # CREATE_USER_MASTER_CATEGORY / UPDATE_EMAIL.
-    # OneDrive writes: text uploads use ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE
-    # (MCP-native name+content — no Files API). Binary still uses FileUploadable
-    # staging (project x-api-key) or a public source_url. calendar.cancel False.
+    # v0.3.12 Phase 4 — execution-verified 2026-07-16 (live Outlook + OneDrive):
+    # mail.list_tags/tag/create_tag (OUTLOOK_GET_MASTER_CATEGORIES /
+    # CREATE_USER_MASTER_CATEGORY / UPDATE_EMAIL — CoS-Verify created + applied),
+    # and files.upload/download/trash via the MCP-native TEXT path
+    # (ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE → download → trash, no COMPOSIO_API_KEY).
+    # CAVEAT: files.upload's live proof is the TEXT path only. BINARY uploads
+    # (.pdf/.docx) still 401 without COMPOSIO_API_KEY (confirmed 2026-07-16) and
+    # fall through to a clear, actionable error — see files.upload note below and
+    # SETUP.md. calendar.cancel stays False.
     "composio_microsoft": {
         "mail.search": True,        # OUTLOOK_QUERY_EMAILS — execution-verified (read)
         "mail.draft": True,         # OUTLOOK_CREATE_DRAFT — execution-verified 2026-07-16
@@ -119,18 +123,18 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.unarchive": True,     # OUTLOOK_MOVE_MESSAGE → inbox — execution-verified 2026-07-16
         "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems — execution-verified 2026-07-16
         "mail.untrash": True,       # OUTLOOK_MOVE_MESSAGE → inbox — execution-verified 2026-07-16
-        "mail.list_tags": True,     # OUTLOOK_GET_MASTER_CATEGORIES — Phase 4
-        "mail.tag": True,           # OUTLOOK_UPDATE_EMAIL categories append — Phase 4
-        "mail.create_tag": True,    # OUTLOOK_CREATE_USER_MASTER_CATEGORY — Phase 4
+        "mail.list_tags": True,     # OUTLOOK_GET_MASTER_CATEGORIES — execution-verified 2026-07-16
+        "mail.tag": True,           # OUTLOOK_UPDATE_EMAIL categories append — execution-verified 2026-07-16
+        "mail.create_tag": True,    # OUTLOOK_CREATE_USER_MASTER_CATEGORY — execution-verified 2026-07-16
         "calendar.list": True,      # OUTLOOK_GET_CALENDAR_VIEW — execution-verified (read)
         "calendar.create": True,    # OUTLOOK_CALENDAR_CREATE_EVENT — execution-verified 2026-07-16
         "calendar.update": True,    # OUTLOOK_UPDATE_CALENDAR_EVENT — execution-verified 2026-07-16
         "calendar.cancel": False,
         "calendar.delete": True,    # OUTLOOK_DELETE_CALENDAR_EVENT — execution-verified 2026-07-16
         "files.search": True,       # ONE_DRIVE_SEARCH_ITEMS — execution-verified (read)
-        "files.upload": True,       # CREATE_TEXT_FILE (text) / UPLOAD_FILE+staging (binary)
-        "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch)
-        "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin
+        "files.upload": True,       # TEXT via CREATE_TEXT_FILE — execution-verified 2026-07-16; BINARY needs COMPOSIO_API_KEY (staging 401s over MCP)
+        "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch) — execution-verified 2026-07-16
+        "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin — execution-verified 2026-07-16
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.

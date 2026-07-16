@@ -34,21 +34,26 @@ class TestCapabilities:
         # A write is True ONLY if it EXECUTED successfully against the live
         # service; anything not execution-verified stays False. This tripwire
         # exists because catalog-plausible slugs and never-run code paths have
-        # repeatedly proven wrong when actually executed (v0.3.7, v0.3.9).
+        # repeatedly proven wrong when actually executed (v0.3.7, v0.3.9). Keep
+        # this list keyed to the dated live runs below — do NOT add a capability
+        # here until a live run has actually exercised it.
         #
-        # LIVE WRITE VERIFICATION 2026-07-16 (PR #7/#8, Outlook + OneDrive):
-        #   PASS  mail.draft, mail.trash, mail.archive/unarchive/untrash,
-        #         calendar.create/update/delete, mail.send, mail.list_folders,
-        #         mail.move.
-        # v0.3.12 Phase 4: mail.tag* wired to Outlook master categories;
-        # OneDrive text uploads use CREATE_TEXT_FILE (MCP-native, no Files API).
-        # Binary uploads still stage via Files REST (project x-api-key).
+        # LIVE VERIFICATION LEDGER (all against live Outlook + OneDrive):
+        #   2026-07-16 PR #7 — mail.draft, mail.trash, mail.archive/unarchive/
+        #       untrash (full cycle), calendar.create/update/delete.
+        #   2026-07-16 PR #8 — mail.send (OUTLOOK_SEND_EMAIL sent AND received),
+        #       mail.list_folders (26 folders), mail.move (custom folder id).
+        #   2026-07-16 PR #9 — mail.list_tags, mail.tag, mail.create_tag
+        #       (CoS-Verify created + applied); files.upload/download/trash via
+        #       the MCP-native text path (ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE →
+        #       download → trash, no COMPOSIO_API_KEY).
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
         assert caps["calendar.list"] is True
         assert caps["files.search"] is True
 
+        # Every write below has an execution-verified entry in the ledger above.
         for action in (
             "mail.draft", "gmail.draft",
             "mail.trash", "gmail.trash",
@@ -60,8 +65,14 @@ class TestCapabilities:
             "files.download", "drive.download",
             "files.trash", "drive.trash",
         ):
-            assert caps[action] is True, f"{action} should be supported True"
+            assert caps[action] is True, f"{action} should be live-verified True"
 
+        # files.upload's live proof covers the MCP-native TEXT path only. Binary
+        # uploads (.pdf/.docx) still 401 without COMPOSIO_API_KEY (confirmed
+        # 2026-07-16) and fall through to a clear error — documented in SETUP.md
+        # and the capability comment, not silently promised here.
+
+        # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
 
     def test_supports(self):

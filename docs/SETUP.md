@@ -215,17 +215,20 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > `OUTLOOK_CALENDAR_CREATE_EVENT` (`start_datetime`/`time_zone`/`attendees_info`),
 > `OUTLOOK_UPDATE_CALENDAR_EVENT`.
 >
-> **OneDrive file writes (`files.upload` / `files.download` / `files.trash`)
-> advertise supported.** Two upload paths
+> **OneDrive file writes (`files.upload` / `files.download` / `files.trash`).**
+> The **text** path is **execution-verified 2026-07-16** (a `.txt` uploaded →
+> downloaded → trashed live, no `COMPOSIO_API_KEY`). Two upload paths
 > ([Composio OneDrive toolkit](https://composio.dev/toolkits/one_drive)):
 >
 > | Content | Tool | Needs Files API / project key? |
 > |---|---|---|
-> | Plain text (`.txt`, `.md`, `.json`, …) | `ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE` (`name` + `content` + optional `folder`) | **No** — MCP-native |
-> | Binary / non-text | `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` with `FileUploadable` `{name,mimetype,s3key}` | **Yes** — `COMPOSIO_API_KEY` as `x-api-key` on `backend.composio.dev` (MCP Connect key alone often 401s). Alt: public HTTPS `source_url` (no staging). |
+> | Plain text (`.txt`, `.md`, `.json`, …) | `ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE` (`name` + `content` + optional `folder`) | **No** — MCP-native (execution-verified 2026-07-16) |
+> | Binary / non-text (`.pdf`, `.docx`, …) | `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` with `FileUploadable` `{name,mimetype,s3key}` | **Yes** — `COMPOSIO_API_KEY` as `x-api-key` on `backend.composio.dev` (the MCP Connect key alone 401s — confirmed 2026-07-16). Alt: public HTTPS `source_url` (no staging). |
 >
-> `--verify-writes` uploads a tiny `.txt`, so it exercises the MCP-native path
-> and does **not** require `COMPOSIO_API_KEY`.
+> So `files.upload` reports supported for the **text** path; uploading a **binary**
+> document without `COMPOSIO_API_KEY` fails with a clear, actionable error rather
+> than silently. `--verify-writes` uploads a tiny `.txt`, so it exercises the
+> MCP-native path and does **not** require `COMPOSIO_API_KEY`.
 >
 > Run write smoke after connect:
 > ```bash
@@ -263,7 +266,8 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > Direct `mail_send` still requires `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1` after
 > explicit user confirmation.
 >
-> **Phase 4 categories:** `mail_list_tags` / `mail_create_tag` / `mail_tag` map
+> **Phase 4 categories (execution-verified 2026-07-16):** `mail_list_tags` /
+> `mail_create_tag` / `mail_tag` map
 > to Outlook master categories (`OUTLOOK_GET_MASTER_CATEGORIES`,
 > `OUTLOOK_CREATE_USER_MASTER_CATEGORY`, `OUTLOOK_UPDATE_EMAIL`). Tag id is the
 > category display name. `calendar.cancel` remains unsupported via Composio.
