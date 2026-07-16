@@ -236,19 +236,17 @@ class TestGoogleMailCleanup:
 class TestGoogleCapabilities:
     def test_caps_reflect_live_execution(self):
         # Execution-verified 2026-07-16 (live Gmail): list_tags, create_tag, send.
-        # NOT verified — the label/move/trash path fed a Gmail draft id where a
-        # hex message id is required; those stay False until --verify-writes
-        # re-runs green after the draft-id→message-id fix.
-        from workspace_capabilities import get_capabilities, get_unsupported_reason
+        # After the v0.3.14 hardening (draft-id→message-id fix, r- draft-id
+        # reject, Label_… name resolve), the label/move/trash path re-ran green
+        # on real hex message ids (write_ready: yes, full archive→unarchive→
+        # trash→untrash cycle + tag apply) — so mail.tag/archive/unarchive/trash/
+        # untrash are now True. calendar.cancel / files.trash / folders stay False.
+        from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
-        assert caps["mail.list_tags"] is True
-        assert caps["mail.create_tag"] is True
-        assert caps["mail.send"] is True
-        # Wired but not execution-verified → False with a reason.
-        for action in ("mail.archive", "mail.unarchive", "mail.trash",
+        for action in ("mail.list_tags", "mail.create_tag", "mail.send",
+                       "mail.archive", "mail.unarchive", "mail.trash",
                        "mail.untrash", "mail.tag"):
-            assert caps[action] is False, f"{action} not live-verified; must be False"
-        assert "verif" in get_unsupported_reason("composio:mcp", "mail.archive").lower()
+            assert caps[action] is True, f"{action} should be live-verified True"
         assert caps["calendar.cancel"] is False
         assert caps["files.trash"] is False
         assert caps["mail.list_folders"] is False
@@ -259,5 +257,6 @@ class TestGoogleCapabilities:
         assert client.supports("mail.list_tags") is True
         assert client.supports("mail.create_tag") is True
         assert client.supports("mail.send") is True
-        assert client.supports("mail.archive") is False
+        assert client.supports("mail.archive") is True
+        assert client.supports("mail.tag") is True
         assert client.supports("calendar.cancel") is False

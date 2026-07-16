@@ -10,8 +10,11 @@
   - `mail_create_tag` reuses an existing label id on 409/already-exists (verify
     path no longer falls back to the bare display name).
   - `workspace_verify` looks up tag ids via `mail_list_tags` on reuse.
-  - Capabilities for those five actions remain **False** until live
-    `--verify-writes` on `family: google`.
+  - **Execution-verified 2026-07-16 (live Gmail):** with the hardened path,
+    `--verify-writes` on `family: google` ran green (`write_ready: yes`) — a full
+    archive→unarchive→trash→untrash cycle plus tag apply on real hex message ids,
+    no id-shape errors. These five capabilities are now **True** for
+    `composio` / `composio:mcp`.
 
 ### Features
 
