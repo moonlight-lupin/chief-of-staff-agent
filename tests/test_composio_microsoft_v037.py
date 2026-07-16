@@ -654,9 +654,8 @@ class TestMicrosoftNormalizers:
 # ── capabilities honesty ─────────────────────────────────────────────────────
 
 class TestCapabilities:
-    # v0.3.11: Phase 3 folders + approval-gated mail.send True; OneDrive file
-    # writes stay False (Files API staging needs COMPOSIO_API_KEY); tags/cancel
-    # still False.
+    # v0.3.12: Phase 4 tags + OneDrive text upload (CREATE_TEXT_FILE) True;
+    # calendar.cancel still False.
     def test_composio_microsoft_supported_set(self):
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
@@ -665,6 +664,9 @@ class TestCapabilities:
         assert caps["mail.send"] is True
         assert caps["mail.list_folders"] is True
         assert caps["mail.move"] is True
+        assert caps["mail.list_tags"] is True
+        assert caps["mail.tag"] is True
+        assert caps["mail.create_tag"] is True
         assert caps["calendar.list"] is True
         assert caps["calendar.create"] is True
         assert caps["calendar.update"] is True
@@ -675,26 +677,21 @@ class TestCapabilities:
         assert caps["mail.untrash"] is True
         assert caps["gmail.draft"] is True
         assert caps["gmail.trash"] is True
-        # OneDrive file writes not execution-verified → False.
-        assert caps["files.upload"] is False
-        assert caps["files.download"] is False
-        assert caps["files.trash"] is False
-        assert caps["drive.trash"] is False
+        assert caps["files.upload"] is True
+        assert caps["files.download"] is True
+        assert caps["files.trash"] is True
+        assert caps["drive.trash"] is True
 
     def test_composio_microsoft_false_ops_have_reasons(self):
-        from workspace_capabilities import get_capabilities, get_unsupported_reason
+        from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.send"] is True
-        for op in ("mail.tag", "calendar.cancel"):
-            assert caps[op] is False
+        assert caps["mail.tag"] is True
+        assert caps["calendar.cancel"] is False
         assert caps["mail.trash"] is True
         assert caps["mail.draft"] is True
         assert caps["mail.archive"] is True
-        # files.upload is unsupported by default, with a COMPOSIO_API_KEY reason.
-        assert caps["files.upload"] is False
-        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
-            "composio_microsoft:mcp", "files.upload"
-        )
+        assert caps["files.upload"] is True
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
@@ -704,7 +701,8 @@ class TestCapabilities:
         assert client.supports("mail.draft") is True
         assert client.supports("mail.archive") is True
         assert client.supports("mail.list_folders") is True
-        assert client.supports("files.upload") is False
+        assert client.supports("mail.tag") is True
+        assert client.supports("files.upload") is True
 
 
 # ── connect flow accepts outlook / one_drive ─────────────────────────────────

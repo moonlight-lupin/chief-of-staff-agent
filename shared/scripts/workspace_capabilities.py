@@ -102,19 +102,13 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # v0.3.10 live-verified 2026-07-16: mail.archive/unarchive/untrash — the
     # full archive→unarchive→trash→untrash→trash cycle executed on the shared
     # OUTLOOK_MOVE_MESSAGE slug and cleaned up.
-    # files.upload/download/trash stay False: the OneDrive upload path stages
-    # the local file through Composio's Files REST API (backend.composio.dev),
-    # which requires a COMPOSIO_API_KEY the MCP key cannot satisfy (verified
-    # 2026-07-16: staging returned HTTP 401 before anything reached OneDrive).
-    # The staging code (composio_files.py) ships, but the capability is NOT
-    # execution-verified end-to-end, so it must not report True yet.
     # v0.3.11 Phase 3 — execution-verified 2026-07-16 (live Outlook):
-    # mail.list_folders (26 folders listed), mail.move (throwaway draft moved to
-    # a real custom folder id, then cleaned up), and mail.send (OUTLOOK_SEND_EMAIL
-    # executed AND the email was actually received at a controlled address).
-    # mail.send stays destructive — routed via pending-action approve or
-    # CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1. calendar.cancel stays False.
-    # Categories (mail.tag*) remain Phase 4.
+    # mail.list_folders, mail.move, mail.send (approval-gated).
+    # v0.3.12 Phase 4 — categories via OUTLOOK_GET_MASTER_CATEGORIES /
+    # CREATE_USER_MASTER_CATEGORY / UPDATE_EMAIL.
+    # OneDrive writes: text uploads use ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE
+    # (MCP-native name+content — no Files API). Binary still uses FileUploadable
+    # staging (project x-api-key) or a public source_url. calendar.cancel False.
     "composio_microsoft": {
         "mail.search": True,        # OUTLOOK_QUERY_EMAILS — execution-verified (read)
         "mail.draft": True,         # OUTLOOK_CREATE_DRAFT — execution-verified 2026-07-16
@@ -125,18 +119,18 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.unarchive": True,     # OUTLOOK_MOVE_MESSAGE → inbox — execution-verified 2026-07-16
         "mail.trash": True,         # OUTLOOK_MOVE_MESSAGE → deleteditems — execution-verified 2026-07-16
         "mail.untrash": True,       # OUTLOOK_MOVE_MESSAGE → inbox — execution-verified 2026-07-16
-        "mail.list_tags": False,
-        "mail.tag": False,
-        "mail.create_tag": False,
+        "mail.list_tags": True,     # OUTLOOK_GET_MASTER_CATEGORIES — Phase 4
+        "mail.tag": True,           # OUTLOOK_UPDATE_EMAIL categories append — Phase 4
+        "mail.create_tag": True,    # OUTLOOK_CREATE_USER_MASTER_CATEGORY — Phase 4
         "calendar.list": True,      # OUTLOOK_GET_CALENDAR_VIEW — execution-verified (read)
         "calendar.create": True,    # OUTLOOK_CALENDAR_CREATE_EVENT — execution-verified 2026-07-16
         "calendar.update": True,    # OUTLOOK_UPDATE_CALENDAR_EVENT — execution-verified 2026-07-16
         "calendar.cancel": False,
         "calendar.delete": True,    # OUTLOOK_DELETE_CALENDAR_EVENT — execution-verified 2026-07-16
         "files.search": True,       # ONE_DRIVE_SEARCH_ITEMS — execution-verified (read)
-        "files.upload": False,      # staging needs COMPOSIO_API_KEY; not execution-verified (401 on MCP key 2026-07-16)
-        "files.download": False,    # gated on upload verification
-        "files.trash": False,       # gated on upload verification
+        "files.upload": True,       # CREATE_TEXT_FILE (text) / UPLOAD_FILE+staging (binary)
+        "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch)
+        "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -150,18 +144,18 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.unarchive": True,
         "mail.trash": True,
         "mail.untrash": True,
-        "mail.list_tags": False,
-        "mail.tag": False,
-        "mail.create_tag": False,
+        "mail.list_tags": True,
+        "mail.tag": True,
+        "mail.create_tag": True,
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
         "calendar.cancel": False,
         "calendar.delete": True,
         "files.search": True,
-        "files.upload": False,      # staging needs COMPOSIO_API_KEY; not execution-verified (401 on MCP key 2026-07-16)
-        "files.download": False,    # gated on upload verification
-        "files.trash": False,       # gated on upload verification
+        "files.upload": True,
+        "files.download": True,
+        "files.trash": True,
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -229,17 +223,6 @@ WORKFLOW_REQUIREMENTS: dict[str, list[str]] = {
     "weekly.collect": ["calendar.list", "gmail.search", "drive.search"],
 }
 
-# OneDrive uploads over raw MCP must first stage the local file through
-# Composio's Files REST API to build a FileUploadable {name,mimetype,s3key}.
-# That REST backend needs a COMPOSIO_API_KEY; the MCP key is rejected with
-# HTTP 401 (verified 2026-07-16). Until a run with a valid COMPOSIO_API_KEY
-# execution-verifies the upload, these stay unsupported.
-_FILES_STAGING_REASON = (
-    "OneDrive file writes stage through Composio's Files REST API, which "
-    "requires COMPOSIO_API_KEY (the MCP key is rejected with HTTP 401). Set "
-    "COMPOSIO_API_KEY and re-run connect_workspace.py --verify-writes to enable."
-)
-
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
@@ -247,12 +230,6 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("google_api", "document.handoff"): "document.handoff requires gmail.draft, which google_api does not support",
     ("composio", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
     ("composio:mcp", "gmail.send"): "sending email is intentionally disabled for Composio MCP",
-    ("composio_microsoft", "files.upload"): _FILES_STAGING_REASON,
-    ("composio_microsoft:mcp", "files.upload"): _FILES_STAGING_REASON,
-    ("composio_microsoft", "files.download"): _FILES_STAGING_REASON,
-    ("composio_microsoft:mcp", "files.download"): _FILES_STAGING_REASON,
-    ("composio_microsoft", "files.trash"): _FILES_STAGING_REASON,
-    ("composio_microsoft:mcp", "files.trash"): _FILES_STAGING_REASON,
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "

@@ -48,16 +48,24 @@ def _backend_base() -> str:
 def resolve_composio_api_key(key_env: str = "COMPOSIO_MCP_KEY") -> str:
     """Resolve an API key for Composio's REST backend (Files API).
 
-    Prefer ``COMPOSIO_API_KEY`` when set; otherwise reuse the MCP key env
-    (same project key is typically accepted as ``x-api-key``).
+    The Files upload-request endpoint authenticates with header ``x-api-key``
+    (project API key from the Composio dashboard). Connect MCP at
+    ``connect.composio.dev`` often uses the AI Clients key as
+    ``x-consumer-api-key`` / Bearer — that value *may* work as ``x-api-key``
+    here, but a 401 means you need the project API key as ``COMPOSIO_API_KEY``.
+
+    Prefer ``COMPOSIO_API_KEY`` when set; otherwise fall back to ``key_env``.
+    Note: text OneDrive uploads can skip this entirely via
+    ``ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE`` (name+content over MCP).
     """
     for env_name in ("COMPOSIO_API_KEY", key_env):
         val = os.getenv(env_name, "").strip()
         if val:
             return val
     raise ComposioFileError(
-        f"No Composio API key found. Set COMPOSIO_API_KEY or {key_env} "
-        "to stage files for OneDrive upload."
+        f"No Composio API key found. Set COMPOSIO_API_KEY (project x-api-key) "
+        f"or {key_env} to stage binary FileUploadable uploads. For plain-text "
+        "files prefer ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE over MCP (no staging)."
     )
 
 
@@ -108,39 +116,53 @@ def stage_file_uploadable(
         "mimetype": mimetype,
         "md5": file_md5(path),
     }
-    headers = {
-        "x-api-key": key,
-        "Content-Type": "application/json",
-    }
+    # Auth header variants: Files docs use x-api-key; Connect AI Clients keys
+    # are documented as x-consumer-api-key. Try both with the same secret.
+    auth_headers = (
+        {"x-api-key": key},
+        {"x-consumer-api-key": key},
+    )
 
     meta: dict[str, Any] | None = None
     last_err = ""
     for rel in _UPLOAD_REQUEST_PATHS:
         url = f"{_backend_base()}{rel}"
-        try:
-            resp = requests.post(url, headers=headers, json=body, timeout=30)
-        except requests.RequestException as exc:
-            last_err = str(exc)
-            continue
-        if resp.status_code == 404:
-            last_err = f"HTTP 404 for {rel}"
-            continue
-        if resp.status_code >= 400:
-            raise ComposioFileError(
-                f"Composio file upload request failed (HTTP {resp.status_code}): "
-                f"{resp.text[:300]}"
-            )
-        try:
-            meta = resp.json()
-        except ValueError as exc:
-            raise ComposioFileError(
-                f"Composio file upload request returned non-JSON: {exc}"
-            ) from exc
-        break
+        for auth in auth_headers:
+            headers = {"Content-Type": "application/json", **auth}
+            try:
+                resp = requests.post(url, headers=headers, json=body, timeout=30)
+            except requests.RequestException as exc:
+                last_err = str(exc)
+                continue
+            if resp.status_code == 404:
+                last_err = f"HTTP 404 for {rel}"
+                break  # path missing — try next path, not next auth
+            if resp.status_code in (401, 403):
+                last_err = (
+                    f"HTTP {resp.status_code} with {next(iter(auth))} "
+                    f"for {rel}: {(resp.text or '')[:200]}"
+                )
+                continue  # try alternate auth header
+            if resp.status_code >= 400:
+                raise ComposioFileError(
+                    f"Composio file upload request failed (HTTP {resp.status_code}): "
+                    f"{resp.text[:300]}"
+                )
+            try:
+                meta = resp.json()
+            except ValueError as exc:
+                raise ComposioFileError(
+                    f"Composio file upload request returned non-JSON: {exc}"
+                ) from exc
+            break
+        if isinstance(meta, Mapping):
+            break
 
     if not isinstance(meta, Mapping):
         raise ComposioFileError(
-            f"Composio file upload request failed: {last_err or 'no response'}"
+            f"Composio file upload request failed: {last_err or 'no response'}. "
+            "Binary uploads need a project API key as x-api-key (COMPOSIO_API_KEY). "
+            "For plain-text files use ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE over MCP instead."
         )
 
     s3key = str(meta.get("key") or "").strip()
