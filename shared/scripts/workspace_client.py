@@ -50,8 +50,27 @@ class WorkspaceClient(abc.ABC):
 
     def mail_send(self, to: str, subject: str, body: str,
                   cc: str | None = None) -> dict[str, Any]:
-        """Send an email. Providers may raise NotImplementedError."""
+        """Send an email. Destructive — requires explicit user approval.
+
+        Prefer the pending-action queue (``send_email.py prepare → approve →
+        execute``). Direct calls need ``CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1``
+        (and interactive confirm, or ``CHIEF_OF_STAFF_AUTO_APPROVE=1`` when
+        approval already happened out-of-band).
+        """
         raise NotImplementedError(f"{self.__class__.__name__} does not support mail_send")
+
+    def mail_list_folders(self, include_hidden: bool = False,
+                          max_results: int = 100) -> list[dict[str, Any]]:
+        """List mail folders (Outlook mailFolders). Read-only.
+
+        Each item is ``{id, name, ...}``. Custom-folder moves need the ``id``
+        from this list (display names are not valid destination ids).
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support mail_list_folders")
+
+    def mail_move_to_folder(self, message_id: str, folder_id: str) -> dict[str, Any]:
+        """Move a message to a folder id or well-known name. Reversible."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support mail_move_to_folder")
 
     def mail_archive(self, message_id: str) -> dict[str, Any]:
         """Archive a mail message (remove from inbox). Reversible."""

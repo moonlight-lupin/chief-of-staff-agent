@@ -911,7 +911,11 @@ class M365GraphClient(WorkspaceClient):
         return self._request("POST", f"{self._user_base()}/messages", json_body=payload)
 
     @guarded("mail.send", target_arg="to", audit_provider="m365", audit_tool="graph_api",
-             block_error="cancelled by guardrail (requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)")
+             block_error=(
+                 "cancelled by guardrail (requires explicit user approval; "
+                 "use send_email.py prepare→approve→execute or set "
+                 "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)"
+             ))
     def mail_send(self, to: str, subject: str, body: str,
                   cc: str | None = None) -> dict[str, Any]:
         message: dict[str, Any] = {
@@ -925,11 +929,51 @@ class M365GraphClient(WorkspaceClient):
                       json_body={"message": message, "saveToSentItems": True})
         return {"status": "sent", "to": to}
 
+    def mail_list_folders(self, include_hidden: bool = False,
+                          max_results: int = 100) -> list[dict[str, Any]]:
+        """List top-level mail folders (GET /mailFolders)."""
+        params: dict[str, Any] = {
+            "$top": max_results,
+            "$select": "id,displayName,parentFolderId,childFolderCount,"
+                       "unreadItemCount,totalItemCount,isHidden",
+        }
+        # Graph hides isHidden=true folders unless includeHiddenFolders=true.
+        if include_hidden:
+            params["includeHiddenFolders"] = "true"
+        data = self._request("GET", f"{self._user_base()}/mailFolders", params=params)
+        value = data.get("value", []) if isinstance(data, Mapping) else []
+        out: list[dict[str, Any]] = []
+        for f in value or []:
+            if not isinstance(f, Mapping):
+                continue
+            out.append({
+                "id": f.get("id"),
+                "name": f.get("displayName") or "",
+                "parent_id": f.get("parentFolderId"),
+                "unread": f.get("unreadItemCount"),
+                "total": f.get("totalItemCount"),
+                "child_count": f.get("childFolderCount"),
+                "hidden": bool(f.get("isHidden")) if f.get("isHidden") is not None else None,
+            })
+        return out
+
     def _move(self, message_id: str, destination: str) -> dict[str, Any]:
         return self._request(
             "POST", f"{self._user_base()}/messages/{message_id}/move",
             json_body={"destinationId": destination},
         )
+
+    @guarded("mail.move", target_arg="message_id", audit_provider="m365", audit_tool="graph_api")
+    def mail_move_to_folder(self, message_id: str, folder_id: str) -> dict[str, Any]:
+        """Move a message to any folder id or well-known name."""
+        data = self._move(message_id, folder_id)
+        moved_id = data.get("id", message_id) if isinstance(data, Mapping) else message_id
+        return {
+            "id": moved_id,
+            "destination": folder_id,
+            "restore_target": moved_id,
+            "reversible": True,
+        }
 
     @guarded("mail.archive", target_arg="message_id", audit_provider="m365", audit_tool="graph_api")
     def mail_archive(self, message_id: str) -> dict[str, Any]:

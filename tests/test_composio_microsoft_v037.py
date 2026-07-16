@@ -654,14 +654,17 @@ class TestMicrosoftNormalizers:
 # ── capabilities honesty ─────────────────────────────────────────────────────
 
 class TestCapabilities:
-    # v0.3.10: mail archive/inbox moves live-verified True; OneDrive file writes
-    # stay False (Files API staging needs COMPOSIO_API_KEY); send/tags/cancel
+    # v0.3.11: Phase 3 folders + approval-gated mail.send True; OneDrive file
+    # writes stay False (Files API staging needs COMPOSIO_API_KEY); tags/cancel
     # still False.
     def test_composio_microsoft_supported_set(self):
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
         assert caps["mail.draft"] is True
+        assert caps["mail.send"] is True
+        assert caps["mail.list_folders"] is True
+        assert caps["mail.move"] is True
         assert caps["calendar.list"] is True
         assert caps["calendar.create"] is True
         assert caps["calendar.update"] is True
@@ -681,9 +684,7 @@ class TestCapabilities:
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
         caps = get_capabilities("composio_microsoft:mcp")
-        assert caps["mail.send"] is False
-        reason = get_unsupported_reason("composio_microsoft:mcp", "mail.send")
-        assert "intentionally disabled" in reason
+        assert caps["mail.send"] is True
         for op in ("mail.tag", "calendar.cancel"):
             assert caps[op] is False
         assert caps["mail.trash"] is True
@@ -699,9 +700,10 @@ class TestCapabilities:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         assert client.supports("mail.search") is True
-        assert client.supports("mail.send") is False
+        assert client.supports("mail.send") is True
         assert client.supports("mail.draft") is True
         assert client.supports("mail.archive") is True
+        assert client.supports("mail.list_folders") is True
         assert client.supports("files.upload") is False
 
 
@@ -746,7 +748,9 @@ class TestConnectFlow:
         out = buf.getvalue()
         assert rc == 0
         assert "composio_microsoft:mcp" in out
-        assert "mail.send" in out and "intentionally disabled" in out
+        assert "mail.send" in out
+        assert "destructive" in out
+        assert "intentionally disabled" not in out.split("mail.send", 1)[1][:200]
 
     def test_test_help_lists_microsoft_toolkits(self):
         import connect_workspace as cw

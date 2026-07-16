@@ -235,7 +235,7 @@ def create_pending_action(
 
     # Classify recipient risk for email actions
     risk = None
-    if action_type == "gmail.send":
+    if action_type in ("gmail.send", "mail.send"):
         risk = classify_recipient_risk(target, config)
 
     action = {

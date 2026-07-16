@@ -73,10 +73,10 @@ class TestCapabilities:
             "composio_microsoft:mcp", "files.upload"
         )
 
-        assert caps["mail.send"] is False
-        assert "intentionally disabled" in get_unsupported_reason(
-            "composio_microsoft:mcp", "mail.send"
-        )
+        # v0.3.11: mail.send is capability-True but destructive / approval-gated.
+        assert caps["mail.send"] is True
+        assert caps["mail.list_folders"] is True
+        assert caps["mail.move"] is True
         for action in ("mail.tag", "mail.create_tag", "calendar.cancel"):
             assert caps[action] is False
 
