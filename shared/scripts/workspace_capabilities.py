@@ -35,7 +35,7 @@ LEGACY_ACTION_ALIASES: dict[str, str] = {
 CAPABILITIES: dict[str, dict[str, bool]] = {
     "google_api": {
         "mail.search": True,
-        "mail.draft": True,         # Gmail drafts.create via SA REST (google_api.py has no draft CLI)
+        "mail.draft": True,         # Gmail drafts.create via SA REST (gmail.modify) — execution-verified 2026-07-16 (draft landed in Drafts)
         "mail.send": True,          # supported but destructive / guardrailed
         "mail.list_folders": False, # Gmail uses labels, not Outlook folders
         "mail.move": False,         # no folder-move surface on google_api

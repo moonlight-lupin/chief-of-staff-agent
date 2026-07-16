@@ -12,8 +12,11 @@
   set the key and re-run `--verify-writes` on `family: google` to enable.
 - **`google_api` `mail.draft`**: create drafts via Gmail REST
   (`users.drafts.create`) with service-account domain-wide delegation when
-  `google_api.py` has no draft CLI. Surfaces message id as `id` (keeps
-  `draft_id`). Unlocks `document.handoff` on google_api.
+  `google_api.py` has no draft CLI. Uses the `gmail.modify` scope (already in
+  the provider's standard SCOPES, so no new admin delegation) and surfaces the
+  message id as `id` (keeps `draft_id`). **Execution-verified 2026-07-16** — the
+  draft landed in the delegate's Drafts folder. Unlocks `document.handoff` on
+  google_api.
 - **email-organisation Composio Microsoft**: classify → suggest → prepare path
   hardened for Outlook categories (displayName as tag id, Outlook message
   shape, category-aware suggestion copy). Live checklist covers prepare →

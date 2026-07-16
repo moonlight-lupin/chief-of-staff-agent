@@ -25,7 +25,14 @@ if str(_PARENT) not in sys.path:
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
 
-_GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
+# Draft creation uses gmail.modify (a superset of gmail.compose) because it is
+# ALREADY in google_api.py's standard SCOPES / domain-wide delegation set — so
+# drafts work with any existing google_api service-account setup, no new admin
+# scope authorization required. gmail.compose is narrower but would force every
+# operator to add a scope in Workspace Admin. Execution-verified 2026-07-16: the
+# identical drafts.create call under gmail.modify returned HTTP 200 with the
+# draft in the delegate's Drafts folder.
+_GMAIL_DRAFT_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 _GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
 
 
@@ -57,7 +64,7 @@ def _gmail_draft_via_service_account(
 
     credentials = service_account.Credentials.from_service_account_file(
         str(sa_path),
-        scopes=[_GMAIL_COMPOSE_SCOPE],
+        scopes=[_GMAIL_DRAFT_SCOPE],
     ).with_subject(delegate_email.strip())
     credentials.refresh(Request())
 
