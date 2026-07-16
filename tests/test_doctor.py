@@ -434,17 +434,21 @@ def test_doctor_microsoft_capability_key(tmp_path):
     assert "composio_microsoft:mcp" in result.detail
     supported = result.detail.split("supported:", 1)[1].split("; unsupported:", 1)[0]
     unsupported = result.detail.split("; unsupported:", 1)[1]
-    # v0.3.11: draft/calendar/mail-move/send/folders advertised supported;
-    # OneDrive file writes stay unsupported until COMPOSIO_API_KEY verifies upload.
+    # v0.3.12: draft/calendar/mail-move/send/folders/tags + OneDrive download/trash
+    # advertised supported; files.upload (binary needs COMPOSIO_API_KEY) and
+    # calendar.cancel remain unsupported.
     assert "mail.draft" in supported
     assert "calendar.create" in supported
     assert "mail.archive" in supported
     assert "mail.send" in supported
     assert "mail.list_folders" in supported
+    assert "mail.tag" in supported
+    assert "files.download" in supported
     assert "mail.draft" not in unsupported
     assert "calendar.create" not in unsupported
     assert "mail.send" not in unsupported
     assert "files.upload" in unsupported
+    assert "calendar.cancel" in unsupported
 
 
 def test_doctor_validates_overlay_when_present(monkeypatch, tmp_path):

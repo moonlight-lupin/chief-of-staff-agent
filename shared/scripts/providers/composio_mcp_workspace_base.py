@@ -71,16 +71,33 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "mail_send": "OUTLOOK_SEND_EMAIL",
         "mail_list_folders": "OUTLOOK_LIST_MAIL_FOLDERS",
         "mail_move": "OUTLOOK_MOVE_MESSAGE",
+        "mail_list_tags": "OUTLOOK_GET_MASTER_CATEGORIES",
+        "mail_create_tag": "OUTLOOK_CREATE_USER_MASTER_CATEGORY",
+        "mail_get_message": "OUTLOOK_GET_MESSAGE",
+        "mail_update": "OUTLOOK_UPDATE_EMAIL",
         "calendar_list": "OUTLOOK_GET_CALENDAR_VIEW",
         "calendar_create": "OUTLOOK_CALENDAR_CREATE_EVENT",
         "calendar_update": "OUTLOOK_UPDATE_CALENDAR_EVENT",
         "calendar_delete": "OUTLOOK_DELETE_CALENDAR_EVENT",
         "files_search": "ONE_DRIVE_SEARCH_ITEMS",
-        "files_upload": "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
+        # MCP-native text create — no Files API / FileUploadable staging needed.
+        # See https://composio.dev/toolkits/one_drive (CREATE_TEXT_FILE).
+        "files_upload": "ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE",
+        # Binary / large files: FileUploadable {name,mimetype,s3key} or source_url.
+        "files_upload_binary": "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
         "files_download": "ONE_DRIVE_DOWNLOAD_FILE",
         "files_trash": "ONE_DRIVE_DELETE_ITEM",
     },
 }
+
+# Suffixes that can go through ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE (plain-text
+# content over MCP). Binary uploads still need FileUploadable staging or a
+# public source_url on ONE_DRIVE_ONEDRIVE_UPLOAD_FILE.
+_MS_TEXT_UPLOAD_SUFFIXES = frozenset({
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml",
+    ".log", ".html", ".htm", ".xml", ".css", ".js", ".ts", ".py", ".sh",
+    ".env", ".ini", ".cfg", ".toml",
+})
 
 # Graph / Composio well-known mail folder names (valid as destination_id).
 _MS_WELL_KNOWN_FOLDERS = frozenset({
@@ -946,6 +963,90 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         """Move a message to any folder id or well-known name (Phase 3)."""
         return self._ms_mail_move(message_id, folder_id)
 
+    def mail_list_tags(self) -> list[dict[str, Any]]:
+        """List Outlook master categories (OUTLOOK_GET_MASTER_CATEGORIES).
+
+        Tag id IS the category ``displayName`` (same contract as native m365).
+        """
+        self._require_microsoft_cleanup("mail_list_tags")
+        slug = self._slug_for("mail_list_tags")
+        try:
+            data = self._execute_composio_tool(
+                slug, {"top": 100}, operation="mail_list_tags",
+            )
+            records = _ms_extract_records(data)
+            out: list[dict[str, Any]] = []
+            for c in records:
+                if not isinstance(c, Mapping):
+                    continue
+                name = str(c.get("displayName") or c.get("name") or "")
+                if not name:
+                    continue
+                out.append({
+                    "id": name,
+                    "name": name,
+                    "displayName": name,
+                    "color": c.get("color"),
+                    "graph_id": c.get("id"),
+                })
+            return out
+        except (ComposioConnectionError, ComposioToolError):
+            raise
+        except Exception as exc:
+            raise ComposioReadError("mail_list_tags", exc) from exc
+
+    @guarded("mail.create_tag", target_arg="name", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_create_tag"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_create_tag"))
+    def mail_create_tag(self, name: str) -> dict[str, Any]:
+        """Create an Outlook master category (OUTLOOK_CREATE_USER_MASTER_CATEGORY)."""
+        self._require_microsoft_cleanup("mail_create_tag")
+        slug = self._slug_for("mail_create_tag")
+        data = self._execute_composio_tool(
+            slug,
+            {"display_name": name, "color": "preset0"},
+            operation="mail_create_tag",
+        )
+        payload = data if isinstance(data, Mapping) else {}
+        return {
+            "id": name,
+            "name": name,
+            "graph_id": payload.get("id") if isinstance(payload, Mapping) else None,
+        }
+
+    @guarded("mail.tag", target_arg="message_id", audit_provider="composio",
+             audit_tool=lambda self: self._ms_cleanup_slug("mail_update"),
+             tool_slug=lambda self: self._ms_cleanup_slug("mail_update"))
+    def mail_tag(self, message_id: str, tag_id: str) -> dict[str, Any]:
+        """Append an Outlook category to a message (OUTLOOK_UPDATE_EMAIL).
+
+        Fetches current categories first so we append rather than replace.
+        ``tag_id`` is the category displayName.
+        """
+        self._require_microsoft_cleanup("mail_tag")
+        get_slug = self._slug_for("mail_get_message")
+        current = self._execute_composio_tool(
+            get_slug,
+            {"message_id": message_id, "select": ["categories"]},
+            operation="mail_get_message",
+        )
+        existing: list[str] = []
+        if isinstance(current, Mapping):
+            cats = current.get("categories")
+            if cats is None and isinstance(current.get("data"), Mapping):
+                cats = current["data"].get("categories")
+            if isinstance(cats, list):
+                existing = [str(c) for c in cats if c]
+        if tag_id not in existing:
+            existing.append(tag_id)
+        update_slug = self._slug_for("mail_update")
+        self._execute_composio_tool(
+            update_slug,
+            {"message_id": message_id, "categories": existing},
+            operation="mail_tag",
+        )
+        return {"id": message_id, "categories": existing}
+
     def _ms_cleanup_slug(self, operation: str) -> str:
         """Resolve a Microsoft cleanup slug without KeyError on google family."""
         if self.family != "microsoft":
@@ -1123,27 +1224,60 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             key_env=self.key_env,
         )
 
+    @staticmethod
+    def _ms_is_text_upload(path: Path) -> bool:
+        """True when the file can be uploaded via CREATE_TEXT_FILE (plain text)."""
+        if path.suffix.lower() in _MS_TEXT_UPLOAD_SUFFIXES:
+            return True
+        try:
+            from composio_files import guess_mimetype
+            mime = guess_mimetype(path)
+        except Exception:
+            mime = ""
+        return bool(
+            mime.startswith("text/")
+            or mime in ("application/json", "application/xml", "application/javascript")
+        )
+
     @guarded("drive.upload", target_arg="file_path", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("files_upload"),
              tool_slug=lambda self: self._slug_for("files_upload"))
     def files_upload(self, file_path: str, parent_id: str | None = None) -> dict[str, Any]:
-        slug = self._slug_for("files_upload")
         if self.family == "microsoft":
-            # ONE_DRIVE_ONEDRIVE_UPLOAD_FILE expects a Composio FileUploadable
-            # {name, mimetype, s3key} — stage the local path via the Files API
-            # before calling COMPOSIO_MULTI_EXECUTE_TOOL.
-            file_arg: Any = self._ms_stage_file_uploadable(file_path, slug)
-            args: dict[str, Any] = {"file": file_arg}
-            if parent_id:
-                args["folder"] = parent_id
-        else:
-            args = {"file_path": file_path}
-            if parent_id:
-                args["parent_id"] = parent_id
+            path = Path(file_path).expanduser()
+            # Text → ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE (name+content[+folder]
+            # over MCP; no Files API). Binary → ONE_DRIVE_ONEDRIVE_UPLOAD_FILE
+            # with FileUploadable staging (project x-api-key) or source_url.
+            # See https://composio.dev/toolkits/one_drive
+            if self._ms_is_text_upload(path):
+                slug = self._slug_for("files_upload")  # CREATE_TEXT_FILE
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError as exc:
+                    raise RuntimeError(
+                        f"file looks text-like but is not valid UTF-8 ({path.name}); "
+                        "rename with a binary extension or provide a public source_url"
+                    ) from exc
+                args: dict[str, Any] = {"name": path.name, "content": content}
+                if parent_id:
+                    args["folder"] = parent_id
+            else:
+                slug = self._slug_for("files_upload_binary")
+                file_arg: Any = self._ms_stage_file_uploadable(file_path, slug)
+                args = {"file": file_arg}
+                if parent_id:
+                    args["folder"] = parent_id
+            data = self._execute_composio_tool(slug, args, operation="files_upload")
+            out = _ms_with_id(data)
+            out["upload_slug"] = slug
+            return out
+
+        slug = self._slug_for("files_upload")
+        args = {"file_path": file_path}
+        if parent_id:
+            args["parent_id"] = parent_id
         data = self._execute_composio_tool(slug, args, operation="files_upload")
-        return _ms_with_id(data) if self.family == "microsoft" else (
-            data if isinstance(data, dict) else {}
-        )
+        return data if isinstance(data, dict) else {}
 
     @guarded("drive.download", target_arg="file_id", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("files_download"),

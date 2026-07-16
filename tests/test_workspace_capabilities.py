@@ -34,54 +34,51 @@ class TestCapabilities:
         # A write is True ONLY if it EXECUTED successfully against the live
         # service; anything not execution-verified stays False. This tripwire
         # exists because catalog-plausible slugs and never-run code paths have
-        # repeatedly proven wrong when actually executed (v0.3.7, v0.3.9).
+        # repeatedly proven wrong when actually executed (v0.3.7, v0.3.9). Keep
+        # this list keyed to the dated live runs below — do NOT add a capability
+        # here until a live run has actually exercised it.
         #
-        # LIVE WRITE VERIFICATION 2026-07-16 (PR #7, Outlook + OneDrive):
-        #   PASS  mail.draft, mail.trash, mail.archive/unarchive/untrash
-        #         (full archive→unarchive→trash→untrash→trash cycle),
-        #         calendar.create/update/delete.
-        #   FAIL  files.upload — the OneDrive staging step returned HTTP 401
-        #         because Composio's Files REST API rejects the MCP key; it
-        #         needs a COMPOSIO_API_KEY. Nothing reached OneDrive, so
-        #         files.upload/download/trash are NOT execution-verified.
+        # LIVE VERIFICATION LEDGER (all against live Outlook + OneDrive):
+        #   2026-07-16 PR #7 — mail.draft, mail.trash, mail.archive/unarchive/
+        #       untrash (full cycle), calendar.create/update/delete.
+        #   2026-07-16 PR #8 — mail.send (OUTLOOK_SEND_EMAIL sent AND received),
+        #       mail.list_folders (26 folders), mail.move (custom folder id).
+        #   2026-07-16 PR #9 — mail.list_tags, mail.tag, mail.create_tag
+        #       (CoS-Verify created + applied); files.download + files.trash via
+        #       ONE_DRIVE_DOWNLOAD_FILE → ONE_DRIVE_DELETE_ITEM. The text upload
+        #       path (CREATE_TEXT_FILE) also ran, but files.upload stays False
+        #       (see below): the headline case is BINARY document filing, which
+        #       still 401s without COMPOSIO_API_KEY.
         from workspace_capabilities import get_capabilities, get_unsupported_reason
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
         assert caps["calendar.list"] is True
         assert caps["files.search"] is True
 
-        # Execution-verified writes → must be True.
+        # Every write below has an execution-verified entry in the ledger above.
         for action in (
             "mail.draft", "gmail.draft",
             "mail.trash", "gmail.trash",
             "mail.archive", "gmail.archive", "mail.unarchive", "mail.untrash",
             "calendar.create", "calendar.update", "calendar.delete",
-        ):
-            assert caps[action] is True, f"{action} should be live-verified True"
-
-        # NOT execution-verified (Files API staging needs COMPOSIO_API_KEY) →
-        # must be False, with a reason that names the credential gap.
-        for action in (
-            "files.upload", "drive.upload",
+            "mail.send", "mail.list_folders", "mail.move",
+            "mail.list_tags", "mail.tag", "mail.create_tag",
             "files.download", "drive.download",
             "files.trash", "drive.trash",
         ):
-            assert caps[action] is False, (
-                f"{action} was not execution-verified (staging 401'd); must be False"
-            )
+            assert caps[action] is True, f"{action} should be live-verified True"
+
+        # files.upload stays False: only the TEXT path is MCP-native, but the
+        # headline use (binary .pdf/.docx filing) needs COMPOSIO_API_KEY (401
+        # confirmed 2026-07-16). A coarse boolean must not over-promise it.
+        assert caps["files.upload"] is False
+        assert caps["drive.upload"] is False
         assert "COMPOSIO_API_KEY" in get_unsupported_reason(
             "composio_microsoft:mcp", "files.upload"
         )
 
-        # v0.3.11 execution-verified 2026-07-16 (live Outlook): mail.send
-        # (OUTLOOK_SEND_EMAIL sent AND received at a controlled address),
-        # mail.list_folders (26 folders), mail.move (draft → custom folder id →
-        # cleaned up). mail.send stays destructive / approval-gated.
-        assert caps["mail.send"] is True
-        assert caps["mail.list_folders"] is True
-        assert caps["mail.move"] is True
-        for action in ("mail.tag", "mail.create_tag", "calendar.cancel"):
-            assert caps[action] is False
+        # Not verified / policy-blocked → still False.
+        assert caps["calendar.cancel"] is False
 
     def test_supports(self):
         from workspace_capabilities import supports

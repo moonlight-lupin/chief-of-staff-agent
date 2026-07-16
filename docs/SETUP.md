@@ -215,18 +215,22 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > `OUTLOOK_CALENDAR_CREATE_EVENT` (`start_datetime`/`time_zone`/`attendees_info`),
 > `OUTLOOK_UPDATE_CALENDAR_EVENT`.
 >
-> **OneDrive file writes (`files.upload` / `files.download` / `files.trash`) are
-> NOT yet execution-verified and report `False`.** The upload path stages the
-> local file into Composio's object store via the **Files REST API**
-> (`backend.composio.dev`) to build a `FileUploadable` `{name,mimetype,s3key}`
-> for `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` — and that REST backend **requires a
-> `COMPOSIO_API_KEY`**. The MCP key alone is rejected with **HTTP 401** (verified
-> 2026-07-16), so nothing reaches OneDrive. The staging code
-> (`shared/scripts/composio_files.py`) ships, but until a run with a valid
-> `COMPOSIO_API_KEY` execution-verifies an actual upload, these stay unsupported.
-> To enable: set `COMPOSIO_API_KEY` in `.env` and re-run
-> `connect_workspace.py --verify-writes`; when `files_write` passes, the flags
-> flip to `True`.
+> **OneDrive file writes.** `files.download` / `files.trash` are
+> **execution-verified 2026-07-16** and report supported. `files.upload` reports
+> **unsupported by default** — because the headline case is **binary** document
+> filing (`.pdf`/`.docx`), which needs a project `COMPOSIO_API_KEY`. Two upload
+> paths ([Composio OneDrive toolkit](https://composio.dev/toolkits/one_drive)):
+>
+> | Content | Tool | Needs Files API / project key? |
+> |---|---|---|
+> | Plain text (`.txt`, `.md`, `.json`, …) | `ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE` (`name` + `content` + optional `folder`) | **No** — MCP-native (the text path itself was execution-verified 2026-07-16) |
+> | Binary / non-text (`.pdf`, `.docx`, …) | `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` with `FileUploadable` `{name,mimetype,s3key}` | **Yes** — `COMPOSIO_API_KEY` as `x-api-key` on `backend.composio.dev` (the MCP Connect key alone 401s — confirmed 2026-07-16). Alt: a public HTTPS `source_url` Composio's backend can fetch (no staging) — useful only if the file is already served at a publicly reachable URL. |
+>
+> The plain-text upload path works over MCP when called directly, but because a
+> coarse `files.upload` boolean can't promise the binary document case, it stays
+> **False** until `COMPOSIO_API_KEY` is set (then both paths work). With
+> `files.upload` unsupported, `--verify-writes` reports `files_write` as
+> `not_tested` rather than uploading a probe.
 >
 > Run write smoke after connect:
 > ```bash
@@ -234,10 +238,11 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > # optional calendar create→update→delete of a marked [CoS verify] event:
 > python shared/scripts/connect_workspace.py --verify-calendar-writes
 > ```
-> `--verify-writes` creates a draft, exercises archive/inbox moves
-> (`mail_move_write`), uploads a tiny OneDrive file (download when supported),
-> then trashes artefacts (tags stay unsupported until Phase 4). Calendar probe
-> is opt-in because delete is destructive for the artefact just created.
+> `--verify-writes` creates a draft, applies the `CoS-Verify` category
+> (`mail_tag_write`), exercises archive/inbox moves (`mail_move_write`), then
+> cleans up. `files_write` is `not_tested` unless `files.upload` is supported
+> (set `COMPOSIO_API_KEY` to enable binary uploads). Calendar probe is opt-in
+> because delete is destructive for the artefact just created.
 >
 > Every slug remains **config-overridable** via `integrations.workspace.tool_slugs`
 > in case Composio renames one: a wrong slug reports *itself*, naming the failing
@@ -261,8 +266,13 @@ python shared/scripts/connect_workspace.py --provider composio --capabilities
 > python skills/document-preparer/scripts/send_email.py execute --action-id <id>
 > ```
 > Direct `mail_send` still requires `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1` after
-> explicit user confirmation. Categories (`mail.tag*`) and `calendar.cancel`
-> remain unsupported via Composio.
+> explicit user confirmation.
+>
+> **Phase 4 categories (execution-verified 2026-07-16):** `mail_list_tags` /
+> `mail_create_tag` / `mail_tag` map
+> to Outlook master categories (`OUTLOOK_GET_MASTER_CATEGORIES`,
+> `OUTLOOK_CREATE_USER_MASTER_CATEGORY`, `OUTLOOK_UPDATE_EMAIL`). Tag id is the
+> category display name. `calendar.cancel` remains unsupported via Composio.
 
 ### Option 3: Microsoft 365 (Graph API)
 
@@ -394,12 +404,12 @@ Notes:
   supported (`mail_move_write`), and uploads a tiny temp file, then trashes the
   draft and the file. `mail_send` and `calendar_write` are always reported
   `not_tested` unless you opt into `--verify-calendar-writes`.
-- **Composio Microsoft** advertises draft, mail-move, and calendar write
-  capabilities (all execution-verified 2026-07-16). OneDrive file writes
-  (`files_write`) report `not_tested` until you set `COMPOSIO_API_KEY` — the
-  Files API staging step needs it (the MCP key 401s), so those capabilities are
-  `False` by default. Prefer a live `--verify-writes` after connect; tags remain
-  Phase 4.
+- **Composio Microsoft** advertises draft, tags, mail-move, calendar, and
+  OneDrive download/trash write capabilities. `files.upload` is reported
+  unsupported by default: text uploads work over MCP (`CREATE_TEXT_FILE`), but
+  binary document filing (`.pdf`/`.docx`) needs `COMPOSIO_API_KEY` for Files API
+  staging, so the coarse capability stays off until that key is set. Prefer a
+  live `--verify-writes` after connect.
 - **Writes are only attempted when they can be cleaned up.** `mail_draft` (and
   the tag write that tags it) is skipped as `not_tested` unless the provider
   supports `mail.trash`; `files_write` is skipped unless it supports
@@ -600,10 +610,12 @@ Skills call `get_workspace_client(config)` → get the right backend automatical
 - Recommended provider for document handoff workflows (upload + draft email).
 - Best for: managed-auth workflows that need Gmail drafts.
 - For the Microsoft Composio family, Outlook/OneDrive reads and Outlook
-  mail/calendar writes (draft, archive/inbox moves, trash, calendar
-  create/update/delete) are execution-verified (2026-07-16). OneDrive file
-  writes (upload/download/trash) are reported unsupported until a
-  `COMPOSIO_API_KEY` is set (the Files API staging step 401s on the MCP key).
+  mail/calendar writes (draft, tags/categories, archive/inbox moves, trash,
+  folders/move, approval-gated send, calendar create/update/delete) plus OneDrive
+  file download/trash are supported. `files.upload` is reported unsupported by
+  default: **text** uploads work over MCP (`CREATE_TEXT_FILE`), but **binary**
+  document filing needs Files API staging (`COMPOSIO_API_KEY`) or a public
+  `source_url`, so the coarse capability stays off until the key is set.
 
 **Microsoft 365 (Graph):**
 - Outlook mail search/draft/send/archive/trash, categories (tags), calendar, and OneDrive files.

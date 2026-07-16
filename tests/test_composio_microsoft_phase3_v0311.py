@@ -228,4 +228,5 @@ class TestCapabilitiesPhase3:
         assert client.supports("mail.send") is True
         assert client.supports("mail.list_folders") is True
         assert client.supports("mail.move") is True
-        assert client.supports("mail.tag") is False
+        # Phase 4 (v0.3.12) flips mail.tag* True; Phase 3 only asserted folders/send.
+        assert client.supports("mail.tag") is True

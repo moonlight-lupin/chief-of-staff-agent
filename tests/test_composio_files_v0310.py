@@ -125,7 +125,8 @@ def test_resolve_composio_api_key_prefers_api_key(monkeypatch):
     assert cf.resolve_composio_api_key() == "mcp"
 
 
-def test_microsoft_client_stages_before_mcp_execute(monkeypatch, tmp_path):
+def test_microsoft_client_text_upload_skips_staging(monkeypatch, tmp_path):
+    """Plain-text → CREATE_TEXT_FILE over MCP (no Files API / COMPOSIO_API_KEY)."""
     monkeypatch.setenv("COMPOSIO_MCP_KEY", "test-key")
     monkeypatch.setenv("CHIEF_OF_STAFF_AUTO_APPROVE", "1")
     monkeypatch.setenv("CHIEF_OF_STAFF_PROJECT_ROOT", str(tmp_path))
@@ -151,10 +152,56 @@ def test_microsoft_client_stages_before_mcp_execute(monkeypatch, tmp_path):
     client = ComposioMCPWorkspaceClient(cfg)
     local = tmp_path / "up.txt"
     local.write_text("payload")
-    staged = {
+    mock = MagicMock()
+    mock.call_tool.return_value = {
+        "data": {"results": [{"response": {"successful": True, "data": {"id": "file-9"}}}]}
+    }
+    client._mcp_client = mock
+
+    with patch.object(client, "_ms_stage_file_uploadable") as stage:
+        res = client.files_upload(str(local), parent_id="folder-1")
+
+    assert res["success"] is True
+    stage.assert_not_called()
+    tool = mock.call_tool.call_args[0][1]["tools"][0]
+    assert tool["tool_slug"] == "ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE"
+    assert tool["arguments"] == {
         "name": "up.txt",
-        "mimetype": "text/plain",
-        "s3key": "uploads/up.txt",
+        "content": "payload",
+        "folder": "folder-1",
+    }
+
+
+def test_microsoft_client_binary_stages_before_mcp_execute(monkeypatch, tmp_path):
+    monkeypatch.setenv("COMPOSIO_MCP_KEY", "test-key")
+    monkeypatch.setenv("CHIEF_OF_STAFF_AUTO_APPROVE", "1")
+    monkeypatch.setenv("CHIEF_OF_STAFF_PROJECT_ROOT", str(tmp_path))
+
+    from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+    cfg = {
+        "integrations": {
+            "workspace": {
+                "provider": "composio",
+                "mode": "mcp",
+                "family": "microsoft",
+                "user_id": "u",
+                "toolkits": ["outlook", "one_drive"],
+                "mcp": {
+                    "endpoint": "https://connect.composio.dev/mcp",
+                    "key_env": "COMPOSIO_MCP_KEY",
+                },
+            }
+        },
+        "paths": {"project_root": str(tmp_path)},
+    }
+    client = ComposioMCPWorkspaceClient(cfg)
+    local = tmp_path / "up.bin"
+    local.write_bytes(b"\x00\xff")
+    staged = {
+        "name": "up.bin",
+        "mimetype": "application/octet-stream",
+        "s3key": "uploads/up.bin",
     }
     mock = MagicMock()
     mock.call_tool.return_value = {
@@ -167,5 +214,31 @@ def test_microsoft_client_stages_before_mcp_execute(monkeypatch, tmp_path):
 
     assert res["success"] is True
     stage.assert_called_once()
-    args = mock.call_tool.call_args[0][1]["tools"][0]["arguments"]
-    assert args == {"file": staged, "folder": "folder-1"}
+    tool = mock.call_tool.call_args[0][1]["tools"][0]
+    assert tool["tool_slug"] == "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE"
+    assert tool["arguments"] == {"file": staged, "folder": "folder-1"}
+
+
+def test_stage_retries_consumer_api_key_on_401(tmp_path, monkeypatch):
+    monkeypatch.setenv("COMPOSIO_MCP_KEY", "mcp-only")
+    path = tmp_path / "x.bin"
+    path.write_bytes(b"ab")
+    meta = {
+        "key": "uploads/x.bin",
+        "new_presigned_url": "https://blob.example/put",
+    }
+    post = MagicMock(side_effect=[
+        _Resp(401, text="unauthorized"),
+        _Resp(200, meta),
+    ])
+    put = MagicMock(return_value=_Resp(201))
+    with patch.object(cf.requests, "post", post), patch.object(cf.requests, "put", put):
+        result = cf.stage_file_uploadable(
+            path,
+            tool_slug="ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
+            toolkit_slug="one_drive",
+        )
+    assert result["s3key"] == "uploads/x.bin"
+    assert post.call_count == 2
+    assert post.call_args_list[0][1]["headers"].get("x-api-key") == "mcp-only"
+    assert post.call_args_list[1][1]["headers"].get("x-consumer-api-key") == "mcp-only"

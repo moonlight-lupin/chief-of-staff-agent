@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.12 — Composio Microsoft Phase 4 categories + MCP-native OneDrive text upload
+
+### Features
+
+- **Outlook categories (Phase 4)**:
+  - `mail_list_tags` → `OUTLOOK_GET_MASTER_CATEGORIES`
+  - `mail_create_tag` → `OUTLOOK_CREATE_USER_MASTER_CATEGORY`
+  - `mail_tag` → `OUTLOOK_GET_MESSAGE` (current categories) +
+    `OUTLOOK_UPDATE_EMAIL` (append category displayName)
+  - Tag id IS the category `displayName` (same contract as native m365)
+  - Capabilities: `mail.list_tags` / `mail.tag` / `mail.create_tag` True for
+    `composio_microsoft` / `:mcp`
+- **OneDrive text uploads without Files API**:
+  - Plain-text files use `ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE` (`name` +
+    `content` + optional `folder`) over Connect MCP — no
+    `COMPOSIO_API_KEY` / FileUploadable staging
+  - Binary files still use `ONE_DRIVE_ONEDRIVE_UPLOAD_FILE` with staged
+    `{name,mimetype,s3key}` (project `x-api-key`) or a public `source_url`
+  - Files staging retries `x-consumer-api-key` when `x-api-key` returns 401/403
+  - Capabilities: `files.download` / `files.trash` True (execution-verified
+    2026-07-16). `files.upload` stays **False**: the text path works over MCP,
+    but binary document filing (`.pdf`/`.docx`) needs `COMPOSIO_API_KEY`, and a
+    coarse boolean must not over-promise it (set the key to enable)
+
+### Docs
+
+- `docs/SETUP.md` clarifies text vs binary OneDrive paths and Phase 4 tags
+  (see also https://composio.dev/toolkits/one_drive).
+
 ## v0.3.11 — Composio Microsoft Phase 3 folders + approval-gated mail.send
 
 ### Features
