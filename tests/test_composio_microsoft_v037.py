@@ -654,7 +654,9 @@ class TestMicrosoftNormalizers:
 # ── capabilities honesty ─────────────────────────────────────────────────────
 
 class TestCapabilities:
-    # v0.3.10: files + archive/inbox moves True; send/tags/cancel still False.
+    # v0.3.10: mail archive/inbox moves live-verified True; OneDrive file writes
+    # stay False (Files API staging needs COMPOSIO_API_KEY); send/tags/cancel
+    # still False.
     def test_composio_microsoft_supported_set(self):
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio_microsoft:mcp")
@@ -670,10 +672,11 @@ class TestCapabilities:
         assert caps["mail.untrash"] is True
         assert caps["gmail.draft"] is True
         assert caps["gmail.trash"] is True
-        assert caps["files.upload"] is True
-        assert caps["files.download"] is True
-        assert caps["files.trash"] is True
-        assert caps["drive.trash"] is True
+        # OneDrive file writes not execution-verified → False.
+        assert caps["files.upload"] is False
+        assert caps["files.download"] is False
+        assert caps["files.trash"] is False
+        assert caps["drive.trash"] is False
 
     def test_composio_microsoft_false_ops_have_reasons(self):
         from workspace_capabilities import get_capabilities, get_unsupported_reason
@@ -685,8 +688,12 @@ class TestCapabilities:
             assert caps[op] is False
         assert caps["mail.trash"] is True
         assert caps["mail.draft"] is True
-        assert caps["files.upload"] is True
         assert caps["mail.archive"] is True
+        # files.upload is unsupported by default, with a COMPOSIO_API_KEY reason.
+        assert caps["files.upload"] is False
+        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
+            "composio_microsoft:mcp", "files.upload"
+        )
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
@@ -694,8 +701,8 @@ class TestCapabilities:
         assert client.supports("mail.search") is True
         assert client.supports("mail.send") is False
         assert client.supports("mail.draft") is True
-        assert client.supports("files.upload") is True
         assert client.supports("mail.archive") is True
+        assert client.supports("files.upload") is False
 
 
 # ── connect flow accepts outlook / one_drive ─────────────────────────────────

@@ -30,25 +30,49 @@ class TestCapabilities:
         assert caps["gmail.send"] is False
         assert caps["drive.search"] is True
 
-    def test_composio_microsoft_writes_include_files_and_mail_moves(self):
-        # v0.3.10: OneDrive FileUploadable staging + archive/inbox moves are
-        # capability-True (wired + unit-tested). mail.send / tags / cancel stay
-        # False by policy / Phase 4.
+    def test_composio_microsoft_writes_reflect_live_execution(self):
+        # A write is True ONLY if it EXECUTED successfully against the live
+        # service; anything not execution-verified stays False. This tripwire
+        # exists because catalog-plausible slugs and never-run code paths have
+        # repeatedly proven wrong when actually executed (v0.3.7, v0.3.9).
+        #
+        # LIVE WRITE VERIFICATION 2026-07-16 (PR #7, Outlook + OneDrive):
+        #   PASS  mail.draft, mail.trash, mail.archive/unarchive/untrash
+        #         (full archive→unarchive→trash→untrash→trash cycle),
+        #         calendar.create/update/delete.
+        #   FAIL  files.upload — the OneDrive staging step returned HTTP 401
+        #         because Composio's Files REST API rejects the MCP key; it
+        #         needs a COMPOSIO_API_KEY. Nothing reached OneDrive, so
+        #         files.upload/download/trash are NOT execution-verified.
         from workspace_capabilities import get_capabilities, get_unsupported_reason
         caps = get_capabilities("composio_microsoft:mcp")
         assert caps["mail.search"] is True
         assert caps["calendar.list"] is True
         assert caps["files.search"] is True
+
+        # Execution-verified writes → must be True.
         for action in (
             "mail.draft", "gmail.draft",
             "mail.trash", "gmail.trash",
             "mail.archive", "gmail.archive", "mail.unarchive", "mail.untrash",
             "calendar.create", "calendar.update", "calendar.delete",
+        ):
+            assert caps[action] is True, f"{action} should be live-verified True"
+
+        # NOT execution-verified (Files API staging needs COMPOSIO_API_KEY) →
+        # must be False, with a reason that names the credential gap.
+        for action in (
             "files.upload", "drive.upload",
             "files.download", "drive.download",
             "files.trash", "drive.trash",
         ):
-            assert caps[action] is True, f"{action} should be supported"
+            assert caps[action] is False, (
+                f"{action} was not execution-verified (staging 401'd); must be False"
+            )
+        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
+            "composio_microsoft:mcp", "files.upload"
+        )
+
         assert caps["mail.send"] is False
         assert "intentionally disabled" in get_unsupported_reason(
             "composio_microsoft:mcp", "mail.send"

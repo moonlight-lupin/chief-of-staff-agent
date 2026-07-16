@@ -204,8 +204,10 @@ class TestFilesTrash:
 
 
 class TestCapabilitiesPhase1And2:
-    # v0.3.10: files staging + archive/inbox moves are capability-True alongside
-    # the v0.3.9 live-verified draft/trash/calendar writes.
+    # v0.3.10 live-verified 2026-07-16: mail archive/inbox moves join the v0.3.9
+    # live-verified draft/trash/calendar writes. OneDrive file writes stay False
+    # — the Files API staging step needs COMPOSIO_API_KEY (MCP key 401s), so
+    # files.upload/download/trash are not execution-verified.
     def test_cleanup_and_content_writes_live_verified(self):
         from workspace_capabilities import get_capabilities, supports
         caps = get_capabilities("composio_microsoft:mcp")
@@ -218,29 +220,45 @@ class TestCapabilitiesPhase1And2:
         assert caps["mail.archive"] is True
         assert caps["mail.untrash"] is True
         assert caps["mail.unarchive"] is True
-        assert caps["files.trash"] is True
-        assert caps["files.upload"] is True
-        assert caps["files.download"] is True
-        assert supports("composio_microsoft:mcp", "drive.trash") is True
+        # OneDrive writes not execution-verified — must be False until a run
+        # with COMPOSIO_API_KEY confirms an actual upload.
+        assert caps["files.trash"] is False
+        assert caps["files.upload"] is False
+        assert caps["files.download"] is False
+        assert supports("composio_microsoft:mcp", "drive.trash") is False
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         assert client.supports("mail.trash") is True
         assert client.supports("mail.draft") is True
-        assert client.supports("files.trash") is True
-        assert client.supports("files.upload") is True
         assert client.supports("mail.archive") is True
+        # OneDrive file writes gated on COMPOSIO_API_KEY verification.
+        assert client.supports("files.trash") is False
+        assert client.supports("files.upload") is False
 
 
 class TestVerifyWritesPhase2:
     """--verify-writes exercises draft, mail-move cycle, and OneDrive files."""
 
     def test_verify_writes_draft_move_and_files(self, mcp_key, tmp_project):
+        # Files are False by default (staging needs COMPOSIO_API_KEY). This test
+        # covers the harness orchestration for the *supported* path — as if the
+        # key were present — by forcing files support and mocking staging, so
+        # the upload/download/trash branch is exercised without a live 401.
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         from workspace_verify import run_verification
 
         client = ComposioMCPWorkspaceClient(_ms_workspace())
+        _real_supports = client.supports
+
+        def _force_files_supported(action):
+            if action in ("files.upload", "files.download", "files.trash",
+                          "drive.upload", "drive.download", "drive.trash"):
+                return True
+            return _real_supports(action)
+
+        client.supports = _force_files_supported  # type: ignore[assignment]
         mock = MagicMock()
         staged = {
             "name": "cos-verify.txt",
@@ -301,6 +319,53 @@ class TestVerifyWritesPhase2:
         assert "OUTLOOK_MOVE_MESSAGE" in slugs
         assert "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE" in slugs
         assert "ONE_DRIVE_DELETE_ITEM" in slugs
+
+    def test_verify_writes_default_skips_files_as_not_tested(self, mcp_key, tmp_project):
+        # Default reality (no COMPOSIO_API_KEY): files.upload is unsupported, so
+        # files_write is skipped as not_tested and no OneDrive upload is
+        # attempted. Draft + mail-move still run, so write_ready stays "yes".
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        from workspace_verify import run_verification
+
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+
+        def _side_effect(tool_name, payload):
+            slug = payload["tools"][0]["tool_slug"]
+            if slug == "OUTLOOK_CREATE_DRAFT":
+                return _ok({"id": "draft-1"})
+            if slug == "OUTLOOK_MOVE_MESSAGE":
+                args = payload["tools"][0].get("arguments") or {}
+                dest = args.get("destination_id") or args.get("destinationFolderId")
+                return _ok({"id": f"draft-{dest or 'moved'}", "restore_target": "draft-1"})
+            if slug in (
+                "OUTLOOK_QUERY_EMAILS",
+                "OUTLOOK_GET_CALENDAR_VIEW",
+                "ONE_DRIVE_SEARCH_ITEMS",
+            ):
+                return _ok({"value": []})
+            return _ok({})
+
+        mock.call_tool.side_effect = _side_effect
+        mock.initialize.return_value = None
+        client._mcp_client = mock
+
+        with patch("workspace_verify.get_workspace_client", return_value=client):
+            cfg = _ms_workspace()
+            cfg["user"] = {"email": "op@example.com"}
+            rep = run_verification(cfg, include_writes=True)
+
+        assert rep["checks"]["mail_draft"]["status"] == "pass"
+        assert rep["checks"]["mail_move_write"]["status"] == "pass"
+        assert rep["checks"]["files_write"]["status"] == "not_tested"
+        assert "files.upload" in rep["checks"]["files_write"]["detail"]
+        assert rep["write_ready"] == "yes"
+        slugs = [
+            c[0][1]["tools"][0]["tool_slug"]
+            for c in mock.call_tool.call_args_list
+            if c[0][0] == "COMPOSIO_MULTI_EXECUTE_TOOL"
+        ]
+        assert "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE" not in slugs
 
     def test_calendar_write_opt_in_create_update_delete(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
