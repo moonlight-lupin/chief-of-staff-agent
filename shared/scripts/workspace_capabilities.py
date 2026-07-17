@@ -164,14 +164,21 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch) — execution-verified 2026-07-16
         "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin — execution-verified 2026-07-16
-        # files.untrash (v0.3.20):
+        # files.untrash (v0.3.20): method wired both ways —
         #   Personal → ONE_DRIVE_RESTORE_DRIVE_ITEM
         #   Business → SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM with site_name scoped
         #   to the OneDrive personal path (/personal/…) from webUrl or
-        #   integrations.workspace.sharepoint_site_name. Requires the SharePoint
-        #   toolkit connected (now in microsoft bootstrap toolkits). files_trash
-        #   persists restore_target GUID when SharePoint list succeeds.
-        "files.untrash": True,
+        #   integrations.workspace.sharepoint_site_name.
+        # Kept False — NOT execution-verified. A 2026-07-17 live probe on a real
+        # OneDrive-for-Business account WITH the SharePoint toolkit connected and
+        # a correctly derived /personal/… site_name still failed end-to-end: the
+        # ONE_DRIVE_DELETE_ITEM'd file never appeared in
+        # SHARE_POINT_LIST_RECYCLE_BIN_ITEMS (0 items after 45s), so files_trash
+        # captured no restore_target and files_untrash returned success=False
+        # (Personal Graph "Operation not supported", recycle-bin fallback empty).
+        # The OneDrive recycle bin and the queried SharePoint recycle bin do not
+        # line up. Flip only after a live run actually restores a file.
+        "files.untrash": False,
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -197,7 +204,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,
-        "files.untrash": True,      # Personal Graph + Business SharePoint recycle bin (v0.3.20)
+        "files.untrash": False,     # wired (Personal Graph + Business SharePoint recycle bin) but NOT live-verified — see composio_microsoft note
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -284,8 +291,17 @@ WORKFLOW_REQUIREMENTS: dict[str, list[str]] = {
 _M365_UNTRASH_REASON = (
     "OneDrive Business restore via SharePoint REST RecycleBin/RestoreByIds is wired "
     "on m365 but not live-verified (needs Entra app SharePoint Sites.ReadWrite.All + "
-    "a host-scoped SPO token). Use composio_microsoft with the SharePoint toolkit "
-    "connected for Business untrash without Entra, or flip m365 after a live restore."
+    "a host-scoped SPO token). Flip m365 only after a live restore."
+)
+
+_COMPOSIO_MS_UNTRASH_REASON = (
+    "OneDrive restore is wired for composio_microsoft (Personal ONE_DRIVE_RESTORE_DRIVE_ITEM; "
+    "Business SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM scoped to the /personal/… site) but is NOT "
+    "live-verified: a 2026-07-17 live probe on a real OneDrive-for-Business account, with the "
+    "SharePoint toolkit connected and a correct /personal/… site_name, still failed — the "
+    "ONE_DRIVE_DELETE_ITEM'd file never surfaced in SHARE_POINT_LIST_RECYCLE_BIN_ITEMS, so no "
+    "restore_target was captured and untrash returned success=False. files.untrash stays "
+    "unsupported until a live run actually restores a file"
 )
 
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
@@ -297,6 +313,10 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "
                                  "cancel the event via Outlook, or delete and recreate it",
+    ("composio_microsoft", "files.untrash"): _COMPOSIO_MS_UNTRASH_REASON,
+    ("composio_microsoft", "drive.untrash"): _COMPOSIO_MS_UNTRASH_REASON,
+    ("composio_microsoft:mcp", "files.untrash"): _COMPOSIO_MS_UNTRASH_REASON,
+    ("composio_microsoft:mcp", "drive.untrash"): _COMPOSIO_MS_UNTRASH_REASON,
     ("m365", "files.untrash"): _M365_UNTRASH_REASON,
     ("m365", "drive.untrash"): _M365_UNTRASH_REASON,
 }
@@ -310,10 +330,8 @@ PROVIDER_RECOMMENDATIONS: dict[str, str] = {
     "calendar.update": "google_api or composio",
     "drive.upload": "google_api, composio, or composio_microsoft",
     "drive.download": "google_api, composio, or composio_microsoft",
-    "drive.untrash": "google_api, composio, or composio_microsoft "
-                     "(Business OneDrive: connect share_point)",
-    "files.untrash": "google_api, composio, or composio_microsoft "
-                     "(Business OneDrive: connect share_point)",
+    "drive.untrash": "google_api or composio",
+    "files.untrash": "google_api or composio",
     "meeting.gather": "google_api or composio",
     "weekly.collect": "google_api or composio",
 }

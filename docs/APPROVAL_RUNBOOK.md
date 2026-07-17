@@ -118,20 +118,24 @@ python delete_actions.py summary
 `GOOGLEDRIVE_UNTRASH_FILE` on Composio Google. Soft-delete restore is available
 via `delete_actions.py restore` for executed `drive.trash` actions.
 
-**OneDrive restore (`composio_microsoft` — v0.3.20):**
-- **Personal** — `ONE_DRIVE_RESTORE_DRIVE_ITEM` by drive item id
-- **Business / work** — SharePoint recycle-bin restore (Personal Graph returns
-  *"Operation not supported"* on work accounts). Connect the **SharePoint**
-  toolkit (`share_point` is in the microsoft bootstrap toolkits). Optionally set
-  `integrations.workspace.sharepoint_site_name` to your OneDrive personal path
-  (e.g. `/personal/user_contoso_com`); otherwise it is derived from the item
-  `webUrl`. `files_trash` persists the recycle-bin GUID as `restore_target`;
-  `delete_actions.py restore` prefers that GUID. Same-session
-  `files_untrash(drive_item_id)` falls back to LeafName lookup after Personal
-  Graph fails.
-- **`m365`** — SharePoint REST `RecycleBin/RestoreByIds` is wired but capability
-  stays **False** until a live Entra run (needs SharePoint
-  `Sites.ReadWrite.All` + host-scoped SPO token)
+**OneDrive restore — wired but capability False (NOT live-verified):**
+`files.untrash` stays **False** for `composio_microsoft` and `m365`. A
+2026-07-17 live probe on a real OneDrive-for-Business account — **with the
+SharePoint toolkit connected and a correct `/personal/…` `site_name`** — still
+failed end-to-end: the `ONE_DRIVE_DELETE_ITEM`'d file never surfaced in
+`SHARE_POINT_LIST_RECYCLE_BIN_ITEMS` (0 items after 45s), so `files_trash`
+captured no `restore_target` and `files_untrash` returned `success=False`
+(Personal Graph *"Operation not supported"*, recycle-bin fallback empty). The
+OneDrive recycle bin and the queried SharePoint recycle bin do not line up. Flip
+to True only after a live run actually restores a file.
+- **Personal** — `ONE_DRIVE_RESTORE_DRIVE_ITEM` by drive item id (wired)
+- **Business / work** (`composio_microsoft`) — SharePoint recycle-bin restore
+  scoped to the OneDrive `/personal/…` site (from `webUrl` or
+  `integrations.workspace.sharepoint_site_name`). `files_trash` is meant to
+  persist the recycle-bin GUID as `restore_target`, but the live probe showed
+  the deleted item is not visible to the SharePoint listing — wired, not working.
+- **`m365`** — SharePoint REST `RecycleBin/RestoreByIds` wired (needs SharePoint
+  `Sites.ReadWrite.All` + host-scoped SPO token); never run live
 
 ### Handling Failed Actions
 
@@ -212,7 +216,7 @@ All state transitions are audited via `workspace_audit.py`:
 | drive.upload / files.upload | ✅ | ✅ (text + binary) | ✅ (text + binary) |
 | drive.download / files.download | ✅ | ✅ | ✅ |
 | drive.trash / files.trash | ✅ | ✅ | ✅ |
-| drive.untrash / files.untrash | ✅ (SA REST) | ✅ | ✅ Composio MS (Business: connect `share_point`); ❌ m365 (wired, not live-verified) |
+| drive.untrash / files.untrash | ✅ (SA REST) | ✅ | ❌ Composio MS + m365 (wired Personal Graph + Business SharePoint recycle bin, but not live-verified) |
 | document.handoff | ✅ | ✅ | ✅ |
 
 Destructive / gated writes still require: prepare → approve → execute (or

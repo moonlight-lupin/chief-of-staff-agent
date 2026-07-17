@@ -11,9 +11,9 @@ Use this checklist before going live with the Chief-of-Staff daily operating loo
   - [ ] `queries.yaml` present (project sibling or `shared/config/queries.yaml`)
 - [ ] **Composio Google** — MCP key + connected Gmail/Calendar/Drive
 - [ ] **Composio Microsoft / native m365** — mail/calendar/files OK;
-      Composio MS OneDrive `files.untrash` supported (connect `share_point` for
-      Business; optional `sharepoint_site_name: /personal/…`); native `m365`
-      untrash still capability False (needs Entra + SPO); live Outlook
+      OneDrive `files.untrash` wired but capability **False** (not live-verified:
+      a 2026-07-17 probe with `share_point` connected still failed — the deleted
+      file did not surface in the SharePoint recycle-bin listing); live Outlook
       email-org E2E deferred without Entra
 
 ## Pre-flight

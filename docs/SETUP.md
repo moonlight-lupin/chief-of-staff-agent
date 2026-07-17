@@ -186,7 +186,7 @@ integrations:
     toolkits:
       - outlook
       - one_drive
-      - share_point            # required for OneDrive Business files.untrash
+      - share_point            # for OneDrive Business files.untrash wiring (capability currently False — not yet live-verified)
     # Optional: pin the OneDrive personal site for recycle-bin restore
     # (derived from item webUrl when unset), e.g.:
     # sharepoint_site_name: "/personal/user_contoso_com"
@@ -207,7 +207,10 @@ python shared/scripts/connect_workspace.py --provider composio --connect share_p
 When connecting SharePoint, if the Connect UI asks for a Subsite, prefer your
 OneDrive personal path (e.g. `/personal/user_contoso_com` from your OneDrive
 URL). That scopes recycle-bin list/restore to your drive instead of the tenant
-root site.
+root site. Note: OneDrive `files.untrash` is **wired but not yet enabled** — a
+2026-07-17 live probe showed OneDrive-deleted items do not surface in the
+SharePoint recycle-bin listing even when correctly scoped, so the capability
+stays False until that path is live-verified.
 
 4. Verify / readiness (read verification on a live connection):
 ```bash

@@ -75,12 +75,16 @@ Verify in Google Calendar: event status should be back to confirmed.
 
 ## Section D: Drive / OneDrive Trash + Restore
 
-Provider: `google_api`, Composio Google (`composio` / `composio:mcp`), or
-Composio Microsoft (`composio_microsoft` — v0.3.20).
-OneDrive Business restore requires the **SharePoint** toolkit connected and
-preferably `sharepoint_site_name: /personal/…` (auto-derived from `webUrl`
-when unset). Native `m365` untrash stays capability False until an Entra live
-run (`Sites.ReadWrite.All` + host-scoped SPO token).
+Provider for restore: `google_api` or Composio Google (`composio` /
+`composio:mcp`) — these are live-verified.
+OneDrive restore (`composio_microsoft` / `m365`) is **wired but capability
+False** — not live-verified. A 2026-07-17 live probe on OneDrive-for-Business,
+**with the SharePoint toolkit connected** and a correct `/personal/…`
+`sharepoint_site_name`, still failed: the deleted item did not appear in
+`SHARE_POINT_LIST_RECYCLE_BIN_ITEMS`, so no `restore_target` was captured and
+`files_untrash` returned `success=False`. Enable only after a live run restores
+a file (m365 additionally needs Entra `Sites.ReadWrite.All` + host-scoped SPO
+token).
 
 ### D1. Prepare
 ```bash

@@ -373,10 +373,12 @@ class TestCapabilitiesPhase1And2:
         assert caps["files.upload"] is True    # text + binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert caps["files.download"] is True
         assert supports("composio_microsoft:mcp", "drive.trash") is True
-        # OneDrive restore (v0.3.20): Personal Graph + Business SharePoint recycle
-        # bin with personal-site site_name scoping (SharePoint toolkit required).
-        assert caps["files.untrash"] is True
-        assert supports("composio_microsoft:mcp", "drive.untrash") is True
+        # OneDrive restore wired (Personal Graph + Business SharePoint recycle bin
+        # with /personal/… site_name scoping) but capability False — a 2026-07-17
+        # live probe with the SharePoint toolkit connected still failed end-to-end
+        # (deleted file never surfaced in the SharePoint recycle-bin listing).
+        assert caps["files.untrash"] is False
+        assert supports("composio_microsoft:mcp", "drive.untrash") is False
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
