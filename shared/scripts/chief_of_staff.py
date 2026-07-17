@@ -37,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.20"
+VERSION = "0.3.21"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)

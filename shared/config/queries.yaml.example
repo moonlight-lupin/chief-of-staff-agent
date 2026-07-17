@@ -65,6 +65,9 @@ queries:
     max: 5
     template: true
 
+# Reply awareness (v0.3.21): daily_briefing suppresses inbound hits when the
+# operator already replied in the same thread (see in:sent lookback).
+
 triage_rules:
   - signal: "From client + unread + > 2 days old"
     action: "Flag as needs response"
