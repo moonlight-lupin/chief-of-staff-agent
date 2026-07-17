@@ -95,7 +95,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_FILE_FROM_TEXT; BINARY via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
-        "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — soft-delete restore symmetry
+        "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
     },
     "composio:mcp": {
         "mail.search": True,
@@ -120,7 +120,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_FILE_FROM_TEXT; BINARY via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
-        "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — soft-delete restore symmetry
+        "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
