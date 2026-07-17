@@ -174,9 +174,9 @@ class TestComposioMCPDrive:
         client._mcp_client = mock_mcp
 
         # GOOGLEDRIVE_UPLOAD_FILE takes a staged file_to_upload FileUploadable;
-        # patch staging (it hits the Files REST API) and assert the wired shape.
+        # patch the MCP sandbox stager (PR #14) and assert the wired shape.
         with patch(
-            "composio_files.stage_file_uploadable",
+            "composio_files.stage_file_uploadable_via_sandbox",
             return_value={"name": "report.pdf", "mimetype": "application/pdf", "s3key": "k1"},
         ):
             client.drive_upload("/tmp/report.pdf", parent_id="folder_123")

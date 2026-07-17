@@ -1455,16 +1455,24 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         except Exception as exc:
             raise ComposioReadError("files_search", exc) from exc
 
-    def _ms_stage_file_uploadable(self, file_path: str, tool_slug: str) -> dict[str, str]:
-        """Stage a local file into Composio's object store for FileUploadable args."""
-        from composio_files import stage_file_uploadable
+    def _stage_file_uploadable(
+        self, file_path: str, tool_slug: str, toolkit_slug: str,
+    ) -> dict[str, str]:
+        """Stage a local file → FileUploadable ``{name, mimetype, s3key}``.
 
-        return stage_file_uploadable(
-            file_path,
-            tool_slug=tool_slug,
-            toolkit_slug="one_drive",
-            key_env=self.key_env,
-        )
+        Uses MCP-native sandbox staging (COMPOSIO_REMOTE_BASH_TOOL +
+        COMPOSIO_REMOTE_WORKBENCH), which needs only the MCP key — no
+        COMPOSIO_API_KEY. ``tool_slug``/``toolkit_slug`` are accepted for parity
+        with the REST stager (``composio_files.stage_file_uploadable``), which
+        remains available for keyed setups but is not wired here.
+        """
+        from composio_files import stage_file_uploadable_via_sandbox
+
+        return stage_file_uploadable_via_sandbox(file_path, mcp_client=self._get_mcp())
+
+    def _ms_stage_file_uploadable(self, file_path: str, tool_slug: str) -> dict[str, str]:
+        """OneDrive FileUploadable staging over MCP (no COMPOSIO_API_KEY)."""
+        return self._stage_file_uploadable(file_path, tool_slug, "one_drive")
 
     @staticmethod
     def _ms_is_text_upload(path: Path) -> bool:
@@ -1488,8 +1496,9 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         if self.family == "microsoft":
             path = Path(file_path).expanduser()
             # Text → ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE (name+content[+folder]
-            # over MCP; no Files API). Binary → ONE_DRIVE_ONEDRIVE_UPLOAD_FILE
-            # with FileUploadable staging (project x-api-key) or source_url.
+            # over MCP). Binary → ONE_DRIVE_ONEDRIVE_UPLOAD_FILE with a
+            # FileUploadable staged over MCP via the remote sandbox (no
+            # COMPOSIO_API_KEY) — see _stage_file_uploadable and the CLEANUP note.
             # See https://composio.dev/toolkits/one_drive
             if self._ms_is_text_upload(path):
                 slug = self._slug_for("files_upload")  # CREATE_TEXT_FILE
@@ -1498,7 +1507,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 except UnicodeDecodeError as exc:
                     raise RuntimeError(
                         f"file looks text-like but is not valid UTF-8 ({path.name}); "
-                        "rename with a binary extension or provide a public source_url"
+                        "rename it with a binary extension to use the staged upload path"
                     ) from exc
                 args: dict[str, Any] = {"name": path.name, "content": content}
                 if parent_id:
@@ -1516,9 +1525,9 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
         # Google Drive: text files use GOOGLEDRIVE_CREATE_FILE_FROM_TEXT
         # (file_name+text_content over MCP — no Files API staging, no
-        # COMPOSIO_API_KEY; execution-verified 2026-07-16). Binary files use
-        # GOOGLEDRIVE_UPLOAD_FILE with a staged file_to_upload FileUploadable
-        # (needs COMPOSIO_API_KEY — the raw file_path is silently ignored).
+        # COMPOSIO_API_KEY). Binary files use GOOGLEDRIVE_UPLOAD_FILE with a
+        # staged file_to_upload FileUploadable; staging is MCP-native via the
+        # remote sandbox (no COMPOSIO_API_KEY) — see the CLEANUP note below.
         # Mirrors the OneDrive text/binary split.
         path = Path(file_path).expanduser()
         if self._ms_is_text_upload(path):
@@ -1534,20 +1543,26 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             if parent_id:
                 args["parent_id"] = parent_id
         else:
-            from composio_files import stage_file_uploadable
-
             slug = self._slug_for("files_upload_binary")  # GOOGLEDRIVE_UPLOAD_FILE
-            file_arg = stage_file_uploadable(
-                file_path,
-                tool_slug=slug,
-                toolkit_slug="googledrive",
-                key_env=self.key_env,
-            )
+            file_arg = self._stage_file_uploadable(file_path, slug, "googledrive")
             args = {"file_to_upload": file_arg}
             if parent_id:
                 args["parent_id"] = parent_id
         data = self._execute_composio_tool(slug, args, operation="files_upload")
         return data if isinstance(data, dict) else {}
+
+    # CLEANUP of the MCP-native binary staging path (files.upload binary):
+    #   * local temp file (caller's) — caller unlinks it;
+    #   * sandbox working copy (/mnt/files/…) — removed in
+    #     stage_file_uploadable_via_sandbox's finally, and the sandbox is
+    #     ephemeral (session-TTL reclaimed);
+    #   * Composio S3 staged object (the s3key) — its presigned URL is revoked
+    #     immediately (403), it is scoped to the tool-router session, and is
+    #     reclaimed on session TTL. There is NO MCP delete for it, so it is
+    #     access-revoked + TTL-reclaimed rather than purged on demand; an
+    #     explicit delete would require the Files REST API (COMPOSIO_API_KEY).
+    #   * destination Drive/OneDrive file — the deliverable; trash via
+    #     files_trash when it is a throwaway (verification) artefact.
 
     @guarded("drive.download", target_arg="file_id", audit_provider="composio",
              audit_tool=lambda self: self._slug_for("files_download"),

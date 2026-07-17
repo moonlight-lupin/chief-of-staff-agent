@@ -58,7 +58,7 @@ class TestProviderCapabilities:
         assert client.provider_name == "composio:mcp"
         assert client.supports("gmail.search") is True
         assert client.supports("gmail.send") is True
-        assert client.supports("drive.upload") is False   # GDrive upload needs COMPOSIO_API_KEY staging
+        assert client.supports("drive.upload") is True   # binary via MCP sandbox staging (PR #14)
 
     def test_google_supports(self):
         from providers.google_workspace import GoogleWorkspaceClient

@@ -231,10 +231,9 @@ class TestCapabilitiesPhase4:
         assert caps["mail.list_tags"] is True
         assert caps["mail.tag"] is True
         assert caps["mail.create_tag"] is True
-        # files.upload stays False: text works over MCP but binary needs
-        # COMPOSIO_API_KEY (the headline document-filing case). download/trash
-        # are verified and unaffected.
-        assert caps["files.upload"] is False
+        # files.upload is True (PR #14): text via CREATE_TEXT_FILE, binary via
+        # ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging (no COMPOSIO_API_KEY).
+        assert caps["files.upload"] is True
         assert caps["files.download"] is True
         assert caps["files.trash"] is True
         assert caps["calendar.cancel"] is False
@@ -245,6 +244,6 @@ class TestCapabilitiesPhase4:
         assert client.supports("mail.list_tags") is True
         assert client.supports("mail.tag") is True
         assert client.supports("mail.create_tag") is True
-        assert client.supports("files.upload") is False
+        assert client.supports("files.upload") is True   # MCP sandbox staging (PR #14)
         assert client.supports("files.download") is True
         assert client.supports("files.trash") is True

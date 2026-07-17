@@ -229,9 +229,10 @@ class TestGoogleFamilyByteForByte:
         mock = MagicMock()
         mock.call_tool.return_value = _ok({"id": "file"})
         client._mcp_client = mock
-        # GOOGLEDRIVE_UPLOAD_FILE needs a staged file_to_upload — patch staging.
+        # GOOGLEDRIVE_UPLOAD_FILE needs a staged file_to_upload — patch the MCP
+        # sandbox stager (PR #14, no COMPOSIO_API_KEY).
         with patch(
-            "composio_files.stage_file_uploadable",
+            "composio_files.stage_file_uploadable_via_sandbox",
             return_value={"name": "x.pdf", "mimetype": "application/pdf", "s3key": "k"},
         ):
             client.files_upload("/tmp/x.pdf", parent_id="folder")
@@ -684,8 +685,8 @@ class TestCapabilities:
         assert caps["mail.untrash"] is True
         assert caps["gmail.draft"] is True
         assert caps["gmail.trash"] is True
-        # files.upload stays False (binary needs COMPOSIO_API_KEY); download/trash verified.
-        assert caps["files.upload"] is False
+        # files.upload True (PR #14): binary via MCP sandbox staging (no key).
+        assert caps["files.upload"] is True
         assert caps["files.download"] is True
         assert caps["files.trash"] is True
         assert caps["drive.trash"] is True
@@ -699,10 +700,11 @@ class TestCapabilities:
         assert caps["mail.trash"] is True
         assert caps["mail.draft"] is True
         assert caps["mail.archive"] is True
-        assert caps["files.upload"] is False
-        assert "COMPOSIO_API_KEY" in get_unsupported_reason(
-            "composio_microsoft:mcp", "files.upload"
-        )
+        # files.upload is supported (PR #14) — no UNSUPPORTED_REASONS entry.
+        assert caps["files.upload"] is True
+        assert ("composio_microsoft:mcp", "files.upload") not in __import__(
+            "workspace_capabilities"
+        ).UNSUPPORTED_REASONS
 
     def test_client_capabilities_use_microsoft_entry(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
@@ -713,7 +715,7 @@ class TestCapabilities:
         assert client.supports("mail.archive") is True
         assert client.supports("mail.list_folders") is True
         assert client.supports("mail.tag") is True
-        assert client.supports("files.upload") is False
+        assert client.supports("files.upload") is True   # MCP sandbox staging (PR #14)
 
 
 # ── connect flow accepts outlook / one_drive ─────────────────────────────────
