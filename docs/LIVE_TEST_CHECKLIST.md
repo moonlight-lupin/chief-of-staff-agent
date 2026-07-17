@@ -169,11 +169,18 @@ CHIEF_OF_STAFF_AUTO_APPROVE=1 python skills/calendar-manager/scripts/calendar_ac
   --title "Test Event" --start 2026-07-10 --end 2026-07-10
 ```
 
-### 5. Gmail Draft — Not supported in Google service-account mode
+### 5. Gmail Draft (google_api SA REST)
 
-Google service-account mode does not currently support Gmail draft creation
-because the external google_api.py script has no draft subcommand.
-Use Composio MCP for draft-email and document handoff workflows.
+`google_api` creates drafts via Gmail REST (`users.drafts.create`) with the
+configured service account + `delegate_email` (uses `gmail.modify`, already in
+the standard SCOPES). Requires `google.service_account_path`.
+
+```bash
+CHIEF_OF_STAFF_AUTO_APPROVE=1 python skills/document-preparer/scripts/document_actions.py draft-email \
+  --to test@example.com --subject "Test draft" --body "Hello from CoS"
+```
+
+Expected: draft lands in the delegate's Drafts folder; result includes message `id`.
 
 ### 6. Summary Mode
 
@@ -189,19 +196,23 @@ Provider: google_api
 Audited: yes
 ```
 
-### 7. Document Handoff — NOT supported (without --allow-partial)
+### 7. Document Handoff (upload + draft) — supported on google_api
 
-Full document handoff (upload + Gmail draft) is not supported because
-google_api.py has no draft subcommand. Use Composio MCP for full handoff.
+Full handoff works when `drive.upload` and `gmail.draft` are both True
+(`google_api`, Composio Google, Composio Microsoft). Preflight first:
 
-With `--allow-partial`, Google can upload the file and return a clear
-"draft unsupported" result:
+```bash
+python skills/document-preparer/scripts/document_actions.py handoff \
+  --file /tmp/test.docx --parent <folder_id> \
+  --to client@example.com --subject "NDA" --body "Please review." --preflight
+```
 
 ```bash
 CHIEF_OF_STAFF_AUTO_APPROVE=1 python skills/document-preparer/scripts/document_actions.py handoff \
   --file /tmp/test.docx --parent <folder_id> \
-  --to client@example.com --subject "NDA" --body "Please review." --allow-partial
+  --to client@example.com --subject "NDA" --body "Please review."
 ```
 
-Note: Gmail draft and document handoff require Composio MCP provider.
-Google service-account mode does not support Gmail draft creation.
+Expected: file uploaded; draft created with a `File link:` line when the upload
+returns a share URL. Use `--allow-partial` only when draft is unsupported but
+upload still works (upload gaps always fail closed).

@@ -26,10 +26,11 @@ from typing import Any, Callable
 # each other exactly (e.g. mail.send gates like gmail.send).
 #
 # NOTE on the neutral mail.*/files.* mutation ids (mail.archive/unarchive/trash/
-# untrash/tag/create_tag, files.trash) and the shared calendar.cancel: these are
-# emitted by the m365 provider's @guarded methods. They MUST appear here or the
-# guardrail's confirm_action() (which permits any action NOT in WRITE_ACTIONS)
-# would let M365 archive/trash/tag/cancel/OneDrive-trash execute with no gate.
+# untrash/tag/create_tag, files.trash/untrash) and the shared calendar.cancel:
+# these are emitted by the m365 provider's @guarded methods. They MUST appear
+# here or the guardrail's confirm_action() (which permits any action NOT in
+# WRITE_ACTIONS) would let M365 archive/trash/tag/cancel/OneDrive-trash execute
+# with no gate.
 # The Google/Composio providers deliberately emit the LEGACY gmail.*/drive.*
 # spellings for these same operations (gmail.archive, gmail.trash, drive.trash);
 # those legacy spellings are intentionally left OUT of WRITE_ACTIONS so the
@@ -50,6 +51,7 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "files.upload",
     "files.download",
     "files.trash",       # m365 OneDrive recycle-bin (reversible)
+    "files.untrash",     # restore from Drive trash / OneDrive recycle bin
     "mail.archive",      # m365 move -> Archive (reversible)
     "mail.unarchive",    # m365 move -> Inbox
     "mail.trash",        # m365 move -> Deleted Items (30-day recoverable)
@@ -82,6 +84,7 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "files.download",
     # Reversible m365 mutations (see WRITE_ACTIONS note above).
     "files.trash",      # OneDrive recycle bin — reversible
+    "files.untrash",    # restore from trash / recycle bin
     "calendar.cancel",  # reversible on providers with an uncancel path
     "mail.archive",     # reversible: move back to Inbox
     "mail.unarchive",

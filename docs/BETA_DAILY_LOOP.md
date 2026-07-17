@@ -1,8 +1,30 @@
-# Beta Daily Loop Guide (v0.3.0)
+# Beta Daily Loop Guide (v0.3.17)
 
 ## Overview
 
 The `chief_of_staff.py` entrypoint is the friendly front door to all Chief-of-Staff subsystems. One command gives you a complete read-only picture of your operating state.
+
+## Beta readiness notes (v0.3.17)
+
+Use this loop with **Google** (`google_api` or Composio Google). Microsoft /
+Outlook live E2E (including email-org) is deferred when Entra ID is unavailable.
+
+| Path | Status |
+|---|---|
+| Daily summary / doctor / smoke-test | Ready (read-only) |
+| `document.handoff` (upload + draft) | Ready on `google_api`, Composio Google, Composio Microsoft |
+| Soft-delete restore for Drive trash | Ready on Google (`files.untrash` / `drive_untrash`) |
+| OneDrive `files.untrash` | Capability False (Personal-only restore API) |
+| Live Outlook email-org E2E | Deferred (needs Entra ID) |
+
+Recommended first beta day (Google operator):
+
+```bash
+python shared/scripts/chief_of_staff.py doctor --summary
+python shared/scripts/chief_of_staff.py smoke-test --summary
+python shared/scripts/chief_of_staff.py daily --summary
+python shared/scripts/review_queue.py list --state requested
+```
 
 ## The daily command
 

@@ -66,27 +66,33 @@ def _full_execute(config, action_id):
     mark_executed(config, action_id, {"success": True})
 
 
-# ─── Drive Restore Limitation ─────────────────────────────────
+# ─── Drive Restore (files.untrash) ────────────────────────────
 
-class TestDriveRestoreLimitation:
-    """Drive trash has no restore path — document and verify."""
+class TestDriveRestoreWired:
+    """Drive trash restores via drive_untrash / files_untrash (v0.3.17)."""
 
-    def test_drive_trash_not_in_restore_actions(self):
+    def test_drive_trash_in_restore_actions(self):
         from delete_actions import RESTORE_ACTIONS
-        assert "drive.trash" not in RESTORE_ACTIONS
+        assert "drive.trash" in RESTORE_ACTIONS
+        assert RESTORE_ACTIONS["drive.trash"]["method"] == "drive_untrash"
 
-    def test_restore_drive_trash_fails(self, temp_project, google_mock, auto_approve):
+    def test_restore_drive_trash_calls_untrash(self, temp_project, google_mock, auto_approve):
         config, project = temp_project
+        google_mock.drive_untrash.return_value = {
+            "success": True, "action": "drive.untrash", "provider": "google_api",
+            "data": {"id": "file123", "trashed": False}, "audited": True,
+        }
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
             from pending_actions import create_pending_action
             action = create_pending_action(config, "drive.trash", "google_api", "file123",
                                            {"reason": "old", "reversible": True,
-                                            "restore_hint": "Use Drive UI", "provider_method": "drive_trash"})
+                                            "restore_hint": "files_untrash", "provider_method": "drive_trash"})
             _full_execute(config, action["id"])
             rc = delete_actions.main(["restore", "--action-id", action["id"]])
-        assert rc == 1
+        assert rc == 0
+        google_mock.drive_untrash.assert_called_once_with("file123")
 
 
 # ─── Cleanup Command ──────────────────────────────────────────

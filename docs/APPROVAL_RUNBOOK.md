@@ -110,15 +110,18 @@ python delete_actions.py summary
 |---|---|---|
 | `gmail.archive` | `gmail_unarchive()` — add INBOX label back | ✅ Wired |
 | `gmail.trash` | `gmail_untrash()` — remove TRASH label | ✅ Wired |
-| `calendar.cancel` | `calendar_uncancel()` — set status confirmed | ✅ Wired |
-| `drive.trash` | Not yet wired | ⚠️ See limitation below |
+| `calendar.cancel` | `calendar_uncancel()` — set status confirmed | ✅ Wired (google_api only) |
+| `drive.trash` | `drive_untrash()` / `files_untrash()` | ✅ Wired for Google |
 
-**Drive restore limitation:** Google's Drive API supports `files.update` with
-`trashed=False` to restore trashed files. However, the external `google_api.py`
-script does not expose a drive untrash subcommand. Drive trash is reversible
-in principle (via Google Drive UI or API), but restore is not yet wired
-through Chief-of-Staff. To restore a trashed Drive file, use the Google Drive
-web UI or call the Drive API directly with `files.update(fileId, body={"trashed": False})`.
+**Google Drive restore:** `files.untrash` calls Drive REST `files.update`
+(`trashed=False`) on `google_api` (SA + delegate; no `google_api.py` CLI) and
+`GOOGLEDRIVE_UNTRASH_FILE` on Composio Google. Soft-delete restore is available
+via `delete_actions.py restore` for executed `drive.trash` actions.
+
+**OneDrive restore limitation:** `ONE_DRIVE_RESTORE_DRIVE_ITEM` / Graph
+`POST …/restore` is Personal OneDrive-only. Business/SharePoint needs a
+different path. Capability stays **False** for `composio_microsoft` and `m365`
+until that path is live-verified (methods are wired for a future flip).
 
 ### Handling Failed Actions
 
@@ -184,21 +187,23 @@ All state transitions are audited via `workspace_audit.py`:
 
 ## Provider Capability Matrix
 
-| Action | Google SA | Composio MCP |
-|---|---|---|
-| gmail.search | ✅ | ✅ |
-| gmail.draft | ❌ | ✅ |
-| gmail.send | ✅ (gated) | ❌ |
-| gmail.archive | ✅ (gated) | ❌ |
-| gmail.trash | ✅ (gated) | ❌ |
-| calendar.list | ✅ | ✅ |
-| calendar.create | ✅ | ✅ |
-| calendar.update | ✅ | ✅ |
-| calendar.cancel | ✅ (gated) | ❌ |
-| drive.search | ✅ | ✅ |
-| drive.upload | ✅ | ✅ |
-| drive.download | ✅ | ✅ |
-| drive.trash | ✅ (gated) | ❌ |
+| Action | Google SA | Composio Google | Composio Microsoft |
+|---|---|---|---|
+| gmail.search / mail.search | ✅ | ✅ | ✅ |
+| gmail.draft / mail.draft | ✅ (SA REST) | ✅ | ✅ |
+| gmail.send / mail.send | ✅ (gated) | ✅ (gated) | ✅ (gated) |
+| gmail.archive / mail.archive | ✅ | ✅ | ✅ |
+| gmail.trash / mail.trash | ✅ | ✅ | ✅ |
+| calendar.list | ✅ | ✅ | ✅ |
+| calendar.create | ✅ | ✅ | ✅ |
+| calendar.update | ✅ | ✅ | ✅ |
+| calendar.cancel | ✅ (gated) | ❌ | ❌ |
+| drive.search / files.search | ✅ | ✅ | ✅ |
+| drive.upload / files.upload | ✅ | ✅ (text + binary) | ✅ (text + binary) |
+| drive.download / files.download | ✅ | ✅ | ✅ |
+| drive.trash / files.trash | ✅ | ✅ | ✅ |
+| drive.untrash / files.untrash | ✅ (SA REST) | ✅ | ❌ (Personal-only; see above) |
+| document.handoff | ✅ | ✅ | ✅ |
 
-All gated actions require: prepare → approve → execute.
-No direct provider call path exists for any gated action.
+Destructive / gated writes still require: prepare → approve → execute (or
+`CHIEF_OF_STAFF_AUTO_APPROVE=1` for safe writes in non-interactive contexts).

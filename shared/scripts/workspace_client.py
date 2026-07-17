@@ -141,6 +141,10 @@ class WorkspaceClient(abc.ABC):
         """Move a file to trash. Reversible."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support files_trash")
 
+    def files_untrash(self, file_id: str) -> dict[str, Any]:
+        """Restore a trashed file from Drive trash / OneDrive recycle bin."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support files_untrash")
+
     @abc.abstractmethod
     def health_check(self) -> bool:
         """Return True if the provider is healthy and authenticated."""
@@ -224,6 +228,10 @@ class WorkspaceClient(abc.ABC):
     def drive_trash(self, file_id: str) -> dict[str, Any]:
         warnings.warn("drive_trash is deprecated; use files_trash", DeprecationWarning, stacklevel=2)
         return self.files_trash(file_id)
+
+    def drive_untrash(self, file_id: str) -> dict[str, Any]:
+        warnings.warn("drive_untrash is deprecated; use files_untrash", DeprecationWarning, stacklevel=2)
+        return self.files_untrash(file_id)
 
 
 # ── Provider registry ──────────────────────────────────────────────────

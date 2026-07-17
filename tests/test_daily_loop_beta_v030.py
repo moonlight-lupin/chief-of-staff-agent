@@ -345,7 +345,7 @@ class TestVersionAndDocs:
     def test_version_is_031(self):
         import yaml
         data = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())
-        assert data.get("version") == "0.3.16"
+        assert data.get("version") == "0.3.17"
 
     def test_beta_docs_exist(self):
         assert (PLUGIN_ROOT / "docs" / "BETA_DAILY_LOOP.md").exists()

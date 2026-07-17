@@ -122,7 +122,7 @@ class TestDocumentHandoff:
         mock_composio.mail_send.assert_not_called()
 
     def test_handoff_includes_drive_link_in_body(self, fake_config, auto_approve, tmp_path):
-        """Under composio, handoff body includes Drive link."""
+        """Under composio, handoff body includes the uploaded file link."""
         mock_composio = MagicMock()
         mock_composio.provider_name = "composio:mcp"
         mock_composio.supports.side_effect = lambda action: True
@@ -142,6 +142,7 @@ class TestDocumentHandoff:
         call_args = mock_composio.mail_create_draft.call_args
         body = call_args[0][2]
         assert "https://drive.google.com/file/d/f1/view" in body
+        assert "File link:" in body
 
     def test_handoff_fails_if_upload_fails(self, fake_config, auto_approve, tmp_path):
         """Under composio, if upload fails, draft is not called."""

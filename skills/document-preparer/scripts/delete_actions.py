@@ -64,7 +64,7 @@ SOFT_DELETE_ACTIONS = {
     "drive.trash": {
         "label": "Move Drive file to trash",
         "reversible": True,
-        "restore_hint": "Restore from trash in Google Drive UI (30-day auto-delete by Google)",
+        "restore_hint": "Restore via files_untrash / drive_untrash (Google Drive trash; OneDrive Personal recycle bin)",
         "provider_method": "drive_trash",
     },
     "calendar.cancel": {
@@ -376,6 +376,7 @@ RESTORE_ACTIONS = {
     "gmail.archive": {"label": "Unarchive Gmail message", "method": "gmail_unarchive"},
     "gmail.trash": {"label": "Restore trashed Gmail message", "method": "gmail_untrash"},
     "calendar.cancel": {"label": "Restore cancelled calendar event", "method": "calendar_uncancel"},
+    "drive.trash": {"label": "Restore trashed Drive/OneDrive file", "method": "drive_untrash"},
 }
 
 
