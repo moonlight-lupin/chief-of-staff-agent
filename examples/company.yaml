@@ -74,4 +74,7 @@ integrations:
           - GOOGLEDRIVE_FIND_FILE
           - GOOGLEDRIVE_DOWNLOAD_FILE
         write_safe:
+          - GOOGLEDRIVE_CREATE_FILE_FROM_TEXT
           - GOOGLEDRIVE_UPLOAD_FILE
+          - GOOGLEDRIVE_TRASH_FILE
+          - GOOGLEDRIVE_UNTRASH_FILE
