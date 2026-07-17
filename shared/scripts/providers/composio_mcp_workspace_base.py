@@ -1496,8 +1496,9 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         if self.family == "microsoft":
             path = Path(file_path).expanduser()
             # Text → ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE (name+content[+folder]
-            # over MCP; no Files API). Binary → ONE_DRIVE_ONEDRIVE_UPLOAD_FILE
-            # with FileUploadable staging (project x-api-key) or source_url.
+            # over MCP). Binary → ONE_DRIVE_ONEDRIVE_UPLOAD_FILE with a
+            # FileUploadable staged over MCP via the remote sandbox (no
+            # COMPOSIO_API_KEY) — see _stage_file_uploadable and the CLEANUP note.
             # See https://composio.dev/toolkits/one_drive
             if self._ms_is_text_upload(path):
                 slug = self._slug_for("files_upload")  # CREATE_TEXT_FILE
@@ -1506,7 +1507,7 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 except UnicodeDecodeError as exc:
                     raise RuntimeError(
                         f"file looks text-like but is not valid UTF-8 ({path.name}); "
-                        "rename with a binary extension or provide a public source_url"
+                        "rename it with a binary extension to use the staged upload path"
                     ) from exc
                 args: dict[str, Any] = {"name": path.name, "content": content}
                 if parent_id:

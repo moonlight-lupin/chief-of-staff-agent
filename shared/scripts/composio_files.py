@@ -259,14 +259,29 @@ def _meta_call(mcp_client: Any, tool: str, arguments: dict[str, Any]) -> dict[st
     return data if isinstance(data, Mapping) else {}
 
 
+_RC_MARKER = "COS_RC="
+
+
 def _sandbox_bash(mcp_client: Any, command: str, session_id: str | None) -> dict[str, Any]:
-    args: dict[str, Any] = {"command": command}
+    # Gate on the command's EXIT STATUS, not on any stderr — bash tools may emit
+    # benign warnings to stderr. Append a exit-code sentinel and fail only on a
+    # missing or non-zero code (stderr is surfaced in the error for diagnosis).
+    wrapped = f"{command}\nprintf '{_RC_MARKER}%s\\n' \"$?\""
+    args: dict[str, Any] = {"command": wrapped}
     if session_id:
         args["session_id"] = session_id
     data = _meta_call(mcp_client, "COMPOSIO_REMOTE_BASH_TOOL", args)
-    stderr = str(data.get("stderr") or "")
-    if stderr.strip():
-        raise ComposioFileError(f"sandbox bash stderr: {stderr[:300]}")
+    stdout = str(data.get("stdout") or "")
+    rc: str | None = None
+    for line in stdout.splitlines():
+        if line.startswith(_RC_MARKER):
+            rc = line[len(_RC_MARKER):].strip()
+    if rc != "0":
+        stderr = str(data.get("stderr") or "")
+        detail = (stderr.strip() or stdout.strip() or "no output")[:300]
+        raise ComposioFileError(
+            f"sandbox bash exited with status {rc if rc is not None else '<none>'}: {detail}"
+        )
     return data
 
 

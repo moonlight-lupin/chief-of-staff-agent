@@ -272,6 +272,7 @@ class _FakeSandboxMCP:
             if "staged-reset" in cmd:
                 self._acc = ""
             elif "cat >>" in cmd and "COS_B64_EOF" in cmd:
+                # Heredoc body sits between the delimiter and the RC-sentinel tail.
                 body = cmd.split("<<'COS_B64_EOF'\n", 1)[1].rsplit("\nCOS_B64_EOF", 1)[0]
                 self._acc += body
             elif "base64 -d" in cmd:
@@ -279,6 +280,9 @@ class _FakeSandboxMCP:
                 if self.corrupt:
                     raw += b"\x00"
                 data["stdout"] = "COS_MD5=" + _hashlib.md5(raw).hexdigest()
+            # _sandbox_bash appends a `printf 'COS_RC=%s' "$?"` exit-code sentinel
+            # and gates on it (rc==0), NOT on stderr — emulate a clean exit.
+            data["stdout"] = (data["stdout"] + "\nCOS_RC=0").strip()
             return {"data": data, "successful": True, "error": None}
         if tool == "COMPOSIO_REMOTE_WORKBENCH":
             out = (

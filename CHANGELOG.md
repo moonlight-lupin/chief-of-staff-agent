@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.3.16 — Keyless binary file upload via MCP sandbox staging
+
+### Features
+
+- **Composio binary file upload without `COMPOSIO_API_KEY`.** Google Drive and
+  OneDrive binary uploads (`.pdf`/`.docx`) previously required a project
+  `COMPOSIO_API_KEY` to stage a `FileUploadable` through the Files REST API (the
+  MCP key 401s). New `composio_files.stage_file_uploadable_via_sandbox()` stages
+  the local file into Composio's object store over the **MCP meta-tools**
+  (`COMPOSIO_REMOTE_BASH_TOOL` base64-pipes the bytes into the remote sandbox with
+  an md5 integrity check; `COMPOSIO_REMOTE_WORKBENCH.upload_local_file()` returns
+  the `s3key`), needing **only `COMPOSIO_MCP_KEY`**. The provider's `files_upload`
+  (both families) routes binary through this path; text is unchanged
+  (`GOOGLEDRIVE_CREATE_FILE_FROM_TEXT` / `ONE_DRIVE_ONEDRIVE_CREATE_TEXT_FILE`).
+  The REST stager stays available for keyed setups but is no longer the default.
+- **`files.upload` → True** for `composio`, `composio:mcp`, `composio_microsoft`,
+  `composio_microsoft:mcp`; the `COMPOSIO_API_KEY` `UNSUPPORTED_REASONS` entries
+  are removed. `--verify-writes` now exercises `files_write` instead of skipping
+  it. **Execution-verified 2026-07-17** (only `COMPOSIO_MCP_KEY`): a throwaway
+  `.pdf` uploaded to Google Drive and OneDrive and was trashed (Drive confirmed in
+  Trash).
+
+### Cleanup semantics
+
+- Local temp file (caller-unlinked) and the sandbox working copy (removed in the
+  stager's `finally`; sandbox is session-TTL reclaimed) are cleaned up. The
+  intermediate Composio **S3 staged object** is **access-revoked** (its presigned
+  URL 403s immediately) and **reclaimed on the tool-router session TTL** — there
+  is no MCP delete for it, so it is not purged on demand (an explicit delete would
+  need the Files REST API). Documented in the `files_upload` CLEANUP note.
+
+### Constraints
+
+- Composio upload tools cap `FileUploadable` at 5 MB (the stager rejects larger);
+  base64 inflates the transfer ~1.33× (chunked ~700 KB/round-trip via heredoc,
+  bypassing `MAX_ARG_STRLEN`).
+
 ## v0.3.15 — Google Drive trash, google_api drafts, Outlook email-org
 
 ### Features
