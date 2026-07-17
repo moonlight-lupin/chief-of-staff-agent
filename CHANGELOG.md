@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.19 — OneDrive Business files.untrash (SharePoint recycle bin)
+
+### Features
+
+- **`files.untrash` → True for Microsoft providers.** Soft-delete restore now
+  covers OneDrive for Business, not only Personal Graph restore.
+  - **`m365`**: `files_trash` captures name + SharePoint recycle-bin GUID as
+    `restore_target`; `files_untrash` tries Graph Personal restore then falls
+    back to SharePoint REST `RecycleBin/RestoreByIds` (host-scoped SPO token;
+    requires SharePoint app permission `Sites.ReadWrite.All`).
+  - **`composio_microsoft`**: Personal via `ONE_DRIVE_RESTORE_DRIVE_ITEM`;
+    Business via `SHARE_POINT_LIST_RECYCLE_BIN_ITEMS` /
+    `SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM` (SharePoint toolkit must be
+    connected so trash can persist `restore_target`).
+- **`delete_actions.py restore`** already prefers `restore_target`, so executed
+  Business trash actions restore by recycle-bin GUID automatically.
+
 ## v0.3.18 — Ship the Google-first beta daily loop
 
 ### Features

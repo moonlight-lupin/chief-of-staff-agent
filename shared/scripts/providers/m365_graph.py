@@ -278,6 +278,7 @@ class M365GraphClient(WorkspaceClient):
         self.token_cache_path = str(tcp) if tcp else ""
 
         self._token: str | None = None
+        self._spo_tokens: dict[str, str] = {}
         self._msal_app = None
         # Injectable so retry/backoff tests don't actually block. Overridden in
         # tests with a fake that just records the requested wait.
@@ -1155,25 +1156,260 @@ class M365GraphClient(WorkspaceClient):
 
     @guarded("files.trash", target_arg="file_id", audit_provider="m365", audit_tool="graph_api")
     def files_trash(self, file_id: str) -> dict[str, Any]:
+        """Soft-delete to the OneDrive recycle bin.
+
+        Captures the item name before delete and, when possible, resolves the
+        SharePoint recycle-bin GUID as ``restore_target`` so Business restores
+        (which cannot use Graph ``driveItem/restore``) still work through
+        ``files_untrash`` / ``delete_actions.py restore``.
+        """
+        name = ""
+        try:
+            meta = self._request(
+                "GET", f"{self._user_base()}/drive/items/{file_id}",
+                params={"$select": "id,name"},
+            )
+            if isinstance(meta, Mapping):
+                name = str(meta.get("name") or "")
+        except Exception:
+            name = ""
         self._request("DELETE", f"{self._user_base()}/drive/items/{file_id}")
-        return {"id": file_id, "reversible": True}  # goes to recycle bin
+        out: dict[str, Any] = {"id": file_id, "reversible": True}
+        if name:
+            out["name"] = name
+        recycle_id = self._resolve_recycle_bin_id(leaf_name=name) if name else ""
+        if recycle_id:
+            out["restore_target"] = recycle_id
+        return out
 
     @guarded("files.untrash", target_arg="file_id", audit_provider="m365", audit_tool="graph_api")
     def files_untrash(self, file_id: str) -> dict[str, Any]:
-        """Restore a recycled OneDrive item (Personal OneDrive Graph restore).
+        """Restore a recycled OneDrive item.
 
-        Capability stays False for ``m365`` until Business/SharePoint restore is
-        wired; this method remains for experiments / a future capability flip.
+        Paths:
+          1. If ``file_id`` is a recycle-bin GUID → SharePoint REST RestoreByIds
+             (OneDrive for Business / work accounts).
+          2. Else try Graph ``POST …/drive/items/{id}/restore`` (Personal only).
+          3. On Personal-only / not-found errors, fall back to SharePoint REST
+             recycle-bin restore (lookup by GUID or recent LeafName match).
         """
+        target = (file_id or "").strip()
+        if not target:
+            raise RuntimeError("files.untrash requires a file_id or recycle-bin GUID")
+
+        if _is_guid(target):
+            return self._restore_via_sharepoint_recycle_bin(target)
+
+        try:
+            data = self._request(
+                "POST", f"{self._user_base()}/drive/items/{target}/restore",
+                json_body={},
+            )
+            out = dict(data) if isinstance(data, dict) else {}
+            out.setdefault("id", target)
+            out["reversible"] = True
+            out["trashed"] = False
+            out["restore_path"] = "graph_personal"
+            return out
+        except RuntimeError as exc:
+            if not _is_personal_restore_unsupported(exc):
+                raise
+            # Business / work account — resolve recycle-bin GUID then restore.
+            recycle_id = self._resolve_recycle_bin_id(drive_item_id=target)
+            if not recycle_id:
+                raise RuntimeError(
+                    f"Graph driveItem restore is Personal-only and no SharePoint "
+                    f"recycle-bin item matched id {target!r}. Trash via files_trash "
+                    f"first (persists restore_target), or pass the recycle-bin GUID."
+                ) from exc
+            result = self._restore_via_sharepoint_recycle_bin(recycle_id)
+            result["drive_item_id"] = target
+            return result
+
+    # ── OneDrive Business recycle-bin helpers (SharePoint REST) ────────
+
+    def _drive_web_url(self) -> str:
         data = self._request(
-            "POST", f"{self._user_base()}/drive/items/{file_id}/restore",
-            json={},
+            "GET", f"{self._user_base()}/drive",
+            params={"$select": "id,webUrl"},
         )
-        out = dict(data) if isinstance(data, dict) else {}
-        out.setdefault("id", file_id)
-        out["reversible"] = True
-        out["trashed"] = False
-        return out
+        if not isinstance(data, Mapping):
+            raise RuntimeError("drive metadata response was not a mapping")
+        web = str(data.get("webUrl") or "").strip()
+        if not web:
+            raise RuntimeError("drive.webUrl missing — cannot resolve SharePoint site")
+        return web
+
+    def _personal_site_base(self, web_url: str) -> str:
+        """Derive the SharePoint site base from a OneDrive drive webUrl."""
+        parsed = urlparse(web_url)
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0].lower() == "personal":
+            base_path = "/" + "/".join(parts[:2])
+            return f"{parsed.scheme}://{parsed.netloc}{base_path}"
+        if parts:
+            base_path = "/" + "/".join(parts[:-1])
+            return f"{parsed.scheme}://{parsed.netloc}{base_path}"
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    def _get_spo_token(self, host: str) -> str:
+        """Acquire a SharePoint-host token (audience = https://{host}/.default).
+
+        Graph tokens cannot call ``*_api/web/recyclebin`` on ``*.sharepoint.com``.
+        App registrations need SharePoint application permission
+        ``Sites.ReadWrite.All`` (or equivalent) in addition to Graph Files scopes.
+        """
+        host = (host or "").strip().lower()
+        if not host:
+            raise RuntimeError("SharePoint host is empty")
+        cached = self._spo_tokens.get(host)
+        if cached:
+            return cached
+        try:
+            import msal  # noqa: F401
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "Microsoft 365 provider requires the 'msal' package. "
+                "Install it with: pip install msal"
+            ) from exc
+        import os
+
+        authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+        scope = [f"https://{host}/.default"]
+        if self.auth_mode == "device_code":
+            # Device-code tokens are Graph-scoped; re-run device flow for SPO.
+            app = msal.PublicClientApplication(self.client_id, authority=authority)
+            flow = app.initiate_device_flow(scopes=scope)
+            if "user_code" not in flow:
+                raise RuntimeError(
+                    f"Failed to start SharePoint device flow: "
+                    f"{flow.get('error_description', flow)}"
+                )
+            print(
+                flow.get("message", "Complete SharePoint device sign-in in your browser."),
+                file=sys.stderr,
+            )
+            result = app.acquire_token_by_device_flow(flow)
+        else:
+            secret = os.getenv(self.client_secret_env, "")
+            if not secret:
+                raise RuntimeError(
+                    f"m365 client_credentials auth requires the client secret in "
+                    f"env var {self.client_secret_env}"
+                )
+            if not self.tenant_id or not self.client_id:
+                raise RuntimeError("m365 config requires tenant_id and client_id")
+            app = msal.ConfidentialClientApplication(
+                self.client_id, authority=authority, client_credential=secret,
+            )
+            result = app.acquire_token_for_client(scopes=scope)
+        token = result.get("access_token") if isinstance(result, Mapping) else None
+        if not token:
+            err = result.get("error_description") if isinstance(result, Mapping) else result
+            raise RuntimeError(
+                f"Failed to acquire SharePoint token for {host}: {err}. "
+                "Grant the app SharePoint Sites.ReadWrite.All (application) "
+                "and admin-consent it for OneDrive Business recycle-bin restore."
+            )
+        self._spo_tokens[host] = str(token)
+        return str(token)
+
+    def _spo_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        json_body: Any | None = None,
+        timeout: int = 45,
+    ) -> Any:
+        """SharePoint REST call with a host-scoped bearer token."""
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        token = self._get_spo_token(host)
+        hdrs = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json;odata=nometadata",
+            "Content-Type": "application/json;odata=nometadata",
+        }
+        resp = self._send(
+            method, url, json=json_body, headers=hdrs, timeout=timeout,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"SharePoint REST {resp.status_code} on {parsed.path}: "
+                f"{(resp.text or '')[:500]}"
+            )
+        if not resp.content:
+            return {}
+        try:
+            return resp.json()
+        except Exception:
+            return {"raw": resp.text}
+
+    def _resolve_recycle_bin_id(
+        self,
+        *,
+        leaf_name: str = "",
+        drive_item_id: str = "",
+    ) -> str:
+        """Find a first-stage recycle-bin GUID by LeafName (preferred) or id hint."""
+        try:
+            web_url = self._drive_web_url()
+            site = self._personal_site_base(web_url)
+        except Exception:
+            return ""
+        list_url = (
+            f"{site}/_api/web/RecycleBin"
+            f"?$select=Id,Title,LeafName,DirName,ItemType,DeletedDate"
+            f"&$orderby=DeletedDate desc&$top=50"
+        )
+        # Recycle-bin indexing can lag a moment after DELETE.
+        data: Any = {}
+        for attempt in range(3):
+            try:
+                data = self._spo_request("GET", list_url)
+            except Exception:
+                if attempt == 2:
+                    return ""
+                self._sleep(0.4 * (attempt + 1))
+                continue
+            items = []
+            if isinstance(data, Mapping):
+                value = data.get("value")
+                if isinstance(value, list):
+                    items = value
+            if items or attempt == 2:
+                break
+            self._sleep(0.4 * (attempt + 1))
+        leaf = (leaf_name or "").strip().lower()
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            item_leaf = str(item.get("LeafName") or item.get("Title") or "").strip()
+            item_id = str(item.get("Id") or "").strip()
+            if leaf and item_leaf.lower() == leaf and _is_guid(item_id):
+                return item_id
+        # No name match — only accept an explicit GUID drive_item_id (rare).
+        if drive_item_id and _is_guid(drive_item_id):
+            return drive_item_id.strip()
+        return ""
+
+    def _restore_via_sharepoint_recycle_bin(self, recycle_bin_id: str) -> dict[str, Any]:
+        web_url = self._drive_web_url()
+        site = self._personal_site_base(web_url)
+        # Prefer site-collection RestoreByIds (works for OneDrive personal sites).
+        restore_url = f"{site}/_api/site/RecycleBin/RestoreByIds"
+        self._spo_request(
+            "POST", restore_url,
+            json_body={"ids": [recycle_bin_id]},
+        )
+        return {
+            "id": recycle_bin_id,
+            "restore_target": recycle_bin_id,
+            "reversible": True,
+            "trashed": False,
+            "restore_path": "sharepoint_recycle_bin",
+        }
 
     # ── Health ────────────────────────────────────────────────────────
 
@@ -1183,3 +1419,30 @@ class M365GraphClient(WorkspaceClient):
             return True
         except Exception:
             return False
+
+
+def _is_guid(value: str) -> bool:
+    """True for SharePoint recycle-bin GUIDs (not OneDrive Business 01… ids)."""
+    import re
+    return bool(
+        re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            (value or "").strip(),
+        )
+    )
+
+
+def _is_personal_restore_unsupported(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    needles = (
+        "personal",
+        "not supported",
+        "notsupported",
+        "badrequest",
+        "400",
+        "404",
+        "itemnotfound",
+        "not found",
+    )
+    return any(n in msg for n in needles)

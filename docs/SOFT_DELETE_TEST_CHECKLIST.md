@@ -73,11 +73,14 @@ python skills/document-preparer/scripts/delete_actions.py --config <CONFIG> rest
 Expected: `success: true`, `action: "calendar.uncancel"`
 Verify in Google Calendar: event status should be back to confirmed.
 
-## Section D: Drive Trash + Restore (Google)
+## Section D: Drive / OneDrive Trash + Restore
 
-Provider: `google_api` or Composio Google (`composio` / `composio:mcp`).
-OneDrive restore (`composio_microsoft` / `m365`) stays capability-False
-(Personal-only API) until Business/SharePoint is live-verified.
+Provider: `google_api`, Composio Google, Composio Microsoft, or `m365`.
+
+OneDrive **Business** restore needs the SharePoint recycle-bin path:
+- `m365`: SharePoint app permission `Sites.ReadWrite.All`
+- `composio_microsoft`: SharePoint toolkit connected (so `files_trash` can
+  persist `restore_target`)
 
 ### D1. Prepare
 ```bash
@@ -92,9 +95,12 @@ python skills/document-preparer/scripts/delete_actions.py --config <CONFIG> prep
 python skills/document-preparer/scripts/delete_actions.py --config <CONFIG> restore \
   --action-id <id>
 ```
-Expected: `success: true`, restore via `drive_untrash` / `files_untrash`
-(`google_api`: Drive REST `trashed=False`; Composio Google: `GOOGLEDRIVE_UNTRASH_FILE`).
-Verify in Drive: file is no longer in Trash.
+Expected: `success: true`, restore via `drive_untrash` / `files_untrash`.
+- Google: Drive REST `trashed=False` / `GOOGLEDRIVE_UNTRASH_FILE`
+- OneDrive Personal: Graph / `ONE_DRIVE_RESTORE_DRIVE_ITEM`
+- OneDrive Business: SharePoint recycle-bin GUID (`restore_target` from trash)
+
+Verify in Drive/OneDrive: file is no longer in Trash / Recycle bin.
 
 ## Section E: Expiry and Failed Actions
 

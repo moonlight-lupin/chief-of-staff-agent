@@ -73,14 +73,12 @@ class TestCapabilities:
             "files.upload", "drive.upload",
             "files.download", "drive.download",
             "files.trash", "drive.trash",
+            "files.untrash", "drive.untrash",
         ):
             assert caps[action] is True, f"{action} should be live-verified True"
 
         # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
-        # OneDrive restore is Personal-only — method wired, capability stays False.
-        assert caps["files.untrash"] is False
-        assert caps["drive.untrash"] is False
 
     def test_supports(self):
         from workspace_capabilities import supports
@@ -88,7 +86,8 @@ class TestCapabilities:
         assert supports("composio", "gmail.send") is True
         assert supports("composio", "drive.upload") is True  # binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert supports("composio", "files.untrash") is True
-        assert supports("composio_microsoft", "files.untrash") is False
+        assert supports("composio_microsoft", "files.untrash") is True
+        assert supports("m365", "files.untrash") is True
         assert supports("composio", "calendar.cancel") is False
 
     def test_unsupported_actions(self):

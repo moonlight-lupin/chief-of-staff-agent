@@ -11,7 +11,8 @@ Use this checklist before going live with the Chief-of-Staff daily operating loo
   - [ ] `queries.yaml` present (project sibling or `shared/config/queries.yaml`)
 - [ ] **Composio Google** — MCP key + connected Gmail/Calendar/Drive
 - [ ] **Composio Microsoft / native m365** — mail/calendar/files OK;
-      OneDrive `files.untrash` and live Outlook email-org E2E deferred without Entra
+      OneDrive `files.untrash` ready (Business needs SharePoint toolkit /
+      `Sites.ReadWrite.All`); live Outlook email-org E2E deferred without Entra
 
 ## Pre-flight
 

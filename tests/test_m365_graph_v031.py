@@ -370,6 +370,80 @@ class TestRestoreTarget:
         assert result["data"]["restore_target"] == "orig-3"
 
 
+# ── OneDrive files.untrash (Business SharePoint recycle bin) ───────────
+
+class TestFilesUntrash:
+    def test_files_trash_persists_recycle_bin_restore_target(self, client, approve_env):
+        guid = "5d625d33-338c-4a77-a98a-3e287116440c"
+
+        def _req(method, path, **kwargs):
+            if method == "GET" and path.endswith("/drive/items/file-1"):
+                return {"id": "file-1", "name": "notes.txt"}
+            if method == "DELETE":
+                return {}
+            raise AssertionError(f"unexpected Graph call {method} {path}")
+
+        client._sleep = lambda _s: None
+        with patch.object(client, "_request", side_effect=_req), \
+             patch.object(client, "_drive_web_url",
+                          return_value="https://contoso-my.sharepoint.com/personal/u_contoso_com/Documents"), \
+             patch.object(client, "_spo_request", return_value={
+                 "value": [{"Id": guid, "LeafName": "notes.txt", "Title": "notes.txt"}],
+             }) as spo:
+            result = client.files_trash("file-1")
+        assert result["success"] is True
+        assert result["data"]["name"] == "notes.txt"
+        assert result["data"]["restore_target"] == guid
+        assert spo.called
+
+    def test_files_untrash_guid_uses_sharepoint_restore(self, client, approve_env):
+        guid = "5d625d33-338c-4a77-a98a-3e287116440c"
+        with patch.object(client, "_drive_web_url",
+                          return_value="https://contoso-my.sharepoint.com/personal/u_contoso_com/Documents"), \
+             patch.object(client, "_spo_request", return_value={}) as spo:
+            result = client.files_untrash(guid)
+        assert result["success"] is True
+        assert result["data"]["restore_path"] == "sharepoint_recycle_bin"
+        assert spo.call_args.args[0] == "POST"
+        assert "RestoreByIds" in spo.call_args.args[1]
+        assert spo.call_args.kwargs["json_body"] == {"ids": [guid]}
+
+    def test_files_untrash_personal_graph_path(self, client, approve_env):
+        with patch.object(client, "_request", return_value={"id": "D464!1", "name": "a.txt"}) as req:
+            result = client.files_untrash("D464!1")
+        assert result["success"] is True
+        assert result["data"]["restore_path"] == "graph_personal"
+        assert req.call_args.args[0] == "POST"
+        assert req.call_args.args[1].endswith("/drive/items/D464!1/restore")
+
+    def test_files_untrash_business_fallback_after_personal_reject(self, client, approve_env):
+        guid = "11111111-2222-3333-4444-555555555555"
+
+        def _req(method, path, **kwargs):
+            if method == "POST" and path.endswith("/restore"):
+                raise RuntimeError("Graph API 400: not supported for work accounts")
+            raise AssertionError(f"unexpected {method} {path}")
+
+        client._sleep = lambda _s: None
+        with patch.object(client, "_request", side_effect=_req), \
+             patch.object(client, "_resolve_recycle_bin_id", return_value=guid), \
+             patch.object(client, "_restore_via_sharepoint_recycle_bin",
+                          return_value={
+                              "id": guid, "restore_target": guid, "reversible": True,
+                              "trashed": False, "restore_path": "sharepoint_recycle_bin",
+                          }) as restore:
+            result = client.files_untrash("01BUSINESSITEMIDXXXX")
+        assert result["success"] is True
+        assert result["data"]["restore_path"] == "sharepoint_recycle_bin"
+        restore.assert_called_once_with(guid)
+
+    def test_personal_site_base_from_drive_web_url(self, client):
+        base = client._personal_site_base(
+            "https://contoso-my.sharepoint.com/personal/user_contoso_com/Documents"
+        )
+        assert base == "https://contoso-my.sharepoint.com/personal/user_contoso_com"
+
+
 # ── msal-missing ───────────────────────────────────────────────────────
 
 class TestMsalMissing:

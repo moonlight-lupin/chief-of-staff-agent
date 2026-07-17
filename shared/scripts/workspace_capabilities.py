@@ -164,10 +164,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch) — execution-verified 2026-07-16
         "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin — execution-verified 2026-07-16
-        # files.untrash: method wired (ONE_DRIVE_RESTORE_DRIVE_ITEM) but kept False —
-        # Graph/Composio restore is Personal OneDrive-only; Business/SharePoint needs a
-        # different path and has not been live-verified.
-        "files.untrash": False,
+        # files.untrash: Personal → ONE_DRIVE_RESTORE_DRIVE_ITEM; Business →
+        # SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM (files_trash persists restore_target
+        # when the SharePoint toolkit is connected).
+        "files.untrash": True,
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -193,7 +193,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,
-        "files.untrash": False,     # Personal OneDrive-only restore — see UNSUPPORTED_REASONS
+        "files.untrash": True,      # Personal Graph restore + SharePoint recycle-bin fallback
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -226,9 +226,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # PUT /drive/root:/{name}:/content (<4MB)
         "files.download": True,     # GET /drive/items/{id}/content
         "files.trash": True,        # DELETE /drive/items/{id} (recycle bin)
-        # files.untrash: Graph POST …/restore is Personal OneDrive-only; keep False
-        # until Business/SharePoint path is wired and live-verified.
-        "files.untrash": False,
+        # files.untrash: Personal Graph restore; Business via SharePoint REST
+        # RecycleBin/RestoreByIds (needs SharePoint Sites.ReadWrite.All app perm).
+        "files.untrash": True,
     },
     # Claude-native agent provider — actions are performed by the agent/tools,
     # not by script-callable provider methods, so every script-callable action
@@ -275,12 +275,6 @@ WORKFLOW_REQUIREMENTS: dict[str, list[str]] = {
 
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
-_ONEDRIVE_UNTRASH_REASON = (
-    "OneDrive item restore (ONE_DRIVE_RESTORE_DRIVE_ITEM / Graph POST …/restore) is "
-    "Personal OneDrive-only; Business/SharePoint restore is not wired, so files.untrash "
-    "stays unsupported until that path is live-verified"
-)
-
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                      "(no restore-path parity with the soft-delete promise)",
@@ -290,12 +284,6 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "
                                  "cancel the event via Outlook, or delete and recreate it",
-    ("composio_microsoft", "files.untrash"): _ONEDRIVE_UNTRASH_REASON,
-    ("composio_microsoft", "drive.untrash"): _ONEDRIVE_UNTRASH_REASON,
-    ("composio_microsoft:mcp", "files.untrash"): _ONEDRIVE_UNTRASH_REASON,
-    ("composio_microsoft:mcp", "drive.untrash"): _ONEDRIVE_UNTRASH_REASON,
-    ("m365", "files.untrash"): _ONEDRIVE_UNTRASH_REASON,
-    ("m365", "drive.untrash"): _ONEDRIVE_UNTRASH_REASON,
 }
 
 # Provider recommendations for each action/workflow.
@@ -307,8 +295,8 @@ PROVIDER_RECOMMENDATIONS: dict[str, str] = {
     "calendar.update": "google_api or composio",
     "drive.upload": "google_api, composio, or composio_microsoft",
     "drive.download": "google_api, composio, or composio_microsoft",
-    "drive.untrash": "google_api or composio",
-    "files.untrash": "google_api or composio",
+    "drive.untrash": "google_api, composio, composio_microsoft, or m365",
+    "files.untrash": "google_api, composio, composio_microsoft, or m365",
     "meeting.gather": "google_api or composio",
     "weekly.collect": "google_api or composio",
 }

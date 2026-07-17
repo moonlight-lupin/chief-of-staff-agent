@@ -86,6 +86,9 @@ class TestFamilySlugs:
         assert ms["mail_move"] == "OUTLOOK_MOVE_MESSAGE"
         assert ms["files_trash"] == "ONE_DRIVE_DELETE_ITEM"
         assert ms["files_untrash"] == "ONE_DRIVE_RESTORE_DRIVE_ITEM"
+        assert ms["files_get"] == "ONE_DRIVE_GET_ITEM"
+        assert ms["files_recycle_list"] == "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS"
+        assert ms["files_recycle_restore"] == "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM"
         assert "mail_move" not in FAMILY_SLUGS["google"]
         assert FAMILY_SLUGS["google"]["files_trash"] == "GOOGLEDRIVE_TRASH_FILE"
         assert FAMILY_SLUGS["google"]["files_untrash"] == "GOOGLEDRIVE_UNTRASH_FILE"
@@ -211,7 +214,7 @@ class TestFilesTrash:
         assert res["data"] == {"id": "f1", "reversible": True}
 
     def test_files_untrash_uses_restore_slug(self, mcp_key, tmp_project):
-        """Method is wired; capability stays False (Personal-only)."""
+        """Personal path uses ONE_DRIVE_RESTORE_DRIVE_ITEM."""
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         mock = MagicMock()
@@ -227,6 +230,51 @@ class TestFilesTrash:
         assert res["action"] == "files.untrash"
         assert res["data"]["id"] == "file-1"
         assert res["data"]["trashed"] is False
+        assert res["data"]["restore_path"] == "onedrive_personal"
+
+    def test_files_untrash_guid_uses_sharepoint_recycle_bin(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
+        client._mcp_client = mock
+        guid = "5d625d33-338c-4a77-a98a-3e287116440c"
+
+        res = client.files_untrash(guid)
+
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM"
+        assert call["arguments"] == {"recyclebinitemid": guid}
+        assert res["success"] is True
+        assert res["data"]["restore_path"] == "sharepoint_recycle_bin"
+
+    def test_files_trash_persists_recycle_bin_restore_target(self, mcp_key, tmp_project):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        def _tool_response(name, payload):
+            slug = payload["tools"][0]["tool_slug"]
+            if slug == "ONE_DRIVE_GET_ITEM":
+                return _ok({"name": "notes.txt", "id": "file-1"})
+            if slug == "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS":
+                return _ok({"value": [
+                    {"Id": guid, "LeafName": "notes.txt", "Title": "notes.txt"},
+                ]})
+            return _ok({})
+
+        mock = MagicMock()
+        mock.call_tool.side_effect = _tool_response
+        client._mcp_client = mock
+
+        res = client.files_trash("file-1")
+        assert res["success"] is True
+        assert res["data"]["name"] == "notes.txt"
+        assert res["data"]["restore_target"] == guid
+        slugs = [c[0][1]["tools"][0]["tool_slug"] for c in mock.call_tool.call_args_list]
+        assert "ONE_DRIVE_GET_ITEM" in slugs
+        assert "ONE_DRIVE_DELETE_ITEM" in slugs
+        assert "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS" in slugs
 
 
 class TestCapabilitiesPhase1And2:
@@ -249,9 +297,8 @@ class TestCapabilitiesPhase1And2:
         assert caps["files.upload"] is True    # text + binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert caps["files.download"] is True
         assert supports("composio_microsoft:mcp", "drive.trash") is True
-        # Personal OneDrive-only restore — method wired, capability False (v0.3.17).
-        assert caps["files.untrash"] is False
-        assert supports("composio_microsoft:mcp", "drive.untrash") is False
+        assert caps["files.untrash"] is True
+        assert supports("composio_microsoft:mcp", "drive.untrash") is True
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

@@ -64,7 +64,7 @@ SOFT_DELETE_ACTIONS = {
     "drive.trash": {
         "label": "Move Drive file to trash",
         "reversible": True,
-        "restore_hint": "Restore via files_untrash / drive_untrash (Google Drive trash; OneDrive Personal recycle bin)",
+        "restore_hint": "Restore via files_untrash / drive_untrash (Google Drive trash; OneDrive Personal Graph or Business SharePoint recycle-bin GUID)",
         "provider_method": "drive_trash",
     },
     "calendar.cancel": {
