@@ -171,8 +171,9 @@ python shared/scripts/bootstrap.py --company "Your Company" --jurisdiction SG \
   --workspace-provider composio --composio-family microsoft \
   --composio-user-id your-stable-user-id
 ```
-This writes `family: microsoft` and `toolkits: [outlook, one_drive]` under
-`integrations.workspace`. (You can also set these by hand — the config below.)
+This writes `family: microsoft` and
+`toolkits: [outlook, one_drive, share_point]` under `integrations.workspace`.
+(You can also set these by hand — the config below.)
 
 2. Config (`shared/config/company.yaml`):
 ```yaml
@@ -185,6 +186,10 @@ integrations:
     toolkits:
       - outlook
       - one_drive
+      - share_point            # required for OneDrive Business files.untrash
+    # Optional: pin the OneDrive personal site for recycle-bin restore
+    # (derived from item webUrl when unset), e.g.:
+    # sharepoint_site_name: "/personal/user_contoso_com"
     mcp:
       endpoint: "https://connect.composio.dev/mcp"
       key_env: "COMPOSIO_MCP_KEY"
@@ -193,11 +198,16 @@ integrations:
     #   mail_search: OUTLOOK_OUTLOOK_LIST_MESSAGES
 ```
 
-3. Connect Outlook and OneDrive (open each printed Connect Link in your browser):
+3. Connect Outlook, OneDrive, and SharePoint (open each printed Connect Link):
 ```bash
 python shared/scripts/connect_workspace.py --provider composio --connect outlook
 python shared/scripts/connect_workspace.py --provider composio --connect one_drive
+python shared/scripts/connect_workspace.py --provider composio --connect share_point
 ```
+When connecting SharePoint, if the Connect UI asks for a Subsite, prefer your
+OneDrive personal path (e.g. `/personal/user_contoso_com` from your OneDrive
+URL). That scopes recycle-bin list/restore to your drive instead of the tenant
+root site.
 
 4. Verify / readiness (read verification on a live connection):
 ```bash

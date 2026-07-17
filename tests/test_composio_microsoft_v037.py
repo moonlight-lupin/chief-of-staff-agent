@@ -724,7 +724,7 @@ class TestConnectFlow:
     def test_connect_accepts_outlook_and_one_drive(self, mcp_key, tmp_project):
         import connect_workspace as cw
         cfg = _ms_workspace()
-        for tk in ("outlook", "one_drive"):
+        for tk in ("outlook", "one_drive", "share_point"):
             mock_client = MagicMock()
             mock_client.endpoint = "https://connect.composio.dev/mcp"
             mock_client._manage_connections.return_value = {
@@ -747,6 +747,7 @@ class TestConnectFlow:
         out = buf.getvalue()
         assert "--connect outlook" in out
         assert "--connect one_drive" in out
+        assert "--connect share_point" in out
         assert "family: microsoft" in out
 
     def test_capabilities_command_shows_microsoft_provider(self):
@@ -768,13 +769,14 @@ class TestConnectFlow:
         help_text = cw.build_parser().format_help()
         assert "outlook" in help_text
         assert "one_drive" in help_text
+        assert "share_point" in help_text
 
     def test_debug_tool_accepts_microsoft_toolkits(self):
         import io
         from contextlib import redirect_stdout
         import connect_workspace as cw
 
-        for tk in ("outlook", "one_drive", "onedrive", "outlook_calendar"):
+        for tk in ("outlook", "one_drive", "onedrive", "outlook_calendar", "share_point"):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 rc = cw.cmd_composio_debug_tool(_ms_workspace(), tk)
@@ -818,12 +820,13 @@ class TestBootstrapMicrosoftFamily:
         ws = overlay["integrations"]["workspace"]
         assert ws["provider"] == "composio"
         assert ws["family"] == "microsoft"
-        assert ws["toolkits"] == ["outlook", "one_drive"]
+        assert ws["toolkits"] == ["outlook", "one_drive", "share_point"]
         assert ws["user_id"] == "acme-alicia"
         assert req == ["COMPOSIO_MCP_KEY"]
         joined = " ".join(nxt)
         assert "--connect outlook" in joined
         assert "--connect one_drive" in joined
+        assert "--connect share_point" in joined
         # No secret value written anywhere in the overlay.
         assert "test-key" not in str(overlay)
 
@@ -854,6 +857,7 @@ class TestBootstrapMicrosoftFamily:
         out = capsys.readouterr().out
         assert "--connect outlook" in out
         assert "--connect one_drive" in out
+        assert "--connect share_point" in out
 
 
 # ── verify smoke with a fake microsoft-family client ─────────────────────────

@@ -78,13 +78,10 @@ class TestCapabilities:
 
         # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
-        # OneDrive restore is wired (Personal Graph + Business SharePoint recycle
-        # bin) but stays False: a 2026-07-17 live probe on a real OneDrive-for-
-        # Business account showed Personal Graph restore returns "Operation not
-        # supported" and the SharePoint fallback needs a connected SharePoint
-        # toolkit / Sites.ReadWrite.All — no live run has restored a file yet.
-        assert caps["files.untrash"] is False
-        assert caps["drive.untrash"] is False
+        # OneDrive restore (v0.3.20): Personal Graph + Business SharePoint
+        # recycle bin with personal-site site_name scoping.
+        assert caps["files.untrash"] is True
+        assert caps["drive.untrash"] is True
 
     def test_supports(self):
         from workspace_capabilities import supports
@@ -92,7 +89,7 @@ class TestCapabilities:
         assert supports("composio", "gmail.send") is True
         assert supports("composio", "drive.upload") is True  # binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert supports("composio", "files.untrash") is True
-        assert supports("composio_microsoft", "files.untrash") is False
+        assert supports("composio_microsoft", "files.untrash") is True
         assert supports("m365", "files.untrash") is False
         assert supports("composio", "calendar.cancel") is False
 

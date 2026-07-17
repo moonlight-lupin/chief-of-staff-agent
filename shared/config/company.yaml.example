@@ -202,7 +202,9 @@ integrations:
       - googledrive
     # For a Composio Microsoft 365 connection, use instead:
     #   family: microsoft
-    #   toolkits: [outlook, one_drive]
+    #   toolkits: [outlook, one_drive, share_point]
+    #   # optional — OneDrive Business recycle-bin scope (auto from webUrl):
+    #   sharepoint_site_name: "/personal/user_contoso_com"
     #
     # Optional per-operation Composio tool-slug overrides (provider: composio).
     # Each operation has a built-in default per family (see

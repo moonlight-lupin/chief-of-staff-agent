@@ -12,7 +12,12 @@ from typing import Any, Mapping, Sequence
 VALID_FAMILIES = ("google", "microsoft")
 
 # Toolkit names that imply the microsoft family when family is not set explicitly.
-MICROSOFT_TOOLKITS = frozenset({"outlook", "one_drive", "onedrive"})
+# share_point is optional but required for OneDrive-for-Business files.untrash
+# (SharePoint recycle-bin restore); including it must not flip family away from
+# microsoft when family is inferred from toolkits.
+MICROSOFT_TOOLKITS = frozenset({
+    "outlook", "one_drive", "onedrive", "share_point", "sharepoint",
+})
 
 # Toolkit names that imply the google family (used for mismatch warnings).
 GOOGLE_TOOLKITS = frozenset({

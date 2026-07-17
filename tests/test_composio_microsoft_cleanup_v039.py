@@ -234,7 +234,9 @@ class TestFilesTrash:
 
     def test_files_untrash_guid_uses_sharepoint_recycle_bin(self, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
-        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        client = ComposioMCPWorkspaceClient(_ms_workspace(
+            sharepoint_site_name="/personal/user_contoso_com",
+        ))
         mock = MagicMock()
         mock.call_tool.return_value = _ok({})
         client._mcp_client = mock
@@ -244,7 +246,10 @@ class TestFilesTrash:
 
         call = mock.call_tool.call_args[0][1]["tools"][0]
         assert call["tool_slug"] == "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM"
-        assert call["arguments"] == {"recyclebinitemid": guid}
+        assert call["arguments"] == {
+            "recyclebinitemid": guid,
+            "site_name": "/personal/user_contoso_com",
+        }
         assert res["success"] is True
         assert res["data"]["restore_path"] == "sharepoint_recycle_bin"
 
@@ -252,12 +257,18 @@ class TestFilesTrash:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
         client = ComposioMCPWorkspaceClient(_ms_workspace())
         guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        web = (
+            "https://contoso-my.sharepoint.com/personal/user_contoso_com/"
+            "Documents/notes.txt"
+        )
 
         def _tool_response(name, payload):
             slug = payload["tools"][0]["tool_slug"]
+            args = payload["tools"][0]["arguments"]
             if slug == "ONE_DRIVE_GET_ITEM":
-                return _ok({"name": "notes.txt", "id": "file-1"})
+                return _ok({"name": "notes.txt", "id": "file-1", "webUrl": web})
             if slug == "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS":
+                assert args.get("site_name") == "/personal/user_contoso_com"
                 return _ok({"value": [
                     {"Id": guid, "LeafName": "notes.txt", "Title": "notes.txt"},
                 ]})
@@ -267,14 +278,79 @@ class TestFilesTrash:
         mock.call_tool.side_effect = _tool_response
         client._mcp_client = mock
 
-        res = client.files_trash("file-1")
+        with patch("providers.composio_mcp_workspace_base.time.sleep"):
+            res = client.files_trash("file-1")
         assert res["success"] is True
         assert res["data"]["name"] == "notes.txt"
         assert res["data"]["restore_target"] == guid
+        assert client._ms_last_trashed_name == "notes.txt"
         slugs = [c[0][1]["tools"][0]["tool_slug"] for c in mock.call_tool.call_args_list]
         assert "ONE_DRIVE_GET_ITEM" in slugs
         assert "ONE_DRIVE_DELETE_ITEM" in slugs
         assert "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS" in slugs
+
+    def test_files_untrash_business_falls_back_to_sharepoint(self, mcp_key, tmp_project):
+        """Personal Graph failure must fall back to SharePoint recycle restore."""
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(_ms_workspace(
+            sharepoint_site_name="/personal/user_contoso_com",
+        ))
+        guid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        client._ms_last_trashed_name = "notes.txt"
+
+        def _tool_response(name, payload):
+            slug = payload["tools"][0]["tool_slug"]
+            args = payload["tools"][0]["arguments"]
+            if slug == "ONE_DRIVE_RESTORE_DRIVE_ITEM":
+                return {
+                    "data": {
+                        "results": [{
+                            "response": {
+                                "successful": False,
+                                "error": "Operation not supported",
+                                "data": {},
+                            }
+                        }]
+                    }
+                }
+            if slug == "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS":
+                assert args.get("site_name") == "/personal/user_contoso_com"
+                return _ok({"value": [
+                    {"Id": guid, "LeafName": "notes.txt"},
+                ]})
+            if slug == "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM":
+                assert args == {
+                    "recyclebinitemid": guid,
+                    "site_name": "/personal/user_contoso_com",
+                }
+                return _ok({})
+            return _ok({})
+
+        mock = MagicMock()
+        mock.call_tool.side_effect = _tool_response
+        client._mcp_client = mock
+
+        with patch("providers.composio_mcp_workspace_base.time.sleep"):
+            res = client.files_untrash("01DRIVEITEMID")
+        assert res["success"] is True
+        assert res["data"]["restore_path"] == "sharepoint_recycle_bin"
+        assert res["data"]["restore_target"] == guid
+        assert res["data"]["drive_item_id"] == "01DRIVEITEMID"
+        slugs = [c[0][1]["tools"][0]["tool_slug"] for c in mock.call_tool.call_args_list]
+        assert slugs[0] == "ONE_DRIVE_RESTORE_DRIVE_ITEM"
+        assert "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS" in slugs
+        assert "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM" in slugs
+
+    def test_personal_site_name_from_web_url(self):
+        from providers.composio_mcp_workspace_base import ComposioMCPWorkspaceClient
+        derive = ComposioMCPWorkspaceClient._ms_personal_site_name_from_web_url
+        assert derive(
+            "https://contoso-my.sharepoint.com/personal/user_contoso_com/Documents/a.txt"
+        ) == "/personal/user_contoso_com"
+        assert derive(
+            "https://contoso.sharepoint.com/sites/Finance/Shared%20Documents/x.docx"
+        ) == "/sites/Finance"
+        assert derive("https://example.com/") == ""
 
 
 class TestCapabilitiesPhase1And2:
@@ -297,11 +373,10 @@ class TestCapabilitiesPhase1And2:
         assert caps["files.upload"] is True    # text + binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert caps["files.download"] is True
         assert supports("composio_microsoft:mcp", "drive.trash") is True
-        # OneDrive restore wired (Personal Graph + Business SharePoint recycle bin)
-        # but capability False — not live-verified (2026-07-17 probe: Personal Graph
-        # "Operation not supported" on Business, SharePoint fallback needs toolkit).
-        assert caps["files.untrash"] is False
-        assert supports("composio_microsoft:mcp", "drive.untrash") is False
+        # OneDrive restore (v0.3.20): Personal Graph + Business SharePoint recycle
+        # bin with personal-site site_name scoping (SharePoint toolkit required).
+        assert caps["files.untrash"] is True
+        assert supports("composio_microsoft:mcp", "drive.untrash") is True
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

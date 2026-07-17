@@ -75,14 +75,12 @@ Verify in Google Calendar: event status should be back to confirmed.
 
 ## Section D: Drive / OneDrive Trash + Restore
 
-Provider: `google_api` or Composio Google (`composio` / `composio:mcp`).
-OneDrive restore (`composio_microsoft` / `m365`) is **wired but capability
-False** — not live-verified. A 2026-07-17 live probe on OneDrive-for-Business
-showed Personal Graph restore returns "Operation not supported" and the Business
-SharePoint fallback needs infrastructure not yet exercised:
-- `m365`: SharePoint app permission `Sites.ReadWrite.All` + host-scoped token
-- `composio_microsoft`: SharePoint toolkit connected (so `files_trash` can
-  persist `restore_target`)
+Provider: `google_api`, Composio Google (`composio` / `composio:mcp`), or
+Composio Microsoft (`composio_microsoft` — v0.3.20).
+OneDrive Business restore requires the **SharePoint** toolkit connected and
+preferably `sharepoint_site_name: /personal/…` (auto-derived from `webUrl`
+when unset). Native `m365` untrash stays capability False until an Entra live
+run (`Sites.ReadWrite.All` + host-scoped SPO token).
 
 ### D1. Prepare
 ```bash
