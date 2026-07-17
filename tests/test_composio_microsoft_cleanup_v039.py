@@ -297,8 +297,11 @@ class TestCapabilitiesPhase1And2:
         assert caps["files.upload"] is True    # text + binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert caps["files.download"] is True
         assert supports("composio_microsoft:mcp", "drive.trash") is True
-        assert caps["files.untrash"] is True
-        assert supports("composio_microsoft:mcp", "drive.untrash") is True
+        # OneDrive restore wired (Personal Graph + Business SharePoint recycle bin)
+        # but capability False — not live-verified (2026-07-17 probe: Personal Graph
+        # "Operation not supported" on Business, SharePoint fallback needs toolkit).
+        assert caps["files.untrash"] is False
+        assert supports("composio_microsoft:mcp", "drive.untrash") is False
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
