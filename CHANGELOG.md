@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.18 — Ship the Google-first beta daily loop
+
+### Features
+
+- **`chief_of_staff.py daily` collects live briefing sources.** The briefing
+  panel now runs `daily_briefing.collect()` in read-only mode (Gmail + Calendar
+  reads plus local deadlines/pipeline/todos/invoices/email_org) without recording
+  delivery or writing `.last_briefing`. Summary/JSON show per-source status,
+  counts, and urgent items. Provider writes remain forbidden.
+- **Smoke-test write detection fixed.** `no_writes` now compares every
+  snapshotted path (business YAML + wiki + state), not only `.*` files — so
+  mutations to `pipeline.yaml` / `invoices.yaml` / wiki pages fail the smoke test.
+- **Readiness daily-loop row reports live source health.** Missing credentials
+  or failed Gmail/Calendar reads surface as WARN with detail, while local panels
+  still render.
+- **Beta docs / examples refreshed.** `BETA_DAILY_LOOP.md` and
+  `BETA_READINESS_CHECKLIST.md` document the Google-first operator path
+  (`python3`, readiness, live sources). Composio Google Drive allowlists in
+  `company.yaml` examples include create-from-text / trash / untrash.
+
 ## v0.3.17 — document.handoff polish + Drive files.untrash
 
 ### Features

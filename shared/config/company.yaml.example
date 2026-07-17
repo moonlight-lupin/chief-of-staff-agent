@@ -249,7 +249,11 @@ integrations:
           - GOOGLEDRIVE_FIND_FILE
           - GOOGLEDRIVE_DOWNLOAD_FILE
         write_safe:
+          # Text create (MCP-native) + binary upload (sandbox FileUploadable staging)
+          - GOOGLEDRIVE_CREATE_FILE_FROM_TEXT
           - GOOGLEDRIVE_UPLOAD_FILE
+          - GOOGLEDRIVE_TRASH_FILE
+          - GOOGLEDRIVE_UNTRASH_FILE
 
 # eSign Connector — DocuSeal self-hosted integration.
 # Secrets live in .env (DOCUSEAL_MCP_TOKEN, DOCUSEAL_API_KEY), NOT here.

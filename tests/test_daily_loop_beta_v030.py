@@ -84,6 +84,8 @@ class TestDailyCommand:
         # Sections have expected keys
         sections = parsed["sections"]
         assert "system_health" in sections
+        assert "briefing" in sections
+        assert "live" in sections["briefing"]
         assert "review_queue" in sections
         assert "pipeline" in sections
         assert "bookkeeper" in sections
@@ -123,19 +125,52 @@ class TestDailyCommand:
                 chief_of_staff.main(["--config", str(config_path), "daily", "--summary"])
         mock_exec.assert_not_called()
 
-    def test_daily_no_provider_calls(self, temp_project):
-        """daily command does not call Gmail/Drive/Calendar providers."""
+    def test_daily_no_provider_writes(self, temp_project):
+        """daily may read mail/calendar but must never write to providers."""
         config, project, config_path = temp_project
+        # Provide a fake SA so ensure_google_config lets collection reach the client.
+        sa = project / "sa.json"
+        sa.write_text("{}")
+        text = config_path.read_text()
+        config_path.write_text(
+            text.replace("/tmp/sa.json", str(sa).replace("\\", "/"))
+        )
         mock_client = MagicMock()
+        mock_client.mail_search.return_value = []
+        mock_client.calendar_list.return_value = []
+        mock_client.provider_name = "google_api"
         with patch("workspace_client.get_workspace_client", return_value=mock_client):
             import chief_of_staff
             buf = io.StringIO()
             with redirect_stdout(buf):
                 chief_of_staff.main(["--config", str(config_path), "daily", "--json"])
+            parsed = json.loads(buf.getvalue())
+        live = parsed["sections"]["briefing"].get("live") or {}
+        assert live.get("available") is True
+        # Reads are allowed for the live briefing panel.
+        assert mock_client.mail_search.called or mock_client.calendar_list.called
+        # Writes must never happen from daily.
+        mock_client.mail_send.assert_not_called()
         mock_client.gmail_send.assert_not_called()
-        mock_client.gmail_search.assert_not_called()
         mock_client.calendar_create.assert_not_called()
+        mock_client.files_upload.assert_not_called()
         mock_client.drive_upload.assert_not_called()
+        mock_client.files_trash.assert_not_called()
+        assert not (project / ".last_briefing").exists()
+
+    def test_daily_live_briefing_degrades_without_credentials(self, temp_project):
+        """Missing SA credentials mark gmail/calendar failed, daily still succeeds."""
+        config, project, config_path = temp_project
+        import chief_of_staff
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = chief_of_staff.main(["--config", str(config_path), "daily", "--json"])
+        assert rc == 0
+        parsed = json.loads(buf.getvalue())
+        live = parsed["sections"]["briefing"]["live"]
+        assert live["available"] is True
+        gmail = live["sources"].get("gmail") or {}
+        assert gmail.get("status") in ("failed", "unavailable")
 
     def test_daily_no_write_invoices(self, temp_project):
         """daily command does not write invoices.yaml."""
@@ -276,6 +311,28 @@ class TestSmokeTest:
         # Should not crash, should report failure
         assert rc in (0, 1)
 
+    def test_smoke_detects_business_file_writes(self, temp_project):
+        """no_writes must catch pipeline.yaml mutations (not only dotfiles)."""
+        config, project, config_path = temp_project
+        import chief_of_staff
+        original = chief_of_staff.build_daily_payload
+
+        def writing_payload(cfg, path):
+            (project / "pipeline.yaml").write_text("deals: []\n")
+            return original(cfg, path)
+
+        with patch.object(chief_of_staff, "build_daily_payload", side_effect=writing_payload):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = chief_of_staff.main(
+                    ["--config", str(config_path), "smoke-test", "--json"]
+                )
+        assert rc == 1
+        parsed = json.loads(buf.getvalue())
+        no_writes = next(c for c in parsed["checks"] if c["name"] == "no_writes")
+        assert no_writes["pass"] is False
+        assert "pipeline.yaml" in no_writes["detail"]
+
 
 # ─── Recommended Commands ───────────────────────────────────
 
@@ -345,7 +402,7 @@ class TestVersionAndDocs:
     def test_version_is_031(self):
         import yaml
         data = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())
-        assert data.get("version") == "0.3.17"
+        assert data.get("version") == "0.3.18"
 
     def test_beta_docs_exist(self):
         assert (PLUGIN_ROOT / "docs" / "BETA_DAILY_LOOP.md").exists()

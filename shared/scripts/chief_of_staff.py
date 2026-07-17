@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Chief-of-Staff top-level entrypoint (v0.3.7).
+"""Chief-of-Staff top-level entrypoint (v0.3.18).
 
 READ-ONLY orchestration layer for the daily operating loop and subsystem
-summaries. This module must NEVER approve, execute, send, write, or mutate
-any state. When a subsystem is missing or misconfigured it degrades with
-warnings instead of writing fixes.
+summaries. This module must NEVER approve, execute, send, or mutate provider /
+local business state. ``daily`` may perform provider *reads* (mail search,
+calendar list) via ``daily_briefing.collect`` but never records delivery.
+When a subsystem is missing or misconfigured it degrades with warnings instead
+of writing fixes.
 """
 from __future__ import annotations
 
@@ -35,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.17"
+VERSION = "0.3.18"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -285,18 +287,74 @@ def collect_system_health_panel(config: Any, config_path: str | None) -> dict[st
     return panel
 
 
-def collect_briefing_panel(config: Any) -> dict[str, Any]:
-    """Briefing sources: recent events, email org, system health (read-only)."""
+def _collect_live_briefing_sources(config_path: str | None) -> dict[str, Any]:
+    """Run daily_briefing.collect() in read-only mode (never records delivery).
+
+    Returns a compact source-status summary for the daily briefing panel.
+    Degrades with ``available=False`` when the skill is missing or raises.
+    """
+    empty: dict[str, Any] = {
+        "available": False,
+        "date": "",
+        "sources": {},
+        "urgent": [],
+        "urgent_count": 0,
+        "error": None,
+    }
+    if daily_briefing_mod is None or not hasattr(daily_briefing_mod, "collect"):
+        empty["error"] = "daily_briefing module unavailable"
+        return empty
+    try:
+        briefing = daily_briefing_mod.collect(config_path)
+    except Exception as exc:
+        empty["error"] = str(exc)
+        return empty
+    if not isinstance(briefing, Mapping):
+        empty["error"] = "daily_briefing.collect returned non-mapping"
+        return empty
+
+    sources_out: dict[str, Any] = {}
+    raw_sources = briefing.get("sources")
+    if isinstance(raw_sources, Mapping):
+        for name, src in raw_sources.items():
+            if not isinstance(src, Mapping):
+                continue
+            items = src.get("items") or []
+            sources_out[str(name)] = {
+                "status": src.get("status", "unknown"),
+                "count": len(items) if isinstance(items, list) else 0,
+                "error": src.get("error"),
+            }
+    urgent = briefing.get("urgent") if isinstance(briefing.get("urgent"), list) else []
+    return {
+        "available": True,
+        "date": str(briefing.get("date") or ""),
+        "sources": sources_out,
+        "urgent": urgent[:12],
+        "urgent_count": len(urgent),
+        "error": None,
+    }
+
+
+def collect_briefing_panel(config: Any, config_path: str | None = None) -> dict[str, Any]:
+    """Briefing: local stats + live read-only Gmail/Calendar/local sources.
+
+    Live collection uses ``daily_briefing.collect`` and never records delivery
+    or writes ``.last_briefing``. Provider *writes* are never invoked; mail and
+    calendar *reads* may run when the workspace client is configured.
+    """
     events = _call_collector("collect_recent_events", config, 24, 50, default=[])
     email_org = _call_collector("collect_email_org_stats", config, default={})
     health = _call_collector("collect_system_health", config, default={})
     suggestions = _call_collector("collect_suggestions", config, default=[])
+    live = _collect_live_briefing_sources(config_path)
     return {
         "recent_events_count": len(events) if isinstance(events, list) else 0,
         "recent_events": events[:10] if isinstance(events, list) else [],
         "email_organisation": email_org if isinstance(email_org, dict) else {},
         "system_health": health if isinstance(health, dict) else {},
         "suggestions_count": len(suggestions) if isinstance(suggestions, list) else 0,
+        "live": live,
     }
 
 
@@ -691,7 +749,7 @@ def build_recommended_commands(
 
 def build_daily_payload(config: Any, config_path: str | None) -> dict[str, Any]:
     system_health = collect_system_health_panel(config, config_path)
-    briefing = collect_briefing_panel(config)
+    briefing = collect_briefing_panel(config, config_path)
     review_queue = collect_review_queue_panel(config)
     pipeline = collect_pipeline_panel(config)
     bookkeeper = collect_bookkeeper_panel(config)
@@ -755,8 +813,31 @@ def render_daily_summary(payload: Mapping[str, Any]) -> str:
     # 2. Briefing
     br = s.get("briefing") if isinstance(s.get("briefing"), Mapping) else {}
     email = br.get("email_organisation") if isinstance(br.get("email_organisation"), Mapping) else {}
+    live = br.get("live") if isinstance(br.get("live"), Mapping) else {}
     lines.append("2. Briefing")
     lines.append(f"  recent events (24h): {br.get('recent_events_count', 0)}")
+    if live.get("available"):
+        date_label = live.get("date") or "today"
+        lines.append(f"  live sources ({date_label}):")
+        sources = live.get("sources") if isinstance(live.get("sources"), Mapping) else {}
+        for name in ("gmail", "calendar", "deadlines", "pipeline", "todos", "invoices", "email_org"):
+            src = sources.get(name) if isinstance(sources.get(name), Mapping) else None
+            if not src:
+                continue
+            status = src.get("status", "?")
+            count = src.get("count", 0)
+            err = src.get("error")
+            suffix = f" — {err}" if err and status != "ok" else ""
+            lines.append(f"    {name}: {status} ({count}){suffix}")
+        lines.append(f"  urgent items: {live.get('urgent_count', 0)}")
+        for item in (live.get("urgent") or [])[:5]:
+            if isinstance(item, Mapping):
+                lines.append(
+                    f"    - [{item.get('severity', '?')}] {item.get('message', '')}"
+                )
+    else:
+        err = live.get("error") or "not collected"
+        lines.append(f"  live sources: unavailable ({err})")
     lines.append(f"  email classified: {email.get('classified', 0)}")
     lines.append(f"  unmapped: {email.get('unmapped', 0)}")
     lines.append(f"  archive candidates: {email.get('archive_candidates', 0)}")
@@ -1101,24 +1182,35 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
     config = _safe_load_config(config_path)
     root = _resolve_project_root(config)
     mtimes_before: dict[str, float] = {}
-    # Watched non-hidden business files
-    _WATCHED_BUSINESS_FILES = {"pipeline.yaml", "invoices.yaml", "expenses.yaml"}
+    # Watched non-hidden business files at project root
+    _WATCHED_BUSINESS_FILES = {
+        "pipeline.yaml", "invoices.yaml", "expenses.yaml", "todos.yaml",
+    }
     if root is not None and root.exists():
-        for path in root.rglob("*"):
+        for path in root.iterdir():
             if not path.is_file():
                 continue
-            # Watch hidden dotfiles (state files)
-            if path.name.startswith("."):
+            # Watch hidden dotfiles (state files) at project root
+            if path.name.startswith(".") or path.name in _WATCHED_BUSINESS_FILES:
                 try:
                     mtimes_before[str(path)] = path.stat().st_mtime
                 except OSError:
                     continue
-            # Watch known business files at project root
-            if path.name in _WATCHED_BUSINESS_FILES and path.parent == root:
+        # Nested state dirs (audit / runs / knowledge / integrations)
+        for sub in (".audit", ".runs", ".knowledge", ".integrations", ".pending_actions.json"):
+            candidate = root / sub
+            if candidate.is_file():
                 try:
-                    mtimes_before[str(path)] = path.stat().st_mtime
+                    mtimes_before[str(candidate)] = candidate.stat().st_mtime
                 except OSError:
-                    continue
+                    pass
+            elif candidate.is_dir():
+                for path in candidate.rglob("*"):
+                    if path.is_file():
+                        try:
+                            mtimes_before[str(path)] = path.stat().st_mtime
+                        except OSError:
+                            continue
         # Watch wiki markdown files
         wiki_path = root / "wiki"
         if wiki_path.exists():
@@ -1176,22 +1268,37 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
         return isinstance(findings, list), f"findings={len(findings) if isinstance(findings, list) else '?'}"
 
     def _no_writes() -> tuple[bool, str]:
+        """Compare every snapshotted path (dotfiles + business YAML + wiki).
+
+        Earlier versions only re-scanned ``.*`` files, so writes to
+        ``pipeline.yaml`` / ``invoices.yaml`` / wiki pages were invisible.
+        """
         if root is None or not root.exists():
             return True, "no project root to compare"
         changed: list[str] = []
-        for path in root.rglob("*"):
-            if not path.is_file() or not path.name.startswith("."):
+        for key, before in mtimes_before.items():
+            path = Path(key)
+            if not path.exists():
+                changed.append(f"deleted:{path.name}")
                 continue
-            key = str(path)
             try:
                 mtime = path.stat().st_mtime
             except OSError:
                 continue
-            before = mtimes_before.get(key)
-            if before is None:
-                changed.append(f"new:{path.name}")
-            elif mtime > before + 0.001:
+            if mtime > before + 0.001:
                 changed.append(f"mtime:{path.name}")
+        # Newly created watched business / root state / wiki files
+        for path in root.iterdir():
+            if not path.is_file():
+                continue
+            if path.name.startswith(".") or path.name in _WATCHED_BUSINESS_FILES:
+                if str(path) not in mtimes_before:
+                    changed.append(f"new:{path.name}")
+        wiki_path = root / "wiki"
+        if wiki_path.exists():
+            for path in wiki_path.rglob("*.md"):
+                if str(path) not in mtimes_before:
+                    changed.append(f"new:{path.name}")
         if changed:
             return False, f"writes detected: {', '.join(changed[:8])}"
         return True, "no state file writes observed"
@@ -1426,15 +1533,45 @@ def _daily_loop_row(config: Any, config_path: str | None) -> tuple[str, str]:
     """Row 7 — read-only daily collection runs without raising (dry-run).
 
     Reuses build_daily_payload/render_daily_summary; delivers/records nothing.
+    Surfaces live Gmail/Calendar source status so a thin local-only render is
+    not reported as a fully healthy daily loop.
     """
     try:
         payload = build_daily_payload(config, config_path)
         text = render_daily_summary(payload)
     except Exception as exc:
         return _R_FAIL, f"daily loop raised: {exc}"
-    if isinstance(payload, dict) and "sections" in payload and text:
-        return _R_PASS, "read-only daily collection ran without errors"
-    return _R_FAIL, "daily payload incomplete"
+    if not (isinstance(payload, dict) and "sections" in payload and text):
+        return _R_FAIL, "daily payload incomplete"
+
+    sections = payload.get("sections") if isinstance(payload.get("sections"), Mapping) else {}
+    briefing = sections.get("briefing") if isinstance(sections.get("briefing"), Mapping) else {}
+    live = briefing.get("live") if isinstance(briefing.get("live"), Mapping) else {}
+    if not live.get("available"):
+        err = live.get("error") or "not collected"
+        return _R_WARN, f"panels rendered; live briefing unavailable ({err})"
+
+    sources = live.get("sources") if isinstance(live.get("sources"), Mapping) else {}
+    failed = [
+        name for name, src in sources.items()
+        if isinstance(src, Mapping) and src.get("status") in ("failed", "unavailable")
+    ]
+    degraded = [
+        name for name, src in sources.items()
+        if isinstance(src, Mapping) and src.get("status") == "degraded"
+    ]
+    ok_n = sum(
+        1 for src in sources.values()
+        if isinstance(src, Mapping) and src.get("status") == "ok"
+    )
+    critical = [n for n in failed if n in ("gmail", "calendar")]
+    if critical:
+        return _R_WARN, f"live sources failed: {', '.join(critical)} ({ok_n} ok)"
+    if failed:
+        return _R_WARN, f"local sources failed: {', '.join(failed)} ({ok_n} ok)"
+    if degraded:
+        return _R_WARN, f"live sources degraded: {', '.join(degraded)} ({ok_n} ok)"
+    return _R_PASS, f"read-only daily collection ok ({ok_n} sources)"
 
 
 def build_readiness_payload(config: Any, config_path: str | None) -> dict[str, Any]:
