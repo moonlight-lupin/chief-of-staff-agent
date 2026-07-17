@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.21 — Daily briefing reply awareness (suppress already-answered threads)
+
+### Fixes
+
+- **Briefing no longer lists inbound mail the operator already replied to.**
+  `daily_briefing.collect_gmail` fetches recent `in:sent` mail (14-day lookback),
+  indexes by `thread_id` / `conversationId`, and drops inbox/unread/engagement
+  hits when the operator (`google.delegate_email` or `user.email`) has a later
+  message in the same thread. Sent-side queries (`sent_followup`) are left alone.
+  Agent-provided `--input` envelopes get the same filter when both sides of the
+  thread are present. Render notes how many messages were suppressed.
+- Messages without a thread id cannot be matched and remain listed (fail-open).
+
 ## v0.3.20 — Improve OneDrive Business files.untrash wiring (capability stays False)
 
 Improves the OneDrive-for-Business restore wiring from PR #17/#19, but the

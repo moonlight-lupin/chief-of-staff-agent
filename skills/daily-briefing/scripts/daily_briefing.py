@@ -11,7 +11,7 @@ import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 try:
     import yaml  # type: ignore
@@ -113,6 +113,181 @@ def _get_workspace_client(config: Any):
     return get_workspace_client(config)
 
 
+# Lookback for "has the operator already replied in this thread?"
+_REPLY_LOOKBACK_DAYS = 14
+_REPLY_SENT_MAX = 50
+
+
+def _operator_email(config: Any) -> str:
+    """Resolve the operator mailbox used for reply-awareness checks."""
+    if not isinstance(config, dict):
+        return ""
+    google_cfg = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
+    delegate = str(google_cfg.get("delegate_email") or "").strip()
+    if delegate:
+        return delegate.lower()
+    user_cfg = config.get("user", {}) if isinstance(config.get("user"), dict) else {}
+    email = str(user_cfg.get("email") or "").strip()
+    return email.lower()
+
+
+def _message_field(msg: Mapping[str, Any] | Any, *keys: str) -> Any:
+    if not isinstance(msg, Mapping):
+        return None
+    for key in keys:
+        val = msg.get(key)
+        if val is not None and val != "":
+            return val
+    return None
+
+
+def _message_thread_id(msg: Any) -> str:
+    val = _message_field(msg, "thread_id", "threadId", "conversationId", "conversation_id")
+    return str(val).strip() if val is not None else ""
+
+
+def _message_sender(msg: Any) -> str:
+    val = _message_field(msg, "sender", "from", "from_email", "fromEmail")
+    if isinstance(val, Mapping):
+        addr = val.get("email") or val.get("address") or val.get("emailAddress")
+        if isinstance(addr, Mapping):
+            addr = addr.get("address") or addr.get("email")
+        val = addr
+    return str(val or "").strip().lower()
+
+
+def _parse_message_date(msg: Any) -> datetime | None:
+    raw = _message_field(msg, "date", "receivedDateTime", "sentDateTime", "internalDate")
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        # Gmail sometimes returns ms epoch
+        try:
+            ts = float(raw)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _is_from_operator(msg: Any, operator: str) -> bool:
+    if not operator:
+        return False
+    sender = _message_sender(msg)
+    if not sender:
+        return False
+    if sender == operator:
+        return True
+    # Allow "Name <email>" forms
+    return sender.endswith(f"<{operator}>") or operator in sender
+
+
+def _is_sent_side_query(name: str, query: str, operator: str) -> bool:
+    """True for queries that list the operator's own sent mail (not inbound outstanding)."""
+    n = (name or "").strip().lower()
+    q = (query or "").strip().lower()
+    if n in {"sent_followup", "invoices_sent_followup"}:
+        return True
+    if "in:sent" in q or "label:sent" in q:
+        return True
+    if operator and f"from:{operator}" in q:
+        return True
+    return False
+
+
+def _reply_index_from_messages(
+    messages: list[Any],
+    operator: str,
+) -> dict[str, datetime]:
+    """Map thread_id -> latest operator-authored message datetime."""
+    index: dict[str, datetime] = {}
+    if not operator:
+        return index
+    for msg in messages:
+        if not _is_from_operator(msg, operator):
+            continue
+        thread_id = _message_thread_id(msg)
+        if not thread_id:
+            continue
+        when = _parse_message_date(msg)
+        if when is None:
+            continue
+        prev = index.get(thread_id)
+        if prev is None or when > prev:
+            index[thread_id] = when
+    return index
+
+
+def _build_operator_reply_index(client: Any, operator: str) -> dict[str, datetime]:
+    """Fetch recent sent mail and index by thread for reply detection."""
+    if not operator or client is None:
+        return {}
+    query = f"in:sent newer_than:{_REPLY_LOOKBACK_DAYS}d"
+    try:
+        sent = client.mail_search(query, max_results=_REPLY_SENT_MAX)
+    except Exception:
+        # Fail open — briefing still renders; we just can't suppress.
+        return {}
+    if not isinstance(sent, list):
+        return {}
+    return _reply_index_from_messages(sent, operator)
+
+
+def _message_already_replied(
+    msg: Any,
+    reply_index: dict[str, datetime],
+    operator: str,
+) -> bool:
+    """True when the operator sent a later message in the same thread."""
+    if not reply_index or not operator:
+        return False
+    # Operator-authored mail is not an inbound outstanding item.
+    if _is_from_operator(msg, operator):
+        return True
+    thread_id = _message_thread_id(msg)
+    if not thread_id:
+        return False
+    replied_at = reply_index.get(thread_id)
+    if replied_at is None:
+        return False
+    inbound_at = _parse_message_date(msg)
+    if inbound_at is None:
+        # Thread match without a parseable date — treat as replied (user
+        # already acted in-thread; better than listing a closed loop).
+        return True
+    return replied_at > inbound_at
+
+
+def _filter_replied_messages(
+    messages: list[Any],
+    reply_index: dict[str, datetime],
+    operator: str,
+) -> tuple[list[Any], int]:
+    """Drop inbound messages the operator has already replied to in-thread."""
+    if not isinstance(messages, list) or not messages:
+        return [], 0
+    if not reply_index and not operator:
+        return list(messages), 0
+    kept: list[Any] = []
+    suppressed = 0
+    for msg in messages:
+        if _message_already_replied(msg, reply_index, operator):
+            suppressed += 1
+            continue
+        kept.append(msg)
+    return kept, suppressed
+
+
 def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]] | dict[str, Any]:
     ensure_workspace_config(config)
     queries_file = sibling_or_shared(config, "queries.yaml")
@@ -130,10 +305,12 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]] | dic
         raise ValueError("queries.yaml 'queries' must be a list or mapping")
     google_cfg = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
     delegate = str(google_cfg.get("delegate_email", ""))
+    operator = _operator_email(config) or delegate.strip().lower()
     import re as _re
     client = _get_workspace_client(config)
     items: list[dict[str, Any]] = []
     dropped_constraints: list[str] = []
+    raw_results: list[tuple[dict[str, Any], str, list[Any]]] = []
     for query in queries:
         if not isinstance(query, dict):
             continue
@@ -151,13 +328,54 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]] | dic
             for constraint in meta.get("dropped_constraints") or []:
                 if constraint not in dropped_constraints:
                     dropped_constraints.append(str(constraint))
-        items.append({"name": query.get("name"), "query": q, "result": result})
+        if not isinstance(result, list):
+            result = []
+        raw_results.append((query, q, result))
+
+    # One sent-mail fetch → suppress inbound hits the operator already answered.
+    reply_index = _build_operator_reply_index(client, operator)
+    # Also learn from sent-side query results already in hand (no extra round-trip).
+    for query, q, result in raw_results:
+        name = str(query.get("name") or "")
+        if _is_sent_side_query(name, q, operator):
+            for thread_id, when in _reply_index_from_messages(result, operator).items():
+                prev = reply_index.get(thread_id)
+                if prev is None or when > prev:
+                    reply_index[thread_id] = when
+
+    total_suppressed = 0
+    for query, q, result in raw_results:
+        name = str(query.get("name") or "")
+        entry: dict[str, Any] = {"name": name, "query": q, "result": result}
+        if not _is_sent_side_query(name, q, operator):
+            kept, suppressed = _filter_replied_messages(result, reply_index, operator)
+            entry["result"] = kept
+            if suppressed:
+                entry["suppressed_replied"] = suppressed
+                total_suppressed += suppressed
+        items.append(entry)
+
+    notes: list[str] = []
     if dropped_constraints:
-        note = (
-            "query degraded; dropped constraints: "
-            + ", ".join(dropped_constraints)
+        notes.append(
+            "query degraded; dropped constraints: " + ", ".join(dropped_constraints)
         )
-        return {"status": "degraded", "items": items, "error": note}
+    if total_suppressed:
+        notes.append(
+            f"suppressed {total_suppressed} message(s) already replied in-thread"
+        )
+    if notes:
+        status = "degraded" if dropped_constraints else "ok"
+        out: dict[str, Any] = {
+            "status": status,
+            "items": items,
+            "error": "; ".join(notes) if dropped_constraints else None,
+            "suppressed_replied": total_suppressed,
+            "note": "; ".join(notes),
+        }
+        if out["error"] is None:
+            del out["error"]
+        return out
     return items
 
 
@@ -184,9 +402,33 @@ def load_workspace_input(path: str) -> dict[str, Any]:
     return normalize_workspace_payload(payload)
 
 
-def _messages_to_gmail_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Wrap agent-provided messages into the gmail source item shape."""
-    return [{"name": "agent-input", "query": "(agent-provided)", "result": list(messages)}]
+def _messages_to_gmail_items(
+    messages: list[dict[str, Any]],
+    *,
+    operator: str = "",
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Wrap agent-provided messages into the gmail source item shape.
+
+    When ``operator`` is set, inbound messages whose thread already contains a
+    later message from the operator are suppressed (same rule as live collect).
+    """
+    msgs = list(messages) if isinstance(messages, list) else []
+    reply_index = _reply_index_from_messages(msgs, operator)
+    kept, suppressed = _filter_replied_messages(msgs, reply_index, operator)
+    entry: dict[str, Any] = {
+        "name": "agent-input",
+        "query": "(agent-provided)",
+        "result": kept,
+    }
+    if suppressed:
+        entry["suppressed_replied"] = suppressed
+        return {
+            "status": "ok",
+            "items": [entry],
+            "suppressed_replied": suppressed,
+            "note": f"suppressed {suppressed} message(s) already replied in-thread",
+        }
+    return [entry]
 
 
 def collect_calendar(config: Any, project_root: Path) -> list[dict[str, Any]]:
@@ -320,6 +562,10 @@ def wrap_source(name: str, collector: Callable[[Any, Path], list[dict[str, Any]]
             }
             if result.get("error"):
                 out["error"] = result["error"]
+            if result.get("note"):
+                out["note"] = result["note"]
+            if result.get("suppressed_replied"):
+                out["suppressed_replied"] = result["suppressed_replied"]
             return out
         items = result if isinstance(result, list) else [result]
         return {"status": "ok", "hash": stable_hash(items), "items": items}
@@ -347,7 +593,13 @@ def render_source(title: str, icon: str, source: dict[str, Any], item_formatter:
     if status != "ok":
         return [f"{icon} {title}: failed (error: {source.get('error')})"]
     items = source.get("items", [])
-    suffix = " — no material change" if source.get("no_material_change") else ""
+    bits: list[str] = []
+    if source.get("no_material_change"):
+        bits.append("no material change")
+    suppressed = int(source.get("suppressed_replied") or 0)
+    if suppressed:
+        bits.append(f"{suppressed} already-replied suppressed")
+    suffix = f" — {'; '.join(bits)}" if bits else ""
     lines = [f"{icon} {title}: {len(items)} item(s){suffix}"]
     for item in items[:limit]:
         if isinstance(item, dict):
@@ -421,7 +673,12 @@ def collect(config_path: str | None, workspace_input: dict[str, Any] | None = No
         # stores (deadlines/pipeline/todos/invoices/email_org) are unaffected.
         messages = workspace_input.get("messages", []) or []
         events = workspace_input.get("events", []) or []
-        collectors["gmail"] = lambda _config, _root: _messages_to_gmail_items(messages)
+        operator = _operator_email(config)
+        collectors["gmail"] = (
+            lambda _config, _root, _msgs=messages, _op=operator: _messages_to_gmail_items(
+                _msgs, operator=_op,
+            )
+        )
         collectors["calendar"] = lambda _config, _root: list(events)
     sources = {name: wrap_source(name, collectors[name], config, root) for name in SOURCE_NAMES}
     last = last_run("daily-briefing")
@@ -462,7 +719,14 @@ def render(briefing: dict[str, Any]) -> str:
     lines.append("")
     lines.extend(render_source("Deadlines", "⏰", sources["deadlines"], lambda i: f"{i.get('name') or i.get('title')} due {i.get('due') or i.get('date', '')}"))
     lines.append("")
-    lines.extend(render_source("Gmail", "📧", sources["gmail"], lambda i: f"{i.get('name')}: {len(i.get('result', [])) if isinstance(i.get('result'), list) else 'result'}"))
+    def _gmail_line(i: dict[str, Any]) -> str:
+        n = len(i.get("result", [])) if isinstance(i.get("result"), list) else "result"
+        extra = i.get("suppressed_replied")
+        if extra:
+            return f"{i.get('name')}: {n} (suppressed {extra} already-replied)"
+        return f"{i.get('name')}: {n}"
+
+    lines.extend(render_source("Gmail", "📧", sources["gmail"], _gmail_line))
     lines.append("")
     lines.extend(render_source("Pipeline", "📊", sources["pipeline"], lambda i: f"{i.get('client_name')} — {i.get('stage')} ({i.get('stale_days')} days idle)"))
     lines.append("")
