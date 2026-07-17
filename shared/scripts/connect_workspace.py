@@ -33,7 +33,8 @@ def _composio_family(workspace: Mapping[str, Any]) -> str:
 
 def _composio_connect_toolkits(family: str) -> list[str]:
     """The toolkits an operator connects for a given family."""
-    return ["outlook", "one_drive"] if family == "microsoft" else \
+    # share_point is required for OneDrive-for-Business files.untrash.
+    return ["outlook", "one_drive", "share_point"] if family == "microsoft" else \
         ["gmail", "googlecalendar", "googledrive"]
 
 
@@ -422,6 +423,17 @@ def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
             for f in results[:5]:
                 name = f.get("name", "?")[:60]
                 print(f"   {name}")
+        elif toolkit in ("share_point", "sharepoint"):
+            # Recycle-bin list is the Business untrash prerequisite.
+            from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+            if not isinstance(client, ComposioMCPWorkspaceClient):
+                print("❌ share_point test requires Composio MCP client")
+                return 1
+            items = client._ms_recycle_items()
+            print(f"✅ SharePoint recycle bin: listed {len(items)} recent item(s)")
+            for item in items[:5]:
+                leaf = item.get("LeafName") or item.get("Title") or "?"
+                print(f"   {str(leaf)[:60]}")
         else:
             print(f"❌ Unknown toolkit: {toolkit}")
             return 1
@@ -640,12 +652,18 @@ def cmd_composio_debug_tool(config: dict[str, Any], toolkit: str) -> int:
         })],
         "one_drive": [("ONE_DRIVE_SEARCH_ITEMS", {"q": "", "top": 3})],
         "onedrive": [("ONE_DRIVE_SEARCH_ITEMS", {"q": "", "top": 3})],
+        "share_point": [("SHARE_POINT_LIST_RECYCLE_BIN_ITEMS", {
+            "top": 3, "orderby": "DeletedDate desc",
+        })],
+        "sharepoint": [("SHARE_POINT_LIST_RECYCLE_BIN_ITEMS", {
+            "top": 3, "orderby": "DeletedDate desc",
+        })],
     }
 
     if toolkit not in tool_map:
         print(
             f"❌ Unknown toolkit: {toolkit}. Use: gmail, googlecalendar, googledrive, "
-            "outlook, outlook_calendar, one_drive"
+            "outlook, outlook_calendar, one_drive, share_point"
         )
         return 1
 
@@ -833,7 +851,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Print next steps for the selected provider")
     parser.add_argument("--connect", metavar="TOOLKIT",
                         help="Connect a Composio toolkit — google family: gmail, "
-                             "googlecalendar, googledrive; microsoft family: outlook, one_drive")
+                             "googlecalendar, googledrive; microsoft family: outlook, "
+                             "one_drive, share_point")
     parser.add_argument("--mcp-url", action="store_true",
                         help="Print MCP endpoint URL for Composio session")
     parser.add_argument("--mcp-info", action="store_true",
@@ -846,7 +865,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="List available MCP tools")
     parser.add_argument("--test", metavar="TOOLKIT",
                         help="Run a live test against a toolkit (gmail, googlecalendar, "
-                             "googledrive, outlook, one_drive)")
+                             "googledrive, outlook, one_drive, share_point)")
     parser.add_argument("--debug-tool", metavar="TOOLKIT",
                         help="Debug: test all MCP meta-tools for a toolkit with full output")
     parser.add_argument("--capabilities", action="store_true",

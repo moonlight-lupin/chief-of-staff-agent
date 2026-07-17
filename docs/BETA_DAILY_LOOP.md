@@ -19,7 +19,7 @@ Outlook live E2E (including email-org) is deferred when Entra ID is unavailable.
 | Doctor / smoke-test / readiness | Ready |
 | `document.handoff` (upload + draft) | Ready on `google_api`, Composio Google, Composio Microsoft |
 | Soft-delete restore for Drive trash | Ready on Google (`files.untrash` / `drive_untrash`) |
-| OneDrive `files.untrash` | Capability False — wired (Personal Graph + Business SharePoint recycle bin) but not live-verified |
+| OneDrive `files.untrash` | Capability False — wired (Personal Graph + Business SharePoint recycle bin) but not live-verified for `composio_microsoft` or `m365` |
 | Live Outlook email-org E2E | Deferred (needs Entra ID) |
 
 ## Recommended first beta day (Google operator)

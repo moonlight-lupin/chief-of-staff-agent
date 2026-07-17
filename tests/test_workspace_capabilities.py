@@ -79,10 +79,10 @@ class TestCapabilities:
         # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
         # OneDrive restore is wired (Personal Graph + Business SharePoint recycle
-        # bin) but stays False: a 2026-07-17 live probe on a real OneDrive-for-
-        # Business account showed Personal Graph restore returns "Operation not
-        # supported" and the SharePoint fallback needs a connected SharePoint
-        # toolkit / Sites.ReadWrite.All — no live run has restored a file yet.
+        # bin with /personal/… site_name scoping) but stays False: a 2026-07-17
+        # live probe on a real OneDrive-for-Business account WITH the SharePoint
+        # toolkit connected still failed — the deleted file never surfaced in
+        # SHARE_POINT_LIST_RECYCLE_BIN_ITEMS, so untrash returned success=False.
         assert caps["files.untrash"] is False
         assert caps["drive.untrash"] is False
 

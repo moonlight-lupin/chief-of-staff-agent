@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 _PARENT = Path(__file__).resolve().parent.parent
 if str(_PARENT) not in sys.path:
@@ -105,6 +107,9 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         # work accounts fall back to SharePoint recycle-bin tools below.
         "files_untrash": "ONE_DRIVE_RESTORE_DRIVE_ITEM",
         "files_get": "ONE_DRIVE_GET_ITEM",
+        # Root metadata (webUrl) → derive OneDrive personal-site path for
+        # SHARE_POINT_* recycle-bin calls (Business restore).
+        "files_get_root": "ONE_DRIVE_GET_ROOT",
         # SharePoint toolkit (must be connected for OneDrive-for-Business restore).
         "files_recycle_list": "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS",
         "files_recycle_restore": "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM",
@@ -554,6 +559,20 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         mcp_cfg = workspace.get("mcp", {}) if isinstance(workspace, Mapping) else {}
         self.endpoint = str(mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp"))
         self.key_env = str(mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY"))
+        # Optional SharePoint site scope for OneDrive Business recycle-bin
+        # restore. Prefer a server-relative personal path such as
+        # ``/personal/user_contoso_com`` (Composio FAQ: leading ``/`` skips the
+        # ``/sites/{name}`` rewrite). When unset, derived from OneDrive webUrl.
+        raw_site = workspace.get("sharepoint_site_name") or workspace.get(
+            "onedrive_sharepoint_site"
+        )
+        self._sharepoint_site_name = (
+            str(raw_site).strip() if raw_site is not None and str(raw_site).strip() else ""
+        )
+        self._cached_sharepoint_site_name: str | None = None
+        # Leaf name of the most recent files_trash call — used when Business
+        # untrash receives a drive item id (not a recycle-bin GUID) in-session.
+        self._ms_last_trashed_name: str = ""
 
         self._mcp_client = None
         self._session_meta = load_session_meta(config)
@@ -1667,19 +1686,28 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
         Microsoft → ``ONE_DRIVE_DELETE_ITEM`` (``item_id``). When the SharePoint
         toolkit is connected, also resolves a recycle-bin GUID into
-        ``restore_target`` for Business restores.
+        ``restore_target`` for Business restores (scoped to the OneDrive
+        personal site when ``webUrl`` / ``sharepoint_site_name`` is known).
         Google → ``GOOGLEDRIVE_TRASH_FILE`` (``file_id``) — not permanent delete.
         """
         slug = self._slug_for("files_trash")
         if self.family == "microsoft":
-            name = self._ms_get_item_name(file_id)
+            meta = self._ms_get_item_meta(file_id)
+            name = str(meta.get("name") or "")
+            web_url = str(meta.get("webUrl") or "")
+            if web_url:
+                self._ms_remember_site_from_web_url(web_url)
             self._execute_composio_tool(
                 slug, {"item_id": file_id}, operation="files_trash",
             )
             out: dict[str, Any] = {"id": file_id, "reversible": True}
             if name:
                 out["name"] = name
-            recycle_id = self._ms_resolve_recycle_bin_id(leaf_name=name) if name else ""
+                self._ms_last_trashed_name = name
+            recycle_id = (
+                self._ms_resolve_recycle_bin_id(leaf_name=name, retries=3)
+                if name else ""
+            )
             if recycle_id:
                 out["restore_target"] = recycle_id
             return out
@@ -1699,7 +1727,8 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
           1. Recycle-bin GUID → ``SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM``
           2. Else ``ONE_DRIVE_RESTORE_DRIVE_ITEM`` (Personal Graph)
           3. On Personal-only failure → SharePoint recycle-bin lookup/restore
-             (requires connected SharePoint toolkit for Business/work accounts)
+             (requires connected SharePoint toolkit for Business/work accounts;
+             scoped via ``sharepoint_site_name`` or OneDrive ``webUrl``)
         """
         if self.family == "microsoft":
             return self._ms_files_untrash(file_id)
@@ -1710,23 +1739,42 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return {"id": file_id, "reversible": True, "trashed": False}
 
     def _ms_get_item_name(self, file_id: str) -> str:
+        return str(self._ms_get_item_meta(file_id).get("name") or "")
+
+    def _ms_get_item_meta(self, file_id: str) -> dict[str, str]:
+        """Best-effort ``name`` + ``webUrl`` for a live OneDrive item."""
+        out: dict[str, str] = {}
         try:
             slug = self._slug_for("files_get")
             data = self._execute_composio_tool(
                 slug, {"item_id": file_id}, operation="files_get",
             )
         except Exception:
-            return ""
-        if isinstance(data, Mapping):
-            name = data.get("name")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-            nested = data.get("data")
-            if isinstance(nested, Mapping):
-                name = nested.get("name")
-                if isinstance(name, str) and name.strip():
-                    return name.strip()
-        return ""
+            return out
+        return self._ms_pick_name_weburl(data)
+
+    @classmethod
+    def _ms_pick_name_weburl(cls, data: Any) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not isinstance(data, Mapping):
+            return out
+        candidates: list[Mapping[str, Any]] = [data]
+        nested = data.get("data")
+        if isinstance(nested, Mapping):
+            candidates.append(nested)
+        for src in candidates:
+            name = src.get("name")
+            if isinstance(name, str) and name.strip() and "name" not in out:
+                out["name"] = name.strip()
+            web = src.get("webUrl") or src.get("web_url") or src.get("link")
+            if isinstance(web, str) and web.strip() and "webUrl" not in out:
+                out["webUrl"] = web.strip()
+            parent = src.get("parentReference") or src.get("parent_reference")
+            if isinstance(parent, Mapping) and "webUrl" not in out:
+                pweb = parent.get("siteUrl") or parent.get("webUrl")
+                if isinstance(pweb, str) and pweb.strip():
+                    out["webUrl"] = pweb.strip()
+        return out
 
     @staticmethod
     def _ms_is_guid(value: str) -> bool:
@@ -1739,12 +1787,64 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             )
         )
 
+    @staticmethod
+    def _ms_personal_site_name_from_web_url(web_url: str) -> str:
+        """Derive Composio ``site_name`` from a OneDrive/SharePoint webUrl.
+
+        OneDrive for Business URLs look like
+        ``https://contoso-my.sharepoint.com/personal/user_contoso_com/Documents/...``.
+        Composio's SharePoint toolkit treats a leading ``/`` as a full
+        server-relative path (see FAQ for ``/teams/``), so we return
+        ``/personal/user_contoso_com`` rather than a bare ``/sites/{name}`` slug.
+        """
+        parsed = urlparse((web_url or "").strip())
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0].lower() == "personal":
+            return "/" + "/".join(parts[:2])
+        if len(parts) >= 2 and parts[0].lower() in ("sites", "teams"):
+            return "/" + "/".join(parts[:2])
+        return ""
+
+    def _ms_remember_site_from_web_url(self, web_url: str) -> None:
+        site = self._ms_personal_site_name_from_web_url(web_url)
+        if site:
+            self._cached_sharepoint_site_name = site
+
+    def _ms_sharepoint_site_name(self) -> str:
+        """Resolve SharePoint site scope for recycle-bin tools."""
+        if self._sharepoint_site_name:
+            return self._sharepoint_site_name
+        if self._cached_sharepoint_site_name:
+            return self._cached_sharepoint_site_name
+        # Discover from OneDrive root webUrl (no drive_id required).
+        try:
+            slug = self._slug_for("files_get_root")
+            data = self._execute_composio_tool(
+                slug,
+                {"select_fields": ["id", "name", "webUrl"]},
+                operation="files_get_root",
+            )
+            meta = self._ms_pick_name_weburl(data)
+            web = meta.get("webUrl") or ""
+            if web:
+                self._ms_remember_site_from_web_url(web)
+        except Exception:
+            pass
+        return self._cached_sharepoint_site_name or ""
+
+    def _ms_recycle_tool_args(self, **extra: Any) -> dict[str, Any]:
+        args = dict(extra)
+        site = self._ms_sharepoint_site_name()
+        if site:
+            args["site_name"] = site
+        return args
+
     def _ms_recycle_items(self) -> list[Mapping[str, Any]]:
         try:
             slug = self._slug_for("files_recycle_list")
             data = self._execute_composio_tool(
                 slug,
-                {"top": 50, "orderby": "DeletedDate desc"},
+                self._ms_recycle_tool_args(top=50, orderby="DeletedDate desc"),
                 operation="files_recycle_list",
             )
         except Exception:
@@ -1764,24 +1864,33 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 return [x for x in val if isinstance(x, Mapping)]
         return []
 
-    def _ms_resolve_recycle_bin_id(self, *, leaf_name: str = "") -> str:
+    def _ms_resolve_recycle_bin_id(
+        self,
+        *,
+        leaf_name: str = "",
+        retries: int = 1,
+    ) -> str:
         leaf = (leaf_name or "").strip().lower()
         if not leaf:
             return ""
-        for item in self._ms_recycle_items():
-            item_leaf = str(
-                item.get("LeafName") or item.get("Title") or item.get("title") or ""
-            ).strip()
-            item_id = str(item.get("Id") or item.get("id") or "").strip()
-            if item_leaf.lower() == leaf and self._ms_is_guid(item_id):
-                return item_id
+        attempts = max(1, int(retries))
+        for attempt in range(attempts):
+            for item in self._ms_recycle_items():
+                item_leaf = str(
+                    item.get("LeafName") or item.get("Title") or item.get("title") or ""
+                ).strip()
+                item_id = str(item.get("Id") or item.get("id") or "").strip()
+                if item_leaf.lower() == leaf and self._ms_is_guid(item_id):
+                    return item_id
+            if attempt + 1 < attempts:
+                time.sleep(0.4 * (attempt + 1))
         return ""
 
     def _ms_restore_recycle_bin(self, recycle_bin_id: str) -> dict[str, Any]:
         slug = self._slug_for("files_recycle_restore")
         self._execute_composio_tool(
             slug,
-            {"recyclebinitemid": recycle_bin_id},
+            self._ms_recycle_tool_args(recyclebinitemid=recycle_bin_id),
             operation="files_recycle_restore",
         )
         return {
@@ -1791,6 +1900,22 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             "trashed": False,
             "restore_path": "sharepoint_recycle_bin",
         }
+
+    @staticmethod
+    def _ms_is_personal_restore_unsupported(exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        needles = (
+            "personal",
+            "not supported",
+            "notsupported",
+            "badrequest",
+            "400",
+            "404",
+            "business",
+            "itemnotfound",
+            "not found",
+        )
+        return any(n in msg for n in needles)
 
     def _ms_files_untrash(self, file_id: str) -> dict[str, Any]:
         target = (file_id or "").strip()
@@ -1811,21 +1936,29 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 "restore_path": "onedrive_personal",
             }
         except Exception as exc:
-            msg = str(exc).lower()
-            personal_only = any(
-                n in msg for n in (
-                    "personal", "not supported", "notsupported",
-                    "badrequest", "400", "404", "business",
-                )
-            )
-            if not personal_only:
+            if not self._ms_is_personal_restore_unsupported(exc):
                 raise
-            raise RuntimeError(
-                f"ONE_DRIVE_RESTORE_DRIVE_ITEM failed for Business/work account "
-                f"({exc}). Pass the SharePoint recycle-bin GUID (files_trash "
-                f"persists it as restore_target when the SharePoint toolkit is "
-                f"connected), or connect SharePoint and re-trash to capture it."
-            ) from exc
+            # Business / work — SharePoint recycle-bin restore by LeafName from
+            # the most recent files_trash in this client session. Callers with a
+            # persisted restore_target GUID should pass that instead (preferred).
+            name_hint = (self._ms_last_trashed_name or "").strip()
+            recycle_id = (
+                self._ms_resolve_recycle_bin_id(leaf_name=name_hint, retries=3)
+                if name_hint else ""
+            )
+            if not recycle_id:
+                raise RuntimeError(
+                    f"ONE_DRIVE_RESTORE_DRIVE_ITEM failed for Business/work "
+                    f"account ({exc}). Connect the SharePoint toolkit, set "
+                    f"integrations.workspace.sharepoint_site_name to your "
+                    f"OneDrive personal path (e.g. /personal/user_contoso_com), "
+                    f"trash via files_trash (persists restore_target GUID), then "
+                    f"untrash with that GUID — or pass the recycle-bin GUID "
+                    f"directly."
+                ) from exc
+            result = self._ms_restore_recycle_bin(recycle_id)
+            result["drive_item_id"] = target
+            return result
 
     # --- Health ---
 

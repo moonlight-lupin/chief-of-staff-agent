@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.3.20 — Improve OneDrive Business files.untrash wiring (capability stays False)
+
+Improves the OneDrive-for-Business restore wiring from PR #17/#19, but the
+`files.untrash` capability **stays False** for all Microsoft providers — a live
+probe showed the path still does not work end-to-end.
+
+### Fixes / wiring
+
+- **`composio_microsoft` `files.untrash` now has a real Business fallback.**
+  PR #17 left the SharePoint path half-wired: after Personal Graph
+  (`ONE_DRIVE_RESTORE_DRIVE_ITEM`) returned "Operation not supported", the
+  code raised instead of listing/restoring the SharePoint recycle bin.
+  `_ms_files_untrash` now mirrors the m365 flow — GUID → SharePoint restore;
+  else Personal Graph; on Personal-only failure → recycle-bin lookup by the
+  leaf name from the same-session `files_trash` (or pass `restore_target`).
+- **Personal-site `site_name` scoping.** SharePoint recycle tools defaulted to
+  the tenant root site. Trash/untrash now derive `/personal/{user}` from the
+  item `webUrl` (or `ONE_DRIVE_GET_ROOT`) and pass it as `site_name`. Override
+  with `integrations.workspace.sharepoint_site_name` (e.g.
+  `/personal/user_contoso_com`).
+- **SharePoint toolkit in microsoft bootstrap.** Default toolkits are now
+  `[outlook, one_drive, share_point]`; connect/verify docs and next-steps
+  include `--connect share_point`.
+
+### Capability stays False — not live-verified
+
+- **`files.untrash` remains `False`** for `composio_microsoft`,
+  `composio_microsoft:mcp`, and `m365`. A 2026-07-17 live probe on a real
+  OneDrive-for-Business account — **with the SharePoint toolkit connected and a
+  correctly derived `/personal/…` `site_name`** — still failed end-to-end: the
+  `ONE_DRIVE_DELETE_ITEM`'d file never surfaced in
+  `SHARE_POINT_LIST_RECYCLE_BIN_ITEMS` (0 items after a 45s wait), so
+  `files_trash` captured no `restore_target` and `files_untrash` returned
+  `success=False`. The OneDrive recycle bin and the queried SharePoint recycle
+  bin do not line up. The wiring ships so the path can be debugged live; the
+  capability flips True only after a live run actually restores a file.
+
 ## v0.3.19 — OneDrive Business files.untrash wiring (SharePoint recycle bin)
 
 ### Features

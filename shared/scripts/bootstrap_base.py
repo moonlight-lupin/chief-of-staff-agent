@@ -402,8 +402,12 @@ def _provider_overlay(
         family = (getattr(args, "composio_family", None) or "google").strip().lower()
         if family not in ("google", "microsoft"):
             family = "google"
-        toolkits = (["outlook", "one_drive"] if family == "microsoft"
-                    else ["gmail", "googlecalendar", "googledrive"])
+        # share_point is required for OneDrive-for-Business files.untrash
+        # (Personal Graph restore does not work on work accounts).
+        toolkits = (
+            ["outlook", "one_drive", "share_point"] if family == "microsoft"
+            else ["gmail", "googlecalendar", "googledrive"]
+        )
         overlay["integrations"] = {
             "workspace": {
                 "provider": "composio",
@@ -419,15 +423,18 @@ def _provider_overlay(
         required_env.append("COMPOSIO_MCP_KEY")
         if family == "microsoft":
             notices.append(
-                "Composio family=microsoft: connect Outlook mail/calendar + OneDrive. "
-                "Tool slugs are best-effort against Composio's catalog and are "
-                "overridable via integrations.workspace.tool_slugs (see "
-                "company.yaml.example)."
+                "Composio family=microsoft: connect Outlook, OneDrive, and SharePoint "
+                "(SharePoint powers OneDrive Business files.untrash via the recycle "
+                "bin). Optionally set integrations.workspace.sharepoint_site_name to "
+                "your OneDrive personal path (e.g. /personal/user_contoso_com). "
+                "Tool slugs are overridable via integrations.workspace.tool_slugs "
+                "(see company.yaml.example)."
             )
             next_commands = [
                 "python shared/scripts/doctor.py",
                 "python shared/scripts/connect_workspace.py --provider composio --connect outlook",
                 "python shared/scripts/connect_workspace.py --provider composio --connect one_drive",
+                "python shared/scripts/connect_workspace.py --provider composio --connect share_point",
                 "python shared/scripts/connect_workspace.py --provider composio --verify",
             ]
         else:
