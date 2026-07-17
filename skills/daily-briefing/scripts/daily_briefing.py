@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -157,7 +157,16 @@ def _message_sender(msg: Any) -> str:
 
 
 def _parse_message_date(msg: Any) -> datetime | None:
-    raw = _message_field(msg, "date", "receivedDateTime", "sentDateTime", "internalDate")
+    # ``messageTimestamp`` is what Composio Gmail actually returns (ISO 8601 with
+    # a trailing Z); the Graph/REST spellings are kept for the other providers.
+    # A ms-epoch string/number is also accepted. Every returned datetime is made
+    # timezone-AWARE (naive → UTC) so aware/naive values never get compared and
+    # raise ``TypeError`` in _message_already_replied.
+    raw = _message_field(
+        msg,
+        "messageTimestamp", "date", "receivedDateTime", "sentDateTime",
+        "internalDate", "timestamp",
+    )
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -166,18 +175,30 @@ def _parse_message_date(msg: Any) -> datetime | None:
             ts = float(raw)
             if ts > 1e12:
                 ts /= 1000.0
-            return datetime.fromtimestamp(ts)
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             return None
     text = str(raw).strip()
     if not text:
         return None
+    # Pure numeric string → epoch (seconds or ms).
+    if text.isdigit():
+        try:
+            ts = float(text)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     if text.endswith("Z"):
         text = f"{text[:-1]}+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _is_from_operator(msg: Any, operator: str) -> bool:

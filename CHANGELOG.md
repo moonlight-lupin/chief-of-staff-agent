@@ -12,6 +12,13 @@
   Agent-provided `--input` envelopes get the same filter when both sides of the
   thread are present. Render notes how many messages were suppressed.
 - Messages without a thread id cannot be matched and remain listed (fail-open).
+- **Reply index parses Composio's `messageTimestamp` field** (ISO-8601), not only
+  `date` / `internalDate` — without this the index was empty against the live
+  Composio Google provider and nothing was ever suppressed. All parsed datetimes
+  are normalised to timezone-aware UTC so an aware/naive mix can never raise
+  `TypeError` during the in-thread comparison. Live-verified 2026-07-17: the
+  reply index went from 0 → 5 entries on the real mailbox once `messageTimestamp`
+  was recognised.
 
 ## v0.3.20 — Improve OneDrive Business files.untrash wiring (capability stays False)
 

@@ -83,6 +83,61 @@ class TestReplyHelpers:
         )
 
 
+class TestRealComposioFieldShape:
+    """Composio Gmail returns messageTimestamp + 'Name <email>' sender + threadId.
+
+    Before v0.3.21's fix these fields were not recognised, so the reply index
+    stayed empty and nothing was suppressed live even though unit tests passed on
+    hand-written ``date``/``thread_id`` fields (verified against the live mailbox
+    2026-07-17: 0 → 5 index entries once messageTimestamp was parsed).
+    """
+
+    def _msg(self, thread, sender, ts):
+        # Exact live shape: messageTimestamp (ISO-Z), sender as "Name <email>",
+        # camelCase threadId.
+        return {
+            "messageId": "x", "threadId": thread, "sender": sender,
+            "subject": "s", "messageTimestamp": ts,
+        }
+
+    def test_message_timestamp_field_is_parsed(self):
+        import daily_briefing as db
+        dt = db._parse_message_date(self._msg("t", "a@b.com", "2026-07-16T10:00:00Z"))
+        assert dt is not None
+        assert dt.tzinfo is not None  # aware — safe to compare
+
+    def test_reply_index_and_suppression_with_live_shape(self):
+        import daily_briefing as db
+        operator = "op@example.com"
+        reply = self._msg("t1", f"Op Name <{operator}>", "2026-07-16T11:00:00Z")
+        inbound_old = self._msg("t1", "Client <c@acme.com>", "2026-07-16T09:00:00Z")
+        inbound_new = self._msg("t1", "Client <c@acme.com>", "2026-07-16T13:00:00Z")
+
+        index = db._reply_index_from_messages([reply], operator)
+        assert "t1" in index  # populated from messageTimestamp + <email> sender
+
+        # inbound BEFORE the reply → suppressed; inbound AFTER → kept.
+        kept, suppressed = db._filter_replied_messages(
+            [inbound_old, inbound_new], index, operator,
+        )
+        assert suppressed == 1
+        assert kept == [inbound_new]
+
+    def test_mixed_aware_naive_dates_do_not_raise(self):
+        # messageTimestamp (aware, ISO-Z) vs internalDate (naive, ms-epoch) must
+        # not raise TypeError when compared.
+        import daily_briefing as db
+        operator = "op@example.com"
+        reply = {"threadId": "t1", "sender": operator,
+                 "messageTimestamp": "2026-07-16T10:00:00Z"}
+        inbound = {"threadId": "t1", "sender": "c@x.com",
+                   "internalDate": 1752570000000}
+        index = db._reply_index_from_messages([reply], operator)
+        # Should not raise (both normalised to aware UTC).
+        kept, suppressed = db._filter_replied_messages([inbound], index, operator)
+        assert suppressed + len(kept) == 1
+
+
 class TestCollectGmailReplyAwareness:
     def test_collect_gmail_suppresses_replied_threads(
         self, tmp_project, monkeypatch,
