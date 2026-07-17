@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.17 — document.handoff polish + Drive files.untrash
+
+### Features
+
+- **`document.handoff` readiness.** Preflight/dry-run/error copy no longer claims
+  only Composio can draft; `google_api` (SA REST draft) and Composio Microsoft are
+  first-class. Upload gaps fail closed before side effects; `--allow-partial`
+  covers draft-only gaps. Google Composio uploads normalize `id` + `webViewLink` /
+  `link` for draft body linking. Docs (`LIVE_TEST_CHECKLIST`, `APPROVAL_RUNBOOK`)
+  and `PROVIDER_RECOMMENDATIONS` updated.
+- **`files.untrash` soft-delete restore symmetry (Google).** New capability
+  `files.untrash` (legacy `drive.untrash`) with ABC + `drive_untrash` alias.
+  - `google_api`: Drive REST `files.update` `trashed=False` (SA + delegate)
+  - Composio Google: `GOOGLEDRIVE_UNTRASH_FILE`
+  - `delete_actions.py restore` for executed `drive.trash` → `drive_untrash`
+  - Guardrails: `files.untrash` in `WRITE_ACTIONS` / `SAFE_WRITE_ACTIONS`
+- **OneDrive untrash wired but capability False.** Methods call
+  `ONE_DRIVE_RESTORE_DRIVE_ITEM` (Composio MS) / Graph `POST …/restore` (`m365`);
+  kept False with Personal-only reason until Business/SharePoint is verified.
+- **Beta daily-loop notes.** `BETA_DAILY_LOOP.md` / `BETA_READINESS_CHECKLIST.md`
+  refreshed for Google-first beta; Outlook email-org E2E deferred without Entra.
+
 ## v0.3.16 — Keyless binary file upload via MCP sandbox staging
 
 ### Features

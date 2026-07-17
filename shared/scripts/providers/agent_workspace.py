@@ -126,6 +126,9 @@ class AgentWorkspaceClient(WorkspaceClient):
     def files_trash(self, file_id: str) -> dict[str, Any]:
         raise self._unsupported("files_trash")
 
+    def files_untrash(self, file_id: str) -> dict[str, Any]:
+        raise self._unsupported("files_untrash")
+
     # ── Health ─────────────────────────────────────────────────────────
     def health_check(self) -> bool:
         """The agent provider is always available (it is the agent itself)."""

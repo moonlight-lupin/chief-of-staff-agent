@@ -73,7 +73,11 @@ python skills/document-preparer/scripts/delete_actions.py --config <CONFIG> rest
 Expected: `success: true`, `action: "calendar.uncancel"`
 Verify in Google Calendar: event status should be back to confirmed.
 
-## Section D: Drive Trash (no restore yet)
+## Section D: Drive Trash + Restore (Google)
+
+Provider: `google_api` or Composio Google (`composio` / `composio:mcp`).
+OneDrive restore (`composio_microsoft` / `m365`) stays capability-False
+(Personal-only API) until Business/SharePoint is live-verified.
 
 ### D1. Prepare
 ```bash
@@ -83,17 +87,14 @@ python skills/document-preparer/scripts/delete_actions.py --config <CONFIG> prep
 
 ### D2-D4. Preview, Approve, Execute (same pattern as A)
 
-### D5. Restore — ⚠️ Known limitation
+### D5. Restore
 ```bash
 python skills/document-preparer/scripts/delete_actions.py --config <CONFIG> restore \
   --action-id <id>
 ```
-Expected: `rc: 1` with "No restore path for action type: drive.trash"
-
-**To restore manually:** Use Google Drive web UI or call the Drive API:
-```python
-service.files().update(fileId=file_id, body={"trashed": False}).execute()
-```
+Expected: `success: true`, restore via `drive_untrash` / `files_untrash`
+(`google_api`: Drive REST `trashed=False`; Composio Google: `GOOGLEDRIVE_UNTRASH_FILE`).
+Verify in Drive: file is no longer in Trash.
 
 ## Section E: Expiry and Failed Actions
 

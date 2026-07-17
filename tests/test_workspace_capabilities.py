@@ -21,6 +21,8 @@ class TestCapabilities:
         assert caps["gmail.send"] is True          # supported but destructive
         assert caps["calendar.create"] is True
         assert caps["drive.upload"] is True
+        assert caps["files.untrash"] is True       # SA REST files.update trashed=False (v0.3.17)
+        assert caps["drive.untrash"] is True
 
     def test_composio_capabilities(self):
         from workspace_capabilities import get_capabilities
@@ -31,6 +33,7 @@ class TestCapabilities:
         assert caps["mail.list_tags"] is True      # execution-verified 2026-07-16
         assert caps["mail.archive"] is True        # execution-verified 2026-07-16 (v0.3.14 hardened path)
         assert caps["drive.search"] is True
+        assert caps["files.untrash"] is True       # GOOGLEDRIVE_UNTRASH_FILE (v0.3.17)
         assert caps["calendar.cancel"] is False
 
     def test_composio_microsoft_writes_reflect_live_execution(self):
@@ -75,12 +78,17 @@ class TestCapabilities:
 
         # Not verified / policy-blocked → still False.
         assert caps["calendar.cancel"] is False
+        # OneDrive restore is Personal-only — method wired, capability stays False.
+        assert caps["files.untrash"] is False
+        assert caps["drive.untrash"] is False
 
     def test_supports(self):
         from workspace_capabilities import supports
         assert supports("google_api", "gmail.send") is True
         assert supports("composio", "gmail.send") is True
         assert supports("composio", "drive.upload") is True  # binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
+        assert supports("composio", "files.untrash") is True
+        assert supports("composio_microsoft", "files.untrash") is False
         assert supports("composio", "calendar.cancel") is False
 
     def test_unsupported_actions(self):

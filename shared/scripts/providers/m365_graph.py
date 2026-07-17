@@ -1158,6 +1158,23 @@ class M365GraphClient(WorkspaceClient):
         self._request("DELETE", f"{self._user_base()}/drive/items/{file_id}")
         return {"id": file_id, "reversible": True}  # goes to recycle bin
 
+    @guarded("files.untrash", target_arg="file_id", audit_provider="m365", audit_tool="graph_api")
+    def files_untrash(self, file_id: str) -> dict[str, Any]:
+        """Restore a recycled OneDrive item (Personal OneDrive Graph restore).
+
+        Capability stays False for ``m365`` until Business/SharePoint restore is
+        wired; this method remains for experiments / a future capability flip.
+        """
+        data = self._request(
+            "POST", f"{self._user_base()}/drive/items/{file_id}/restore",
+            json={},
+        )
+        out = dict(data) if isinstance(data, dict) else {}
+        out.setdefault("id", file_id)
+        out["reversible"] = True
+        out["trashed"] = False
+        return out
+
     # ── Health ────────────────────────────────────────────────────────
 
     def health_check(self) -> bool:

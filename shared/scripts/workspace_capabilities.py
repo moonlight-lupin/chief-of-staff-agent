@@ -28,6 +28,7 @@ LEGACY_ACTION_ALIASES: dict[str, str] = {
     "drive.upload": "files.upload",
     "drive.download": "files.download",
     "drive.trash": "files.trash",
+    "drive.untrash": "files.untrash",
     # calendar.* keys are already neutral (unchanged).
 }
 
@@ -52,6 +53,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,
         "files.download": True,
         "files.trash": True,        # via drive delete (default is trash, reversible)
+        "files.untrash": True,      # Drive REST files.update trashed=False (SA) — mirrors soft-delete restore
     },
     # Google Composio family — v0.3.13/v0.3.14.
     # Execution-verified 2026-07-16 (live Gmail): mail.list_tags
@@ -93,6 +95,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_FILE_FROM_TEXT; BINARY via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
+        "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
     },
     "composio:mcp": {
         "mail.search": True,
@@ -117,6 +120,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_FILE_FROM_TEXT; BINARY via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
+        "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
@@ -160,6 +164,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch) — execution-verified 2026-07-16
         "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin — execution-verified 2026-07-16
+        # files.untrash: method wired (ONE_DRIVE_RESTORE_DRIVE_ITEM) but kept False —
+        # Graph/Composio restore is Personal OneDrive-only; Business/SharePoint needs a
+        # different path and has not been live-verified.
+        "files.untrash": False,
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -185,6 +193,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,
+        "files.untrash": False,     # Personal OneDrive-only restore — see UNSUPPORTED_REASONS
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -217,6 +226,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # PUT /drive/root:/{name}:/content (<4MB)
         "files.download": True,     # GET /drive/items/{id}/content
         "files.trash": True,        # DELETE /drive/items/{id} (recycle bin)
+        # files.untrash: Graph POST …/restore is Personal OneDrive-only; keep False
+        # until Business/SharePoint path is wired and live-verified.
+        "files.untrash": False,
     },
     # Claude-native agent provider — actions are performed by the agent/tools,
     # not by script-callable provider methods, so every script-callable action
@@ -240,6 +252,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": False,
         "files.download": False,
         "files.trash": False,
+        "files.untrash": False,
     },
 }
 
@@ -262,6 +275,12 @@ WORKFLOW_REQUIREMENTS: dict[str, list[str]] = {
 
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
+_ONEDRIVE_UNTRASH_REASON = (
+    "OneDrive item restore (ONE_DRIVE_RESTORE_DRIVE_ITEM / Graph POST …/restore) is "
+    "Personal OneDrive-only; Business/SharePoint restore is not wired, so files.untrash "
+    "stays unsupported until that path is live-verified"
+)
+
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                      "(no restore-path parity with the soft-delete promise)",
@@ -271,17 +290,25 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "
                                  "cancel the event via Outlook, or delete and recreate it",
+    ("composio_microsoft", "files.untrash"): _ONEDRIVE_UNTRASH_REASON,
+    ("composio_microsoft", "drive.untrash"): _ONEDRIVE_UNTRASH_REASON,
+    ("composio_microsoft:mcp", "files.untrash"): _ONEDRIVE_UNTRASH_REASON,
+    ("composio_microsoft:mcp", "drive.untrash"): _ONEDRIVE_UNTRASH_REASON,
+    ("m365", "files.untrash"): _ONEDRIVE_UNTRASH_REASON,
+    ("m365", "drive.untrash"): _ONEDRIVE_UNTRASH_REASON,
 }
 
 # Provider recommendations for each action/workflow.
 PROVIDER_RECOMMENDATIONS: dict[str, str] = {
-    "gmail.draft": "google_api or composio",
-    "document.handoff": "google_api or composio",
+    "gmail.draft": "google_api, composio, or composio_microsoft",
+    "document.handoff": "google_api, composio, or composio_microsoft",
     "gmail.send": "google_api, composio, or composio_microsoft",
     "calendar.create": "google_api or composio",
     "calendar.update": "google_api or composio",
-    "drive.upload": "google_api or composio",
-    "drive.download": "google_api or composio",
+    "drive.upload": "google_api, composio, or composio_microsoft",
+    "drive.download": "google_api, composio, or composio_microsoft",
+    "drive.untrash": "google_api or composio",
+    "files.untrash": "google_api or composio",
     "meeting.gather": "google_api or composio",
     "weekly.collect": "google_api or composio",
 }

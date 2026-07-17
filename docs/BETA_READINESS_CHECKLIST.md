@@ -1,6 +1,13 @@
-# Beta Readiness Checklist (v0.3.0)
+# Beta Readiness Checklist (v0.3.17)
 
 Use this checklist before going live with the Chief-of-Staff daily operating loop.
+
+## Workspace provider (pick one)
+
+- [ ] **Google SA (`google_api`)** — `document.handoff`, Drive trash/restore, daily loop
+- [ ] **Composio Google** — same write surface via MCP (text + binary upload)
+- [ ] **Composio Microsoft / native m365** — mail/calendar/files reads+writes OK;
+      OneDrive `files.untrash` and live Outlook email-org E2E deferred without Entra
 
 ## Pre-flight
 
@@ -17,6 +24,10 @@ Use this checklist before going live with the Chief-of-Staff daily operating loo
   - All subsystems should render without crashing
   - Result should be PASS
   - Run: `python shared/scripts/chief_of_staff.py smoke-test --summary`
+
+- [ ] **3b. Handoff preflight (optional write path)**
+  - Run: `python skills/document-preparer/scripts/document_actions.py handoff --file <local> --to <you> --subject "beta" --body "ok" --preflight`
+  - Expect `capabilities_ok: true` on Google / Composio Google / Composio Microsoft
 
 ## Daily operating loop
 

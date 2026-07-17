@@ -34,6 +34,30 @@ from workspace_guardrails import guarded
 # draft in the delegate's Drafts folder.
 _GMAIL_DRAFT_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 _GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
+# Drive untrash uses the same SA + delegate pattern as draft: google_api.py has
+# no drive-untrash CLI, so we PATCH files.update with trashed=False over REST.
+_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
+
+
+def _sa_credentials(*, service_account_path: str, delegate_email: str, scopes: list[str]):
+    """Build domain-wide-delegated SA credentials for a REST call."""
+    from google.auth.transport.requests import Request
+    from google.oauth2 import service_account
+
+    sa_path = Path(service_account_path).expanduser()
+    if not sa_path.is_file():
+        raise RuntimeError(f"service account JSON not found: {sa_path}")
+    if not (delegate_email or "").strip():
+        raise RuntimeError(
+            "google.delegate_email is required for this Google REST operation"
+        )
+    credentials = service_account.Credentials.from_service_account_file(
+        str(sa_path),
+        scopes=scopes,
+    ).with_subject(delegate_email.strip())
+    credentials.refresh(Request())
+    return credentials
 
 
 def _gmail_draft_via_service_account(
@@ -51,22 +75,12 @@ def _gmail_draft_via_service_account(
     delegate identity already configured for the google_api provider.
     """
     import requests
-    from google.auth.transport.requests import Request
-    from google.oauth2 import service_account
 
-    sa_path = Path(service_account_path).expanduser()
-    if not sa_path.is_file():
-        raise RuntimeError(f"service account JSON not found: {sa_path}")
-    if not (delegate_email or "").strip():
-        raise RuntimeError(
-            "google.delegate_email is required for Gmail draft creation"
-        )
-
-    credentials = service_account.Credentials.from_service_account_file(
-        str(sa_path),
+    credentials = _sa_credentials(
+        service_account_path=service_account_path,
+        delegate_email=delegate_email,
         scopes=[_GMAIL_DRAFT_SCOPE],
-    ).with_subject(delegate_email.strip())
-    credentials.refresh(Request())
+    )
 
     mime = MIMEText(body or "", _charset="utf-8")
     mime["To"] = to
@@ -100,6 +114,42 @@ def _gmail_draft_via_service_account(
     elif draft_id:
         out["id"] = draft_id
         out["draft_id"] = draft_id
+    return out
+
+
+def _drive_untrash_via_service_account(
+    *,
+    service_account_path: str,
+    delegate_email: str,
+    file_id: str,
+) -> dict[str, Any]:
+    """Restore a trashed Drive file via REST (files.update trashed=False)."""
+    import requests
+
+    credentials = _sa_credentials(
+        service_account_path=service_account_path,
+        delegate_email=delegate_email,
+        scopes=[_DRIVE_SCOPE],
+    )
+    resp = requests.patch(
+        f"{_DRIVE_FILES_URL}/{file_id}",
+        headers={
+            "Authorization": f"Bearer {credentials.token}",
+            "Content-Type": "application/json",
+        },
+        params={"supportsAllDrives": "true", "fields": "id,name,trashed,webViewLink"},
+        json={"trashed": False},
+        timeout=45,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"Drive files.update untrash failed ({resp.status_code}): {resp.text[:500]}"
+        )
+    data = resp.json() if resp.content else {}
+    out: dict[str, Any] = dict(data) if isinstance(data, dict) else {}
+    out.setdefault("id", file_id)
+    out["reversible"] = True
+    out["trashed"] = False
     return out
 
 
@@ -370,6 +420,35 @@ class GoogleWorkspaceClient(WorkspaceClient):
         if rc != 0:
             raise RuntimeError(err.strip() or out.strip())
         return {"output": out.strip(), "reversible": True}
+
+    @guarded("drive.untrash", target_arg="file_id", audit_provider="google_api")
+    def files_untrash(self, file_id: str) -> dict[str, Any]:
+        """Restore a trashed Drive file (files.update trashed=False via SA REST).
+
+        ``google_api.py`` has no drive-untrash CLI; this mirrors the
+        ``mail_create_draft`` SA REST path.
+        """
+        google_cfg = (
+            self.config.get("google", {})
+            if isinstance(self.config, Mapping)
+            else {}
+        )
+        sa_path = str(google_cfg.get("service_account_path") or "").strip()
+        if not sa_path:
+            sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
+        delegate = self.delegate_email or str(
+            google_cfg.get("delegate_email") or ""
+        ).strip()
+        if not sa_path:
+            raise RuntimeError(
+                "files.untrash requires google.service_account_path (or "
+                "GOOGLE_SERVICE_ACCOUNT_PATH) — google_api.py has no untrash CLI"
+            )
+        return _drive_untrash_via_service_account(
+            service_account_path=sa_path,
+            delegate_email=delegate,
+            file_id=file_id,
+        )
 
     @guarded("calendar.cancel", target_arg="event_id", audit_provider="google_api")
     def calendar_cancel(self, event_id: str) -> dict[str, Any]:

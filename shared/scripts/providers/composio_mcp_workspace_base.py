@@ -67,6 +67,7 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "files_download": "GOOGLEDRIVE_DOWNLOAD_FILE",
         # Soft trash (recoverable via GOOGLEDRIVE_UNTRASH_FILE) — not permanent delete.
         "files_trash": "GOOGLEDRIVE_TRASH_FILE",
+        "files_untrash": "GOOGLEDRIVE_UNTRASH_FILE",
     },
     # Microsoft (Outlook + OneDrive) slugs corrected against Composio's LIVE
     # catalog (v0.3.7 acceptance test, 2026-07). The reads (mail_search,
@@ -100,6 +101,8 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "files_upload_binary": "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
         "files_download": "ONE_DRIVE_DOWNLOAD_FILE",
         "files_trash": "ONE_DRIVE_DELETE_ITEM",
+        # Personal OneDrive-only; capability stays False until Business path is verified.
+        "files_untrash": "ONE_DRIVE_RESTORE_DRIVE_ITEM",
     },
 }
 
@@ -424,6 +427,38 @@ def _ms_with_id(data: Any) -> dict[str, Any]:
     eid = _ms_entity_id(out, "")
     if eid:
         out["id"] = eid
+    return out
+
+
+def _drive_with_id_link(data: Any) -> dict[str, Any]:
+    """Normalize a Google Drive upload payload for handoff consumers.
+
+    Ensures top-level ``id`` plus a shareable ``link`` / ``webViewLink`` when
+    Composio nests them under ``data`` / ``response_data``.
+    """
+    out = dict(data) if isinstance(data, Mapping) else {}
+    eid = _ms_entity_id(out, "")
+    if eid:
+        out["id"] = eid
+
+    def _first_link(payload: Mapping[str, Any]) -> str:
+        for key in ("webViewLink", "webUrl", "htmlLink", "display_url", "link", "url"):
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return ""
+
+    link = _first_link(out)
+    if not link:
+        for key in ("data", "response_data", "result", "file", "item"):
+            nested = out.get(key)
+            if isinstance(nested, Mapping):
+                link = _first_link(nested)
+                if link:
+                    break
+    if link:
+        out.setdefault("webViewLink", link)
+        out.setdefault("link", link)
     return out
 
 
@@ -1549,7 +1584,9 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             if parent_id:
                 args["parent_id"] = parent_id
         data = self._execute_composio_tool(slug, args, operation="files_upload")
-        return data if isinstance(data, dict) else {}
+        out = _drive_with_id_link(data)
+        out["upload_slug"] = slug
+        return out
 
     # CLEANUP of the MCP-native binary staging path (files.upload binary):
     #   * local temp file (caller's) — caller unlinks it;
@@ -1636,6 +1673,28 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 slug, {"file_id": file_id}, operation="files_trash",
             )
         return {"id": file_id, "reversible": True}
+
+    @guarded("files.untrash", target_arg="file_id", audit_provider="composio",
+             audit_tool=lambda self: self._cleanup_slug("files_untrash"),
+             tool_slug=lambda self: self._cleanup_slug("files_untrash"))
+    def files_untrash(self, file_id: str) -> dict[str, Any]:
+        """Restore a soft-deleted file from Drive trash / OneDrive recycle bin.
+
+        Google → ``GOOGLEDRIVE_UNTRASH_FILE`` (``file_id``).
+        Microsoft → ``ONE_DRIVE_RESTORE_DRIVE_ITEM`` (``item_id``) — Personal
+        OneDrive only; capability is False for Microsoft until Business path is
+        live-verified (method remains callable for experiments / future flip).
+        """
+        slug = self._slug_for("files_untrash")
+        if self.family == "microsoft":
+            self._execute_composio_tool(
+                slug, {"item_id": file_id}, operation="files_untrash",
+            )
+        else:
+            self._execute_composio_tool(
+                slug, {"file_id": file_id}, operation="files_untrash",
+            )
+        return {"id": file_id, "reversible": True, "trashed": False}
 
     # --- Health ---
 

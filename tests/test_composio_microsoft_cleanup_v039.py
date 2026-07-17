@@ -85,8 +85,10 @@ class TestFamilySlugs:
         ms = FAMILY_SLUGS["microsoft"]
         assert ms["mail_move"] == "OUTLOOK_MOVE_MESSAGE"
         assert ms["files_trash"] == "ONE_DRIVE_DELETE_ITEM"
+        assert ms["files_untrash"] == "ONE_DRIVE_RESTORE_DRIVE_ITEM"
         assert "mail_move" not in FAMILY_SLUGS["google"]
         assert FAMILY_SLUGS["google"]["files_trash"] == "GOOGLEDRIVE_TRASH_FILE"
+        assert FAMILY_SLUGS["google"]["files_untrash"] == "GOOGLEDRIVE_UNTRASH_FILE"
 
 
 class TestMailMoveCleanup:
@@ -208,6 +210,24 @@ class TestFilesTrash:
         assert call["arguments"] == {"file_id": "f1"}
         assert res["data"] == {"id": "f1", "reversible": True}
 
+    def test_files_untrash_uses_restore_slug(self, mcp_key, tmp_project):
+        """Method is wired; capability stays False (Personal-only)."""
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        client = ComposioMCPWorkspaceClient(_ms_workspace())
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
+        client._mcp_client = mock
+
+        res = client.files_untrash("file-1")
+
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "ONE_DRIVE_RESTORE_DRIVE_ITEM"
+        assert call["arguments"] == {"item_id": "file-1"}
+        assert res["success"] is True
+        assert res["action"] == "files.untrash"
+        assert res["data"]["id"] == "file-1"
+        assert res["data"]["trashed"] is False
+
 
 class TestCapabilitiesPhase1And2:
     # v0.3.12: tags + OneDrive download/trash advertise True (Outlook categories /
@@ -229,6 +249,9 @@ class TestCapabilitiesPhase1And2:
         assert caps["files.upload"] is True    # text + binary via MCP sandbox staging (PR #14, no COMPOSIO_API_KEY)
         assert caps["files.download"] is True
         assert supports("composio_microsoft:mcp", "drive.trash") is True
+        # Personal OneDrive-only restore — method wired, capability False (v0.3.17).
+        assert caps["files.untrash"] is False
+        assert supports("composio_microsoft:mcp", "drive.untrash") is False
 
     def test_client_supports_cleanup_and_writes(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

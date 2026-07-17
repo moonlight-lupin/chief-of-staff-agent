@@ -68,6 +68,7 @@ class TestGoogleFamilySlugs:
         assert g["mail_modify_labels"] == "GMAIL_ADD_LABEL_TO_EMAIL"
         assert g["mail_trash"] == "GMAIL_MOVE_TO_TRASH"
         assert g["mail_untrash"] == "GMAIL_UNTRASH_MESSAGE"
+        assert g["files_untrash"] == "GOOGLEDRIVE_UNTRASH_FILE"
 
 
 class TestGoogleMailCleanup:
@@ -245,7 +246,8 @@ class TestGoogleCapabilities:
         caps = get_capabilities("composio:mcp")
         for action in ("mail.list_tags", "mail.create_tag", "mail.send",
                        "mail.archive", "mail.unarchive", "mail.trash",
-                       "mail.untrash", "mail.tag", "files.trash", "files.upload"):
+                       "mail.untrash", "mail.tag", "files.trash", "files.upload",
+                       "files.untrash"):
             assert caps[action] is True, f"{action} should be True"
         assert caps["calendar.cancel"] is False
         assert caps["mail.list_folders"] is False
@@ -260,6 +262,7 @@ class TestGoogleCapabilities:
         assert client.supports("mail.tag") is True
         assert client.supports("files.trash") is True
         assert client.supports("files.upload") is True   # MCP sandbox staging (PR #14)
+        assert client.supports("files.untrash") is True
         assert client.supports("calendar.cancel") is False
 
     def test_files_trash_google_slug(self, mcp_key, tmp_project):
@@ -271,6 +274,18 @@ class TestGoogleCapabilities:
         assert res["success"] is True
         call = mock.call_tool.call_args[0][1]["tools"][0]
         assert call["tool_slug"] == "GOOGLEDRIVE_TRASH_FILE"
+        assert call["arguments"] == {"file_id": "drive-file-1"}
+
+    def test_files_untrash_google_slug(self, mcp_key, tmp_project):
+        client = TestGoogleMailCleanup()._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
+        client._mcp_client = mock
+        res = client.files_untrash("drive-file-1")
+        assert res["success"] is True
+        assert res["data"]["trashed"] is False
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GOOGLEDRIVE_UNTRASH_FILE"
         assert call["arguments"] == {"file_id": "drive-file-1"}
 
     def test_text_upload_uses_create_from_text_no_staging(self, mcp_key, tmp_project):

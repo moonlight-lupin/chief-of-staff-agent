@@ -161,6 +161,20 @@ class TestWriteGuardrails:
         assert kwargs["cc"] == "c@d.com"
         assert "acme.json" in kwargs["service_account_path"]
 
+    def test_files_untrash_via_sa_rest(self, google_client):
+        """drive.untrash uses SA REST (no google_api.py CLI); legacy id skips WRITE_ACTIONS gate."""
+        with patch(
+            "providers.google_workspace._drive_untrash_via_service_account",
+            return_value={"id": "file-9", "trashed": False, "reversible": True},
+        ) as mock_untrash:
+            result = google_client.files_untrash("file-9")
+        assert result["success"] is True
+        assert result["action"] == "drive.untrash"
+        assert result["data"]["trashed"] is False
+        kwargs = mock_untrash.call_args.kwargs
+        assert kwargs["file_id"] == "file-9"
+        assert "acme.json" in kwargs["service_account_path"]
+
     def test_calendar_create_blocked_without_auto_approve(self, google_client):
         with patch.object(google_client, "_run") as mock_run:
             result = google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
