@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.3.19 — OneDrive Business files.untrash wiring (SharePoint recycle bin)
+
+### Features
+
+- **OneDrive `files.untrash` restore path wired** (Personal Graph + Business
+  SharePoint recycle bin). **Capability stays `False`** for `composio_microsoft`,
+  `composio_microsoft:mcp`, and `m365` until a live run restores a file — the
+  discipline is "True only when execution-verified." A 2026-07-17 live probe on a
+  real OneDrive-for-Business account confirmed the flip would be premature:
+  Personal Graph restore (`ONE_DRIVE_RESTORE_DRIVE_ITEM`) returns "Operation not
+  supported" for work accounts, and the Business SharePoint fallback needs a
+  connected SharePoint toolkit / `Sites.ReadWrite.All` that was not present.
+  - **`m365`**: `files_trash` captures name + SharePoint recycle-bin GUID as
+    `restore_target`; `files_untrash` tries Graph Personal restore then falls
+    back to SharePoint REST `RecycleBin/RestoreByIds` (host-scoped SPO token;
+    requires SharePoint app permission `Sites.ReadWrite.All`). Not live-verified.
+  - **`composio_microsoft`**: Personal via `ONE_DRIVE_RESTORE_DRIVE_ITEM`;
+    Business via `SHARE_POINT_LIST_RECYCLE_BIN_ITEMS` /
+    `SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM` (SharePoint toolkit must be
+    connected so trash can persist `restore_target`). Not live-verified.
+- **`delete_actions.py restore`** already prefers `restore_target`, so once the
+  Business path is live-verified and enabled, executed trash actions restore by
+  recycle-bin GUID automatically.
+
 ## v0.3.18 — Ship the Google-first beta daily loop
 
 ### Features

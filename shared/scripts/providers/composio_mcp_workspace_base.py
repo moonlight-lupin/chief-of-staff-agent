@@ -101,8 +101,13 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "files_upload_binary": "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
         "files_download": "ONE_DRIVE_DOWNLOAD_FILE",
         "files_trash": "ONE_DRIVE_DELETE_ITEM",
-        # Personal OneDrive-only; capability stays False until Business path is verified.
+        # Personal Graph restore (ONE_DRIVE_RESTORE_DRIVE_ITEM). Business /
+        # work accounts fall back to SharePoint recycle-bin tools below.
         "files_untrash": "ONE_DRIVE_RESTORE_DRIVE_ITEM",
+        "files_get": "ONE_DRIVE_GET_ITEM",
+        # SharePoint toolkit (must be connected for OneDrive-for-Business restore).
+        "files_recycle_list": "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS",
+        "files_recycle_restore": "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM",
     },
 }
 
@@ -1660,18 +1665,27 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def files_trash(self, file_id: str) -> dict[str, Any]:
         """Soft-delete a file: OneDrive recycle bin or Google Drive trash.
 
-        Microsoft → ``ONE_DRIVE_DELETE_ITEM`` (``item_id``).
+        Microsoft → ``ONE_DRIVE_DELETE_ITEM`` (``item_id``). When the SharePoint
+        toolkit is connected, also resolves a recycle-bin GUID into
+        ``restore_target`` for Business restores.
         Google → ``GOOGLEDRIVE_TRASH_FILE`` (``file_id``) — not permanent delete.
         """
         slug = self._slug_for("files_trash")
         if self.family == "microsoft":
+            name = self._ms_get_item_name(file_id)
             self._execute_composio_tool(
                 slug, {"item_id": file_id}, operation="files_trash",
             )
-        else:
-            self._execute_composio_tool(
-                slug, {"file_id": file_id}, operation="files_trash",
-            )
+            out: dict[str, Any] = {"id": file_id, "reversible": True}
+            if name:
+                out["name"] = name
+            recycle_id = self._ms_resolve_recycle_bin_id(leaf_name=name) if name else ""
+            if recycle_id:
+                out["restore_target"] = recycle_id
+            return out
+        self._execute_composio_tool(
+            slug, {"file_id": file_id}, operation="files_trash",
+        )
         return {"id": file_id, "reversible": True}
 
     @guarded("files.untrash", target_arg="file_id", audit_provider="composio",
@@ -1681,20 +1695,137 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         """Restore a soft-deleted file from Drive trash / OneDrive recycle bin.
 
         Google → ``GOOGLEDRIVE_UNTRASH_FILE`` (``file_id``).
-        Microsoft → ``ONE_DRIVE_RESTORE_DRIVE_ITEM`` (``item_id``) — Personal
-        OneDrive only; capability is False for Microsoft until Business path is
-        live-verified (method remains callable for experiments / future flip).
+        Microsoft:
+          1. Recycle-bin GUID → ``SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM``
+          2. Else ``ONE_DRIVE_RESTORE_DRIVE_ITEM`` (Personal Graph)
+          3. On Personal-only failure → SharePoint recycle-bin lookup/restore
+             (requires connected SharePoint toolkit for Business/work accounts)
         """
-        slug = self._slug_for("files_untrash")
         if self.family == "microsoft":
-            self._execute_composio_tool(
-                slug, {"item_id": file_id}, operation="files_untrash",
-            )
-        else:
-            self._execute_composio_tool(
-                slug, {"file_id": file_id}, operation="files_untrash",
-            )
+            return self._ms_files_untrash(file_id)
+        slug = self._slug_for("files_untrash")
+        self._execute_composio_tool(
+            slug, {"file_id": file_id}, operation="files_untrash",
+        )
         return {"id": file_id, "reversible": True, "trashed": False}
+
+    def _ms_get_item_name(self, file_id: str) -> str:
+        try:
+            slug = self._slug_for("files_get")
+            data = self._execute_composio_tool(
+                slug, {"item_id": file_id}, operation="files_get",
+            )
+        except Exception:
+            return ""
+        if isinstance(data, Mapping):
+            name = data.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+            nested = data.get("data")
+            if isinstance(nested, Mapping):
+                name = nested.get("name")
+                if isinstance(name, str) and name.strip():
+                    return name.strip()
+        return ""
+
+    @staticmethod
+    def _ms_is_guid(value: str) -> bool:
+        import re
+        return bool(
+            re.fullmatch(
+                r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                (value or "").strip(),
+            )
+        )
+
+    def _ms_recycle_items(self) -> list[Mapping[str, Any]]:
+        try:
+            slug = self._slug_for("files_recycle_list")
+            data = self._execute_composio_tool(
+                slug,
+                {"top": 50, "orderby": "DeletedDate desc"},
+                operation="files_recycle_list",
+            )
+        except Exception:
+            return []
+        if not isinstance(data, Mapping):
+            return []
+        for key in ("value", "items", "d"):
+            val = data.get(key)
+            if isinstance(val, list):
+                return [x for x in val if isinstance(x, Mapping)]
+            if isinstance(val, Mapping) and isinstance(val.get("results"), list):
+                return [x for x in val["results"] if isinstance(x, Mapping)]
+        nested = data.get("data")
+        if isinstance(nested, Mapping):
+            val = nested.get("value") or nested.get("items")
+            if isinstance(val, list):
+                return [x for x in val if isinstance(x, Mapping)]
+        return []
+
+    def _ms_resolve_recycle_bin_id(self, *, leaf_name: str = "") -> str:
+        leaf = (leaf_name or "").strip().lower()
+        if not leaf:
+            return ""
+        for item in self._ms_recycle_items():
+            item_leaf = str(
+                item.get("LeafName") or item.get("Title") or item.get("title") or ""
+            ).strip()
+            item_id = str(item.get("Id") or item.get("id") or "").strip()
+            if item_leaf.lower() == leaf and self._ms_is_guid(item_id):
+                return item_id
+        return ""
+
+    def _ms_restore_recycle_bin(self, recycle_bin_id: str) -> dict[str, Any]:
+        slug = self._slug_for("files_recycle_restore")
+        self._execute_composio_tool(
+            slug,
+            {"recyclebinitemid": recycle_bin_id},
+            operation="files_recycle_restore",
+        )
+        return {
+            "id": recycle_bin_id,
+            "restore_target": recycle_bin_id,
+            "reversible": True,
+            "trashed": False,
+            "restore_path": "sharepoint_recycle_bin",
+        }
+
+    def _ms_files_untrash(self, file_id: str) -> dict[str, Any]:
+        target = (file_id or "").strip()
+        if not target:
+            raise RuntimeError("files.untrash requires a file_id or recycle-bin GUID")
+        if self._ms_is_guid(target):
+            return self._ms_restore_recycle_bin(target)
+        # Personal OneDrive Graph restore
+        try:
+            slug = self._slug_for("files_untrash")
+            self._execute_composio_tool(
+                slug, {"item_id": target}, operation="files_untrash",
+            )
+            return {
+                "id": target,
+                "reversible": True,
+                "trashed": False,
+                "restore_path": "onedrive_personal",
+            }
+        except Exception as exc:
+            msg = str(exc).lower()
+            personal_only = any(
+                n in msg for n in (
+                    "personal", "not supported", "notsupported",
+                    "badrequest", "400", "404", "business",
+                )
+            )
+            if not personal_only:
+                raise
+            raise RuntimeError(
+                f"ONE_DRIVE_RESTORE_DRIVE_ITEM failed for Business/work account "
+                f"({exc}). Pass the SharePoint recycle-bin GUID (files_trash "
+                f"persists it as restore_target when the SharePoint toolkit is "
+                f"connected), or connect SharePoint and re-trash to capture it."
+            ) from exc
 
     # --- Health ---
 

@@ -164,9 +164,14 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,     # ONE_DRIVE_DOWNLOAD_FILE (+ s3url fetch) — execution-verified 2026-07-16
         "files.trash": True,        # ONE_DRIVE_DELETE_ITEM → recycle bin — execution-verified 2026-07-16
-        # files.untrash: method wired (ONE_DRIVE_RESTORE_DRIVE_ITEM) but kept False —
-        # Graph/Composio restore is Personal OneDrive-only; Business/SharePoint needs a
-        # different path and has not been live-verified.
+        # files.untrash: method wired (Personal → ONE_DRIVE_RESTORE_DRIVE_ITEM;
+        # Business → SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM via restore_target) but
+        # kept False. Live probe 2026-07-17 on a real OneDrive-for-Business
+        # account (toolkits outlook+one_drive, no SharePoint): trash succeeded but
+        # captured NO restore_target (SharePoint toolkit not connected), and
+        # ONE_DRIVE_RESTORE_DRIVE_ITEM returned "Operation not supported" for the
+        # work account — so untrash did NOT restore the file. Flip to True only
+        # after a live run restores a file on a SharePoint-connected account.
         "files.untrash": False,
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
@@ -193,7 +198,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # TEXT via CREATE_TEXT_FILE; BINARY via ONE_DRIVE_ONEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
         "files.trash": True,
-        "files.untrash": False,     # Personal OneDrive-only restore — see UNSUPPORTED_REASONS
+        "files.untrash": False,     # wired (Personal Graph + SharePoint fallback) but NOT live-verified — see composio_microsoft note
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -226,8 +231,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.upload": True,       # PUT /drive/root:/{name}:/content (<4MB)
         "files.download": True,     # GET /drive/items/{id}/content
         "files.trash": True,        # DELETE /drive/items/{id} (recycle bin)
-        # files.untrash: Graph POST …/restore is Personal OneDrive-only; keep False
-        # until Business/SharePoint path is wired and live-verified.
+        # files.untrash: method wired (Personal Graph restore; Business via
+        # SharePoint REST RecycleBin/RestoreByIds with a host-scoped SPO token +
+        # Sites.ReadWrite.All) but kept False — no live m365/Entra environment has
+        # exercised the SharePoint restore path. Flip only after a live run.
         "files.untrash": False,
     },
     # Claude-native agent provider — actions are performed by the agent/tools,
@@ -276,9 +283,12 @@ WORKFLOW_REQUIREMENTS: dict[str, list[str]] = {
 # Human-readable reasons for why a specific provider doesn't support an action.
 # Keyed by legacy action ids (callers pass legacy ids today).
 _ONEDRIVE_UNTRASH_REASON = (
-    "OneDrive item restore (ONE_DRIVE_RESTORE_DRIVE_ITEM / Graph POST …/restore) is "
-    "Personal OneDrive-only; Business/SharePoint restore is not wired, so files.untrash "
-    "stays unsupported until that path is live-verified"
+    "OneDrive item restore is wired (Personal ONE_DRIVE_RESTORE_DRIVE_ITEM / Graph "
+    "POST …/restore; Business SharePoint RecycleBin/RestoreByIds) but not live-verified: "
+    "a 2026-07-17 live probe on a real OneDrive-for-Business account showed the Personal "
+    "Graph restore returns 'Operation not supported' for work accounts and the SharePoint "
+    "recycle-bin fallback needs a connected SharePoint toolkit / Sites.ReadWrite.All, so "
+    "files.untrash stays unsupported until a live run actually restores a file"
 )
 
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {

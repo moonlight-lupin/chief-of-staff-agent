@@ -111,17 +111,27 @@ python delete_actions.py summary
 | `gmail.archive` | `gmail_unarchive()` — add INBOX label back | ✅ Wired |
 | `gmail.trash` | `gmail_untrash()` — remove TRASH label | ✅ Wired |
 | `calendar.cancel` | `calendar_uncancel()` — set status confirmed | ✅ Wired (google_api only) |
-| `drive.trash` | `drive_untrash()` / `files_untrash()` | ✅ Wired for Google |
+| `drive.trash` | `drive_untrash()` / `files_untrash()` | ✅ Wired for Google; OneDrive wired but capability **False** (pending live verify) |
 
 **Google Drive restore:** `files.untrash` calls Drive REST `files.update`
 (`trashed=False`) on `google_api` (SA + delegate; no `google_api.py` CLI) and
 `GOOGLEDRIVE_UNTRASH_FILE` on Composio Google. Soft-delete restore is available
 via `delete_actions.py restore` for executed `drive.trash` actions.
 
-**OneDrive restore limitation:** `ONE_DRIVE_RESTORE_DRIVE_ITEM` / Graph
-`POST …/restore` is Personal OneDrive-only. Business/SharePoint needs a
-different path. Capability stays **False** for `composio_microsoft` and `m365`
-until that path is live-verified (methods are wired for a future flip).
+**OneDrive restore — wired, capability False (not live-verified):** the methods
+exist but `files.untrash` stays **False** for `composio_microsoft` and `m365`.
+A 2026-07-17 live probe on a real OneDrive-for-Business account showed the
+Personal Graph restore returns *"Operation not supported"* for work accounts,
+and the Business fallback needs infrastructure not yet exercised live. Flip to
+True only after a live run actually restores a file.
+- **Personal** — Graph / `ONE_DRIVE_RESTORE_DRIVE_ITEM` by drive item id
+- **Business / work** — SharePoint recycle-bin restore. `files_trash` persists
+  the recycle-bin GUID as `restore_target` **when the SharePoint toolkit is
+  connected** (it was not in the live probe, so no GUID was captured).
+  - `m365`: SharePoint REST `RecycleBin/RestoreByIds` (app needs SharePoint
+    `Sites.ReadWrite.All` + a host-scoped token) — never run live
+  - `composio_microsoft`: `SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM` (connect the
+    SharePoint toolkit; pass `restore_target` / recycle-bin GUID)
 
 ### Handling Failed Actions
 
@@ -202,7 +212,7 @@ All state transitions are audited via `workspace_audit.py`:
 | drive.upload / files.upload | ✅ | ✅ (text + binary) | ✅ (text + binary) |
 | drive.download / files.download | ✅ | ✅ | ✅ |
 | drive.trash / files.trash | ✅ | ✅ | ✅ |
-| drive.untrash / files.untrash | ✅ (SA REST) | ✅ | ❌ (Personal-only; see above) |
+| drive.untrash / files.untrash | ✅ (SA REST) | ✅ | ❌ (wired: Personal Graph + Business SharePoint recycle bin, but not live-verified) |
 | document.handoff | ✅ | ✅ | ✅ |
 
 Destructive / gated writes still require: prepare → approve → execute (or
