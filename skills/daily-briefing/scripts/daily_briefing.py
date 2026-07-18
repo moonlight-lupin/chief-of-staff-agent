@@ -10,6 +10,7 @@ import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -131,6 +132,35 @@ def _operator_email(config: Any) -> str:
     return email.lower()
 
 
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
+def _reply_scan_limits(config: Any) -> tuple[int, int]:
+    """Resolve the sent-mail scan window used for reply awareness.
+
+    Defaults to the module constants (14 days / 50 messages). An optional
+    ``briefing`` config section widens the window so older replies still
+    suppress::
+
+        briefing:
+          reply_lookback_days: 30
+          reply_sent_max: 200
+    """
+    lookback = _REPLY_LOOKBACK_DAYS
+    sent_max = _REPLY_SENT_MAX
+    if isinstance(config, dict):
+        briefing = config.get("briefing")
+        if isinstance(briefing, dict):
+            lookback = _positive_int(briefing.get("reply_lookback_days"), lookback)
+            sent_max = _positive_int(briefing.get("reply_sent_max"), sent_max)
+    return lookback, sent_max
+
+
 def _message_field(msg: Mapping[str, Any] | Any, *keys: str) -> Any:
     if not isinstance(msg, Mapping):
         return None
@@ -209,8 +239,12 @@ def _is_from_operator(msg: Any, operator: str) -> bool:
         return False
     if sender == operator:
         return True
-    # Allow "Name <email>" forms
-    return sender.endswith(f"<{operator}>") or operator in sender
+    # Compare the bare address parsed out of "Name <addr>" / "addr" forms.
+    # A loose ``operator in sender`` substring test misfires — e.g. operator
+    # "jo@x.com" is a substring of "jojo@x.com", and the address can also show
+    # up inside an unrelated display name.
+    _, addr = parseaddr(sender)
+    return bool(addr) and addr == operator
 
 
 def _is_sent_side_query(name: str, query: str, operator: str) -> bool:
@@ -249,13 +283,18 @@ def _reply_index_from_messages(
     return index
 
 
-def _build_operator_reply_index(client: Any, operator: str) -> dict[str, datetime]:
+def _build_operator_reply_index(
+    client: Any,
+    operator: str,
+    lookback_days: int = _REPLY_LOOKBACK_DAYS,
+    sent_max: int = _REPLY_SENT_MAX,
+) -> dict[str, datetime]:
     """Fetch recent sent mail and index by thread for reply detection."""
     if not operator or client is None:
         return {}
-    query = f"in:sent newer_than:{_REPLY_LOOKBACK_DAYS}d"
+    query = f"in:sent newer_than:{lookback_days}d"
     try:
-        sent = client.mail_search(query, max_results=_REPLY_SENT_MAX)
+        sent = client.mail_search(query, max_results=sent_max)
     except Exception:
         # Fail open — briefing still renders; we just can't suppress.
         return {}
@@ -354,7 +393,8 @@ def collect_gmail(config: Any, project_root: Path) -> list[dict[str, Any]] | dic
         raw_results.append((query, q, result))
 
     # One sent-mail fetch → suppress inbound hits the operator already answered.
-    reply_index = _build_operator_reply_index(client, operator)
+    lookback_days, sent_max = _reply_scan_limits(config)
+    reply_index = _build_operator_reply_index(client, operator, lookback_days, sent_max)
     # Also learn from sent-side query results already in hand (no extra round-trip).
     for query, q, result in raw_results:
         name = str(query.get("name") or "")
