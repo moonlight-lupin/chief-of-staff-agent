@@ -10,14 +10,14 @@ description: >
   into X in depth", "write a report on X", or any question needing multi-source
   synthesis beyond a single search. For entity vetting/dossiers use entity-research;
   for news digests use news-monitoring; for source-grounded Q&A use notebooklm-mode.
-version: 0.1.0
+version: 1.0.0
 author: moonlight-lupin
 license: Apache-2.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [research, deep-research, report, synthesis, iterative, citations]
-    related_skills: [news-monitoring, entity-research, notebooklm-mode, youtube-topic-research]
+    related_skills: [news-monitoring, entity-research, notebooklm-mode, youtube-topic-research, fact-checker, source-tracker]
 ---
 
 # Deep Research — Iterative Research Engine
@@ -42,6 +42,7 @@ approach, adapted for Hermes's tool architecture.
 - **Entity vetting/dossiers** → use `entity-research` (has sanctions screening, structured lenses)
 - **Recurring news digests** → use `news-monitoring` (has cron, dedup, multi-language)
 - **Source-grounded Q&A from collected sources** → use `notebooklm-mode` (has vault + RAG)
+- **Verifying a single, specific claim** ("is it true that X?") → use `fact-checker` (confidence rubric, source-independence checks; never renders "false"). The fact-check *report category* below is for claims that surface during a broader research topic.
 - **Quick factual question** → just use `web_search` directly
 - **Single-source extraction** → use `web_search` + `web_extract`
 
