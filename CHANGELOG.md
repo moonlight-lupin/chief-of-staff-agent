@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.3.22 — Reply-awareness follow-ups + vendor updated deep-research skill
+
+### Fixes
+
+- **Operator match is exact, not a substring.** `daily_briefing._is_from_operator`
+  now parses the bare address out of `"Name <addr>"` / `"addr"` senders and
+  compares it exactly, instead of a loose `operator in sender` test that could
+  misfire (e.g. `"me@example.com"` is a substring of `"jme@example.com"`, or the
+  address appearing inside an unrelated display name).
+- **Reply-scan window is configurable.** The sent-mail lookback (default 14 days)
+  and message cap (default 50) can be widened so older replies still suppress,
+  via an optional `briefing` config section:
+
+  ```yaml
+  briefing:
+    reply_lookback_days: 30
+    reply_sent_max: 200
+  ```
+
+  Invalid or non-positive values fall back to the defaults. Behaviour is
+  unchanged when the section is absent.
+
+### Tests
+
+- Full `collect_gmail` unread→reply suppression now exercised end-to-end with the
+  real Composio field shape (`messageTimestamp` + `"Name <email>"` sender +
+  `threadId`), closing the gap the live 0→5 index check left open. Added
+  coverage for the exact-match fix and the configurable scan window.
+
+### Skills
+
+- **Vendored the updated `deep-research` skill from the `agent_skills` repo**
+  (v1.0.0): adds `fact-checker` / `source-tracker` cross-references and a
+  "When NOT to use" note routing single-claim verification to `fact-checker`,
+  and adds the `evals/routing-fixtures.json` routing spec the SKILL.md
+  references. Removed a stray research-output file (`skills-monetization.md`)
+  that had landed in the skill's `references/` dir. License stays Apache-2.0 to
+  match the plugin.
+
 ## v0.3.21 — Daily briefing reply awareness (suppress already-answered threads)
 
 ### Fixes

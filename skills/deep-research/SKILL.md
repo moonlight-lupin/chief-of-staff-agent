@@ -318,5 +318,4 @@ delegate_task(
 request → expected routing (including when a request should go to
 `entity-research` / `notebooklm-mode` / `news-monitoring` instead), required
 output fields, and forbidden output patterns. They are specs, not run against a
-live model; the repo-root `tests/test_routing_fixtures.py` validates they stay well-formed and
-route to real skills.
+live model.
