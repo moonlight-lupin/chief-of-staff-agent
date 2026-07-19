@@ -10,13 +10,13 @@ description: >
   into X in depth", "write a report on X", or any question needing multi-source
   synthesis beyond a single search. For entity vetting/dossiers use entity-research;
   for news digests use news-monitoring; for source-grounded Q&A use notebooklm-mode.
-version: 1.0.0
+version: 1.1.0
 author: moonlight-lupin
 license: Apache-2.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [research, deep-research, report, synthesis, iterative, citations]
+    tags: [research, deep-research, report, synthesis, iterative, citations, evidence-basis, provenance]
     related_skills: [news-monitoring, entity-research, notebooklm-mode, youtube-topic-research, fact-checker, source-tracker]
 ---
 
@@ -150,6 +150,24 @@ For each quality source, extract **goal-relevant facts**:
 - Ignore noise, navigation, ads, boilerplate
 - Prefer specific data, statistics, named sources, dates over vague claims
 - Record the source URL and title with each extracted fact
+- **Grade each fact's evidence basis** as you extract (see below) — you can't tag a report you didn't grade while reading
+
+### Evidence basis — the four-label discipline
+
+Tag every **material fact** with the basis on which you're asserting it. A material fact is any substantive claim a reader would act on or challenge: a statistic, date, named entity or relationship, causal claim, or direct quote. This is deep-research's adaptation of pere-toolkit's canonical evidence discipline — the **same four labels**, applied to *facts* rather than financial figures.
+
+| Label | A fact is `[LABEL]` when it is… |
+|---|---|
+| `[VERIFIED]` | corroborated across ≥2 independent, cited, dated sources |
+| `[SOURCED]` | stated by one named / cited source, not independently corroborated |
+| `[REASONED]` | your own analytical judgement or inference — not stated by any source |
+| `[ESTIMATED]` | a calculation or stated assumption (e.g. a figure you derived from source data) |
+
+Rules:
+- **Lead on `[VERIFIED]` / `[SOURCED]`.** Present `[REASONED]` / `[ESTIMATED]` claims as *indicative* ("likely", "suggests", "on these figures") — never as hard fact.
+- **Use these four exact labels** — never an improvised synonym (`[Official]`, `[Expert]`, `[Consensus]` → these are `[SOURCED]`, or `[VERIFIED]` only if independently corroborated).
+- **Don't restate precision you don't have** — a source's "about half" is `~50% [SOURCED]`, not `50.0%`.
+- **Never fabricate to fill a gap** — an unanswerable sub-question is a documented gap, not a `[REASONED]` guess dressed as fact.
 
 ### 3d — Synthesis
 
@@ -161,7 +179,7 @@ After extracting from all sources in the round, integrate findings into the **cu
 
 ### Sub-question 1: [question]
 Status: [answered / partially answered / unanswered]
-Findings: [synthesized facts with inline citations like (Source: URL, Title)]
+Findings: [synthesized facts, each with an inline citation (Source: URL, "Title") and an evidence-basis tag, e.g. "adoption grew 40% in 2025 (Source: …) [VERIFIED]"]
 
 ### Sub-question 2: [question]
 Status: [...]
@@ -175,6 +193,7 @@ Synthesis rules:
 - **Deduplicate** — if multiple sources say the same thing, cite the best one (or cite both for corroboration)
 - **Resolve contradictions** — if sources disagree, present both with attribution. Do not arbitrate silently.
 - **Inline citations** — every factual claim references its source: `(Source: URL, "Title")`
+- **Evidence basis** — tag each material fact `[VERIFIED]` / `[SOURCED]` / `[REASONED]` / `[ESTIMATED]` (see §3c). A fact becomes `[VERIFIED]` only once ≥2 *independent* sources corroborate it; a single source is `[SOURCED]`. Corroboration during dedup is what promotes `[SOURCED]` → `[VERIFIED]`.
 - **Update gap list** — what sub-questions are still unanswered or thin?
 
 ### 3e — Stopping Check
@@ -203,6 +222,8 @@ After synthesis, evaluate whether the report is comprehensive enough:
 
 Produce the final report. Minimum 800 words (scale with topic complexity).
 
+Carry each material fact's **evidence-basis tag** inline (§3c), lead on `[VERIFIED]` / `[SOURCED]`, keep `[REASONED]` / `[ESTIMATED]` claims framed as indicative, and paste the **Evidence key** legend below the Sources table so the tags decode.
+
 ### Structure
 
 ```markdown
@@ -227,6 +248,8 @@ Produce the final report. Minimum 800 words (scale with topic complexity).
 | # | Title | URL | Accessed |
 |---|-------|-----|----------|
 | 1 | [title] | [url] | [date] |
+
+**Evidence key** — `[VERIFIED]` corroborated across ≥2 independent, cited, dated sources · `[SOURCED]` from one named source, not independently corroborated · `[REASONED]` analytical judgement / inference · `[ESTIMATED]` calculation or stated assumption.
 ```
 
 ### Category-specific formats
@@ -244,7 +267,7 @@ Produce the final report. Minimum 800 words (scale with topic complexity).
 
 If LLM synthesis fails (timeout, error, garbled output), compile raw findings into a basic report:
 - List all findings grouped by sub-question
-- Include source URLs
+- Include source URLs and keep each finding's evidence-basis tag
 - Add note: "This is a raw findings compilation; synthesis was not completed."
 - Never output "No information could be gathered" if any sources were fetched — always compile what exists.
 
@@ -303,9 +326,12 @@ delegate_task(
 - **No quality filter** — including thin/irrelevant sources dilutes the report. Filter before extraction.
 - **Listing instead of synthesizing** — the report should synthesize findings, not list them. Resolve contradictions, identify themes, draw conclusions.
 - **Missing citations** — every factual claim in the final report must have an inline citation with URL + source title.
+- **Missing evidence-basis tags** — a material fact with a citation but no `[VERIFIED]`/`[SOURCED]`/`[REASONED]`/`[ESTIMATED]` tag is half-graded. Tag it, and include the Evidence key so the tags decode.
+- **Improvised evidence labels** — use only the four canonical tags. A synonym like `[Official]`, `[Confirmed]`, or `[Consensus]` breaks the discipline; map it to one of the four.
+- **Overclaiming basis** — don't tag a single-source fact `[VERIFIED]`, and don't restate precision the source didn't give. When torn between two labels, pick the weaker one.
 - **Synthesis failure produces nothing** — always use the fallback report if synthesis fails. Raw findings > no output.
 - **Ignoring contradictions** — if sources disagree, present both. Don't silently pick one.
-- **Fabricating sources** — never invent URLs, titles, or facts. If a sub-question can't be answered, document it as a gap.
+- **Fabricating sources** — never invent URLs, titles, or facts. If a sub-question can't be answered, document it as a gap — never a `[REASONED]` guess dressed as a sourced fact.
 - **Subagent synthesis** — never delegate the synthesis step. The orchestrator must see all findings to synthesize honestly.
 
 ## Related Work

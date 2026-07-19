@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.3.23 — Evidence-basis discipline in deep-research
+
+### Skills
+
+- **`deep-research` now tags every material fact with its evidence basis**, adapting
+  pere-toolkit's canonical four-label discipline (`evidence.LABELS`) from financial
+  *figures* to research *facts*:
+
+  | Label | A fact is `[LABEL]` when it is… |
+  |---|---|
+  | `[VERIFIED]` | corroborated across ≥2 independent, cited, dated sources |
+  | `[SOURCED]` | stated by one named / cited source, not independently corroborated |
+  | `[REASONED]` | analytical judgement / inference — not stated by any source |
+  | `[ESTIMATED]` | a calculation or stated assumption |
+
+  The labels thread through the loop: graded at extraction (§3c), carried in the
+  synthesis state and promoted `[SOURCED]`→`[VERIFIED]` on corroboration (§3d), and
+  rendered inline in the final report with a pasted **Evidence key** legend (§4).
+  Reports lead on `[VERIFIED]`/`[SOURCED]` and mark `[REASONED]`/`[ESTIMATED]` as
+  indicative. New pitfalls cover improvised labels, overclaiming basis, and restating
+  precision the source didn't give. Skill frontmatter → v1.1.0; routing fixture
+  updated to require the tags + key.
+
+  Note: unlike pere-toolkit (which enforces this with a `memo_qa` Stop hook), this is a
+  prompt-level discipline in CoS — faithful to the spirit, not machine-gated.
+
 ## v0.3.22 — Reply-awareness follow-ups + vendor updated deep-research skill
 
 ### Fixes
