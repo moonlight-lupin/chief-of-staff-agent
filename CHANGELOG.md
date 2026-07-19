@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3.24 — Vendor deep-research v1.4.0 (structured evidence + evidence-basis discipline)
+
+### Skills
+
+- **`deep-research` vendored to v1.4.0** — brings the full v1.3.0 structured-evidence feature set
+  into the CoS plugin alongside the v0.3.23 evidence-basis discipline. The vendored copy now ships:
+
+  - **Structured `evidence.json` intermediate** (§3e) — separates evidence gathering from report
+    writing; makes fabrication detectable. Schema + worked example in
+    `references/structured-evidence-format.md`.
+  - **Source quality tiers** (primary/secondary/tertiary) with 3×/2×/1× weighting, a
+    healthy/acceptable/weak distribution check, and conflict resolution by quality (primary >
+    secondary > tertiary).
+  - **Overview-first report structure** — executive summary + at-a-glance comparison table before
+    detailed analysis.
+  - **Refute polarity requirement** — round 2+ must include ≥1 counter-evidence query.
+  - **Language anchoring** — detect and normalize output to a BCP 47 tag.
+  - **Four-label evidence-basis discipline** ([VERIFIED]/[SOURCED]/[REASONED]/[ESTIMATED]) from
+    v0.3.23, now documented as **orthogonal** to source-quality tiers: tiers classify the
+    *source*, labels classify the *fact*. The skill uses both.
+  - **3 reference files** — `structured-evidence-format.md`, `real-estate-investment-analysis.md`,
+    `skills-monetization.md`.
+
+### Version pins
+
+Bumped plugin/pyproject/entrypoint/README to v0.3.24 with CHANGELOG entry and the two
+hardcoded version-pin tests.
+
 ## v0.3.23 — Evidence-basis discipline in deep-research
 
 ### Skills
