@@ -93,7 +93,7 @@ def register(ctx):
         overlay = PLUGIN_ROOT / "skills.local" / skill_name / "SKILL.md"
         shipped = PLUGIN_ROOT / "skills" / skill_name / "SKILL.md"
         skill_path = overlay if overlay.exists() else shipped
-        ctx.register_skill(skill_name, str(skill_path.relative_to(PLUGIN_ROOT)))
+        ctx.register_skill(skill_name, skill_path)
 
     # Register all 7 quality hooks
     from . import hooks

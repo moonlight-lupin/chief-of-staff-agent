@@ -62,6 +62,8 @@ def _load_yaml_file(path: Path) -> Optional[dict]:
 
 def _cos_skills_loaded(context: dict) -> bool:
     """Check if any chief-of-staff skills are loaded in this session."""
+    if not context:
+        return True  # err on the side of running if we can't tell
     loaded = context.get("loaded_skills", [])
     if not loaded:
         return True  # err on the side of running if we can't tell
@@ -93,7 +95,7 @@ def _safe_context_name(value: Any) -> Optional[str]:
 
 # ── 1. Company Context Primer (pre_llm_call) ────────────────────────────────
 
-def company_context_primer(context: dict) -> Optional[str]:
+def company_context_primer(context: dict = None, **kwargs) -> Optional[str]:
     """Inject a 1-line company context strip before every LLM call.
 
     Keeps the agent grounded in company state without loading full config.
@@ -189,13 +191,15 @@ _KNOWN_YAML_EXAMPLES = {
 }
 
 
-def yaml_integrity_checker(tool_name: str, args: dict, result: str, context: dict) -> Optional[str]:
+def yaml_integrity_checker(tool_name: str = "", args: dict = None, result: str = "", context: dict = None, **kwargs) -> Optional[str]:
     """After any tool that writes files, verify known YAML files still parse."""
     if not _cos_skills_loaded(context):
         return None
 
     # Check if the tool command touched a known YAML file
     cmd = ""
+    if not args:
+        return None
     if tool_name == "terminal":
         cmd = args.get("command", "")
     elif tool_name in ("write_file", "patch"):
@@ -244,7 +248,7 @@ def yaml_integrity_checker(tool_name: str, args: dict, result: str, context: dic
 
 # ── 3. Stale Briefing Detector (on_session_start) ────────────────────────────
 
-def stale_briefing_detector(context: dict) -> Optional[str]:
+def stale_briefing_detector(context: dict = None, **kwargs) -> Optional[str]:
     """Warn if the last briefing was > 26 hours ago."""
     if not _cos_skills_loaded(context):
         return None
@@ -280,7 +284,7 @@ def stale_briefing_detector(context: dict) -> Optional[str]:
 
 # ── 4. Pipeline Stage Validator (pre_tool_call) ──────────────────────────────
 
-def pipeline_stage_validator(tool_name: str, args: dict, context: dict) -> Optional[str]:
+def pipeline_stage_validator(tool_name: str = "", args: dict = None, context: dict = None, **kwargs) -> Optional[str]:
     """Warn if a command is about to set an invalid pipeline stage."""
     if not _cos_skills_loaded(context):
         return None
@@ -288,6 +292,8 @@ def pipeline_stage_validator(tool_name: str, args: dict, context: dict) -> Optio
     if tool_name not in ("terminal", "write_file", "patch"):
         return None
 
+    if not args:
+        return None
     cmd = args.get("command", "") or args.get("path", "") or ""
     if "pipeline.yaml" not in str(cmd):
         return None
@@ -330,8 +336,10 @@ _BRIEFING_MARKERS = {
 }
 
 
-def format_enforcer(response: str, context: dict) -> Optional[str]:
+def format_enforcer(response: str = "", context: dict = None, **kwargs) -> Optional[str]:
     """Check that briefing/review output contains required section markers."""
+    if not context:
+        return None
     loaded = context.get("loaded_skills", [])
 
     skill_to_check = None
@@ -360,11 +368,13 @@ def format_enforcer(response: str, context: dict) -> Optional[str]:
 
 # ── 6. Self-Sign Multi-Block Guard (post_tool_call) ──────────────────────────
 
-def self_sign_guard(tool_name: str, args: dict, result: str, context: dict) -> Optional[str]:
+def self_sign_guard(tool_name: str = "", args: dict = None, result: str = "", context: dict = None, **kwargs) -> Optional[str]:
     """After sign_detector runs, ensure agent presents ALL signature locations."""
     if not _cos_skills_loaded(context):
         return None
 
+    if not args:
+        return None
     cmd = args.get("command", "") or ""
     if "sign_detector" not in cmd:
         return None
@@ -394,7 +404,7 @@ def self_sign_guard(tool_name: str, args: dict, result: str, context: dict) -> O
 
 # ── 7. Deadline Urgency Injection (pre_llm_call) ─────────────────────────────
 
-def deadline_urgency_injection(context: dict) -> Optional[str]:
+def deadline_urgency_injection(context: dict = None, **kwargs) -> Optional[str]:
     """If there's an overdue deadline, inject it prominently into context."""
     if not _cos_skills_loaded(context):
         return None
