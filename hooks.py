@@ -123,6 +123,8 @@ def company_context_primer(context: dict = None, **kwargs) -> Optional[str]:
             custom = config.get("deadlines", {}).get("custom", [])
             overdue = []
             for d in custom:
+                if str(d.get("status", "")).strip().lower() == "done":
+                    continue
                 due = d.get("due")
                 if due:
                     cat = categorize_deadline(due)
@@ -426,6 +428,8 @@ def deadline_urgency_injection(context: dict = None, **kwargs) -> Optional[str]:
     custom = config.get("deadlines", {}).get("custom", [])
     overdue_items = []
     for d in custom:
+        if str(d.get("status", "")).strip().lower() == "done":
+            continue
         due = d.get("due")
         if due:
             try:

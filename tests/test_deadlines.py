@@ -80,6 +80,25 @@ def test_filter_actionable_and_overdue(tmp_path):
     assert all(d["days_until"] < 0 for d in overdue)
 
 
+def test_status_done_excluded_from_filters(tmp_path):
+    """Deadlines marked status: done must not appear in actionable or overdue lists."""
+    today = date.today()
+    config = sample_config(tmp_path)
+    config["deadlines"]["custom"].append(
+        {"name": "Completed RORC", "due": (today - timedelta(days=30)).isoformat(), "status": "done"}
+    )
+    config["deadlines"]["custom"].append(
+        {"name": "Upcoming done", "due": (today + timedelta(days=5)).isoformat(), "status": "Done"}
+    )
+    result = compute_all_deadlines(config)
+    actionable = filter_actionable(result)
+    overdue = filter_overdue(result)
+    assert not any(d["name"] == "Completed RORC" for d in overdue)
+    assert not any(d["name"] == "Upcoming done" for d in actionable)
+    assert not any(str(d.get("status", "")).lower() == "done" for d in overdue)
+    assert not any(str(d.get("status", "")).lower() == "done" for d in actionable)
+
+
 def test_cli_within_filter_json_valid(tmp_path):
     config_path = write_config(tmp_path)
     proc = subprocess.run(

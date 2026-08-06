@@ -409,6 +409,26 @@ class TestDeadlineUrgencyInjection:
         assert "OVERDUE" in result
         assert "Annual Return" in result
 
+    def test_status_done_not_injected(self, tmp_path, cos_context, monkeypatch):
+        """A deadline marked status: done must not trigger the overdue alarm."""
+        config = tmp_path / "company.yaml"
+        config.write_text(f"""\
+company:
+  name: Test
+  jurisdiction: SG
+paths:
+  project_root: "{tmp_path}"
+deadlines:
+  custom:
+    - name: "Annual Return"
+      due: "{(date.today() - timedelta(days=5)).isoformat()}"
+      notes: "ACRA filing"
+      status: done
+""")
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config))
+        result = deadline_urgency_injection(cos_context)
+        assert result is None
+
     def test_future_deadline_not_injected(self, tmp_path, cos_context, monkeypatch):
         config = tmp_path / "company.yaml"
         config.write_text(f"""\

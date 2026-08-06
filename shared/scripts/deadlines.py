@@ -151,16 +151,31 @@ def compute_all_deadlines(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     return deadlines
 
 
-def filter_actionable(deadlines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return overdue and within-30-days deadlines."""
+def _is_done(deadline: dict[str, Any]) -> bool:
+    """True if a deadline entry is marked status: done (case-insensitive)."""
 
-    return [d for d in deadlines if d.get("category") in {"overdue", "within_7", "within_30"}]
+    return str(deadline.get("status", "")).strip().lower() == "done"
+
+
+def filter_actionable(deadlines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return overdue and within-30-days deadlines, excluding any marked status: done."""
+
+    return [
+        d
+        for d in deadlines
+        if not _is_done(d) and d.get("category") in {"overdue", "within_7", "within_30"}
+    ]
 
 
 def filter_overdue(deadlines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return only overdue deadlines."""
+    """Return only overdue deadlines, excluding any marked status: done."""
 
-    return [d for d in deadlines if d.get("category") == "overdue" or int(d.get("days_until", 999999)) < 0]
+    return [
+        d
+        for d in deadlines
+        if not _is_done(d)
+        and (d.get("category") == "overdue" or int(d.get("days_until", 999999)) < 0)
+    ]
 
 
 def _within(deadlines: list[dict[str, Any]], days: int) -> list[dict[str, Any]]:
