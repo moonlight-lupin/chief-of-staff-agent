@@ -474,8 +474,8 @@ class TestHelpers:
         assert _cos_skills_loaded(no_cos_context) is False
 
     def test_cos_skills_loaded_empty_context(self, empty_context):
-        # Empty context defaults to True (err on side of running)
-        assert _cos_skills_loaded(empty_context) is True
+        # Empty context defaults to False — persona only when CoS skill confirmed
+        assert _cos_skills_loaded(empty_context) is False
 
     def test_load_company_yaml_returns_dict(self, tmp_config):
         config = _load_company_yaml()

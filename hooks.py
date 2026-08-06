@@ -61,12 +61,19 @@ def _load_yaml_file(path: Path) -> Optional[dict]:
 
 
 def _cos_skills_loaded(context: dict) -> bool:
-    """Check if any chief-of-staff skills are loaded in this session."""
+    """Check if any chief-of-staff skills are loaded in this session.
+
+    The Hermes runtime does not currently pass ``loaded_skills`` to plugin
+    hooks, so this is best-effort: when we genuinely cannot tell (no context,
+    or no ``loaded_skills`` key), default to ``False`` so the CoS persona and
+    context banner are only injected when a CoS skill is confirmed loaded —
+    not on every casual conversation.
+    """
     if not context:
-        return True  # err on the side of running if we can't tell
+        return False
     loaded = context.get("loaded_skills", [])
     if not loaded:
-        return True  # err on the side of running if we can't tell
+        return False
     cos_skills = {
         "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
         "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
