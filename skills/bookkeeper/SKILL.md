@@ -112,18 +112,18 @@ Completion criterion: the invoice appears once, has a unique ID, and direction c
 
 ### Update Invoice
 
-Common updates: mark paid, change due date, add document path, add note, link deal. When marking paid, set `paid_date` and status `paid`. Cancel invoices; the record stays.
+Common updates: mark paid, change due date, add document path, add note, link deal. When marking paid, set `paid_date` and status `paid`. Invoices are cancelled, never removed: set `status: cancelled` and retain the record.
 
 ### Add Expense
 
 Capture category, vendor, amount, currency, date, status, document path, recurrence, and notes. If the expense is travel-related, tag/link it for Travel Itinerary context when possible.
 
-Completion criterion: the expense has a unique ID, valid date, and currency matches an existing bucket.
+- Completion criterion: the expense has a unique ID, valid date, and currency is a valid ISO-4217 code recorded verbatim (no coercion into an existing currency).
 
 ### Reports
 
 - **Monthly P&L:** paid sent invoices as revenue, paid expenses by category, net.
-  Completion criterion: every income/expense record is classified to a category, and totals reconcile by currency.
+  Completion criterion: expenses classified to a category; per-currency net equals paid revenue minus paid expenses; no cross-currency sums.
 - **Outstanding AR:** unpaid sent invoices not cancelled.
 - **Outstanding AP:** unpaid received invoices not cancelled.
 - **Overdue invoices:** unpaid invoices with due date before today.

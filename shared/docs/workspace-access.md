@@ -8,7 +8,7 @@ Normalize every record to the canonical shapes in `shared/scripts/schemas.py` (`
 - Calendar → `event`: `{id, title, start, end, attendees?, organizer?, location?, conference_link?, status?, source?}`
 - Files → `file`: `{id, name, mime_type?, modified?, link?, parents?, source?}`
 
-Resolve account/delegate identity from `company.yaml` (`google.account`, `google.delegate_email`) when the chosen path needs it.
+Resolve account/delegate identity from `company.yaml` (`google.account`, `google.delegate_email`) when the chosen path needs it. **All connector and provider paths must resolve to the `company.yaml` workspace account — never brief, read, or write from the agent's personal mailbox.**
 
 ## Access ladder
 

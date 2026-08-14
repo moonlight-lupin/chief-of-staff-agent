@@ -420,8 +420,6 @@ delegate_task(
 
 ## Pitfalls
 
-Keep only what the steps do not already bind:
-
 - **Overclaiming basis** — when torn between two labels, pick the weaker one. A source's "about half" stays `~50% [SOURCED]`.
 - **Conflating claims with context** — subject facts are claims; scope, methodology, and availability limits are writing_context.
 - **Subagent self-reports** — verify source URLs exist before citing. The orchestrator synthesizes.
