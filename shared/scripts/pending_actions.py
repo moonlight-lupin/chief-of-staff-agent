@@ -747,6 +747,8 @@ def find_stuck_actions(config: Any, max_minutes: int = 15) -> list[dict[str, Any
             continue
         try:
             dt = datetime.fromisoformat(executing_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             continue
         if dt < cutoff:
@@ -754,11 +756,14 @@ def find_stuck_actions(config: Any, max_minutes: int = 15) -> list[dict[str, Any
     return stuck
 
 
-def revert_stuck_action(config: Any, action_id: str) -> dict[str, Any] | None:
+def revert_stuck_action(config: Any, action_id: str,
+                        max_minutes: int = 15) -> dict[str, Any] | None:
     """Revert a stuck 'executing' action back to 'approved' for retry.
 
-    Clears ``executing_at``. Returns the updated action, or None if the
-    action is not in 'executing' state (or a concurrency conflict persists).
+    Only reverts if the action has been in 'executing' state for longer
+    than ``max_minutes``. Clears ``executing_at``. Returns the updated
+    action, or None if the action is not stuck (still actively executing)
+    or not in 'executing' state.
     """
 
     def _mutate(cfg: Any) -> dict[str, Any] | None:
@@ -767,6 +772,19 @@ def revert_stuck_action(config: Any, action_id: str) -> dict[str, Any] | None:
         action = data["actions"].get(action_id)
         if not action or action["state"] != "executing":
             return None
+        # Revalidate executing_at inside the locked mutation
+        executing_at = action.get("executing_at") or ""
+        if not executing_at:
+            return None
+        try:
+            dt = datetime.fromisoformat(executing_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return None
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_minutes)
+        if dt >= cutoff:
+            return None  # Still actively executing — don't revert
         action["state"] = "approved"
         action["executing_at"] = None
         _save(cfg, data, expected_version=expected_version)
@@ -804,12 +822,12 @@ def assert_executable(config: Any, action_id: str) -> dict[str, Any] | None:
     if action["state"] != "approved":
         return None
     if _is_approval_lapsed(action):
-        # Mark as expired
+        # Mark as expired — revalidate preconditions on each retry
         def _mutate(cfg: Any) -> None:
             data = _load(cfg)
             expected_version = data.get("_version", 0)
             stored = data["actions"].get(action_id)
-            if stored:
+            if stored and stored["state"] == "approved" and _is_approval_lapsed(stored):
                 stored["state"] = "expired"
                 stored["expired_at"] = _now()
                 _save(cfg, data, expected_version=expected_version)
