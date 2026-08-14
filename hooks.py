@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import json
+import subprocess
 import yaml
 from pathlib import Path
 from datetime import date, datetime, timedelta
@@ -464,7 +465,104 @@ def deadline_urgency_injection(context: dict = None, **kwargs) -> Optional[str]:
     return None
 
 
-# ── 8. Note Capture Reminder (post_llm_call) ─────────────────────────────────
+# ── 8. Wiki Context Injection (pre_llm_call) ─────────────────────────────────
+
+_SIMPLE_COMMAND_VERBS = {
+    "run", "create", "delete", "update", "send", "file", "lint", "validate",
+}
+
+
+def _is_simple_command(message: str) -> bool:
+    """True when the message looks like a verb plus a path or filename."""
+
+    words = message.strip().split()
+    if len(words) < 2:
+        return False
+    if words[0].lower() not in _SIMPLE_COMMAND_VERBS:
+        return False
+    token = words[1]
+    return "/" in token or "\\" in token or "." in token
+
+
+def _resolve_wiki_path(config: dict) -> Optional[Path]:
+    paths = config.get("paths") if isinstance(config, dict) else None
+    if not isinstance(paths, dict):
+        paths = {}
+    raw = paths.get("wiki_path")
+    root = _project_root(config)
+    if raw:
+        path = Path(os.path.expanduser(str(raw)))
+        if not path.is_absolute() and root:
+            path = root / path
+        return path
+    if root:
+        return root / "wiki"
+    return None
+
+
+def wiki_context_injection(context: dict = None, message: str = "", **kwargs) -> Optional[str]:
+    """Before LLM calls, inject relevant wiki context if the message is a question."""
+    try:
+        text = str(message or "").strip()
+        if not text:
+            return None
+        if len(text.split()) < 5:
+            return None
+        if _is_simple_command(text):
+            return None
+
+        config = _load_company_yaml()
+        if not config:
+            return None
+
+        wiki_path = _resolve_wiki_path(config)
+        if wiki_path is None:
+            return None
+
+        curator = _PLUGIN_ROOT / "skills" / "note-taker" / "scripts" / "wiki_curator.py"
+        if not curator.exists():
+            return None
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(curator),
+                "search",
+                text,
+                "--format", "json",
+                "--limit", "5",
+                "--wiki", str(wiki_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if not isinstance(data, list) or not data:
+            return None
+
+        lines = ["📚 Wiki context:"]
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip() or Path(str(item.get("path") or "")).stem
+            page_type = str(item.get("type") or "").strip() or "page"
+            snippet = str(item.get("snippet") or "").strip()
+            try:
+                score_s = f"{float(item.get('score', 0)):.1f}"
+            except (TypeError, ValueError):
+                score_s = str(item.get("score", "0"))
+            lines.append(f"- [[{title}]] ({page_type}, {score_s}): {snippet}")
+        if len(lines) == 1:
+            return None
+        return "\n".join(lines)
+    except Exception:
+        return None
+
+
+# ── 9. Note Capture Reminder (post_llm_call) ─────────────────────────────────
 
 # Patterns that indicate the LLM output contains note-worthy content.
 # Require stronger evidence than generic headings to avoid false positives:
@@ -530,6 +628,7 @@ ALL_HOOKS = {
     "pre_llm_call": [
         ("company_context_primer", company_context_primer),
         ("deadline_urgency_injection", deadline_urgency_injection),
+        ("wiki_context_injection", wiki_context_injection),
     ],
     "post_tool_call": [
         ("yaml_integrity_checker", yaml_integrity_checker),
@@ -549,7 +648,7 @@ ALL_HOOKS = {
 
 
 def register_all_hooks(ctx):
-    """Register all 8 hooks. Called from __init__.py."""
+    """Register all 9 hooks. Called from __init__.py."""
     for event, hooks in ALL_HOOKS.items():
         for name, callback in hooks:
             try:

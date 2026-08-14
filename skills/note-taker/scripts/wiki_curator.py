@@ -45,8 +45,11 @@ except Exception:  # pragma: no cover - only used when event store is absent.
 
 
 WIKI_DIRS = ("raw", "daily", "projects", "entities", "people", "decisions")
+SEARCH_DIRS = ("entities", "concepts", "comparisons", "queries")
+SEARCH_SKIP_NAMES = {"index.md", "overview.md", "SCHEMA.md", "purpose.md", "log.md"}
 MANAGED_ROOT_FILES = {"index.md", "overview.md"}
 SPECIAL_ROOT_FILES = {"index.md", "overview.md", "log.md", "purpose.md", "SCHEMA.md"}
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 TEXT_FIELDS = ("summary", "text", "content", "body", "note", "notes", "description", "title", "value")
 TIME_FIELDS = ("received_at", "created_at", "updated_at", "timestamp", "time", "date", "ts")
 SECTION_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
@@ -1161,6 +1164,186 @@ def format_findings(findings: Sequence[Finding]) -> str:
     return f"Validation findings ({summary}):\n" + "\n".join(lines)
 
 
+# ─── Search / retrieval ─────────────────────────────────────────────
+
+
+def _tokens(text: str) -> list[str]:
+    return [token.casefold() for token in _TOKEN_RE.findall(text or "")]
+
+
+def _strip_markdown(text: str) -> str:
+    """Strip common Markdown markup so snippets are readable plain text."""
+
+    cleaned = text or ""
+    cleaned = re.sub(r"```[\s\S]*?```", " ", cleaned)
+    cleaned = re.sub(r"`[^`]*`", " ", cleaned)
+    cleaned = re.sub(
+        r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]",
+        lambda match: match.group(2) or match.group(1),
+        cleaned,
+    )
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"^#{1,6}\s+", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"[*_~]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _snippet(body: str, limit: int = 200) -> str:
+    return _strip_markdown(body)[:limit]
+
+
+def _iter_searchable_pages(wiki_path: Path) -> Iterable[Path]:
+    if not wiki_path.exists():
+        return
+    for dirname in SEARCH_DIRS:
+        folder = wiki_path / dirname
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.rglob("*.md")):
+            if not path.is_file() or path.name in SEARCH_SKIP_NAMES:
+                continue
+            try:
+                rel = path.resolve().relative_to(wiki_path.resolve()).as_posix()
+            except ValueError:
+                continue
+            if rel.startswith("raw/"):
+                continue
+            yield path
+
+
+def _score_page(query: str, title: str, body: str, aliases: Sequence[str], tags: Sequence[str]) -> float:
+    """Score a page against a query using title, body TF, alias, and tag signals."""
+
+    query_text = _safe_str(query)
+    if not query_text:
+        return 0.0
+    query_fold = query_text.casefold()
+    query_tokens = _tokens(query_text)
+    if not query_tokens:
+        return 0.0
+
+    score = 0.0
+
+    title_fold = _safe_str(title).casefold()
+    if title_fold and (query_fold in title_fold or any(token in title_fold for token in query_tokens)):
+        score += 3.0
+
+    body_tokens = _tokens(body)
+    if body_tokens:
+        hit_count = sum(body_tokens.count(token) for token in query_tokens)
+        score += (hit_count / len(body_tokens)) * 1.0
+
+    alias_folds = [_safe_str(alias).casefold() for alias in aliases if _safe_str(alias)]
+    if alias_folds:
+        alias_matched = query_fold in alias_folds
+        if not alias_matched:
+            alias_matched = any(
+                query_fold in alias or alias in query_fold for alias in alias_folds if alias
+            )
+        if not alias_matched:
+            alias_matched = any(
+                token in alias_folds or any(token in alias or alias in token for alias in alias_folds)
+                for token in query_tokens
+            )
+        if alias_matched:
+            score += 4.0
+
+    tag_folds = {_safe_str(tag).casefold() for tag in tags if _safe_str(tag)}
+    if tag_folds and (query_fold in tag_folds or any(token in tag_folds for token in query_tokens)):
+        score += 2.0
+
+    return score
+
+
+def search_wiki(
+    wiki_path: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    page_type: str | None = None,
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return scored wiki pages matching ``query``, highest score first."""
+
+    results: list[dict[str, Any]] = []
+    type_filter = _safe_str(page_type).casefold() if page_type else ""
+    tag_filter = _safe_str(tag).casefold() if tag else ""
+
+    for path in _iter_searchable_pages(wiki_path):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        frontmatter, body, _valid = split_frontmatter(text)
+        title = (
+            _safe_str(frontmatter.get("title"))
+            or WikiCurator._title_from_body(body)
+            or path.stem.replace("-", " ").title()
+        )
+        found_type = _safe_str(frontmatter.get("type"), path.parent.name)
+        if type_filter and found_type.casefold() != type_filter:
+            continue
+        tags = [str(item) for item in _as_list(frontmatter.get("tags"))]
+        if tag_filter and tag_filter not in {item.casefold() for item in tags}:
+            continue
+        aliases = [str(item) for item in _as_list(frontmatter.get("aliases"))]
+        score = _score_page(query, title, body, aliases, tags)
+        if score <= 0:
+            continue
+        try:
+            rel = path.resolve().relative_to(wiki_path.resolve()).as_posix()
+        except ValueError:
+            rel = path.name
+        results.append(
+            {
+                "path": rel,
+                "title": title,
+                "type": found_type,
+                "score": round(float(score), 4),
+                "snippet": _snippet(body),
+                "tags": tags,
+            }
+        )
+
+    results.sort(key=lambda item: (-item["score"], str(item.get("title") or "")))
+    cap = max(0, int(limit)) if limit is not None else 10
+    return results[:cap]
+
+
+def search_command(args: argparse.Namespace) -> int:
+    config = _with_wiki_override(
+        _load_configuration(getattr(args, "config", None)),
+        getattr(args, "wiki", None),
+    )
+    wiki_path = _wiki_path(config, _project_root(config))
+    output_format = _safe_str(getattr(args, "format", "text"), "text") or "text"
+    limit = getattr(args, "limit", 10)
+    try:
+        results = search_wiki(
+            wiki_path,
+            getattr(args, "query", ""),
+            limit=10 if limit is None else int(limit),
+            page_type=getattr(args, "page_type", None),
+            tag=getattr(args, "tag", None),
+        )
+    except Exception:
+        results = []
+
+    if output_format == "json":
+        print(json.dumps(results, ensure_ascii=False))
+        return 0
+    if not results:
+        print("No results.")
+        return 0
+    for item in results:
+        snippet = _safe_str(item.get("snippet"))
+        print(
+            f"[{item['score']:.1f}] {item['title']} ({item['type']}) — {snippet}"
+        )
+    return 0
+
+
 # ─── CLI ────────────────────────────────────────────────────────────
 
 
@@ -1246,6 +1429,15 @@ def build_parser() -> argparse.ArgumentParser:
     lint.add_argument("--summary", action="store_true", help="Print summary counts only")
     lint.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     lint.add_argument("--wiki", dest="wiki", default=None, help="Override wiki directory path")
+
+    search = sub.add_parser("search", help="Search wiki pages by keyword, alias, or tag")
+    search.add_argument("query", help="Search query text")
+    search.add_argument("--format", choices=["json", "text"], default="text", help="Output format")
+    search.add_argument("--limit", type=int, default=10, help="Max results")
+    search.add_argument("--type", dest="page_type", default=None, help="Filter by page type")
+    search.add_argument("--tag", default=None, help="Filter by tag")
+    search.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    search.add_argument("--wiki", dest="wiki", default=None, help="Override wiki directory path")
     return parser
 
 
@@ -1263,6 +1455,8 @@ def main(argv: list[str] | None = None) -> int:
         return validate_command(args)
     if args.command == "lint":
         return lint_command(args)
+    if args.command == "search":
+        return search_command(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
