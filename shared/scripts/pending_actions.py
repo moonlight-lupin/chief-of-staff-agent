@@ -97,20 +97,44 @@ def _log_event(event: str, **fields: Any) -> None:
         pass
 
 
+class StateCorruptionError(Exception):
+    """Raised when a state file exists but cannot be parsed.
+
+    Distinguishes 'file absent' (safe to return empty) from 'file corrupt'
+    (must not be silently overwritten). Callers should fail closed, preserve
+    the bad file, and alert the operator.
+    """
+    pass
+
+
 def _load(config: Any) -> dict[str, Any]:
-    """Load pending actions from disk. Returns empty structure if missing."""
+    """Load pending actions from disk.
+
+    Returns empty structure if the file is absent.
+    Raises StateCorruptionError if the file exists but is unreadable or
+    contains invalid JSON — this must NOT be silently treated as empty,
+    because a subsequent _save would overwrite the only copy of the data.
+    """
     path = _pending_path(config)
     if not path.exists():
         return {"actions": {}, "_version": 0}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "actions" not in data:
-            return {"actions": {}, "_version": 0}
+            raise StateCorruptionError(
+                f"Pending actions file {path} exists but has invalid structure"
+            )
         if "_version" not in data:
             data["_version"] = 0
         return data
-    except (json.JSONDecodeError, OSError):
-        return {"actions": {}, "_version": 0}
+    except json.JSONDecodeError as exc:
+        raise StateCorruptionError(
+            f"Pending actions file {path} is corrupt: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise StateCorruptionError(
+            f"Cannot read pending actions file {path}: {exc}"
+        ) from exc
 
 
 class ConcurrencyError(Exception):
@@ -311,8 +335,18 @@ def list_pending_actions(config: Any, state: str | None = None,
 
     If include_expired is False, expired 'requested' actions are excluded
     from 'requested' results.
+
+    If the state file is corrupt, returns an empty list and logs a warning
+    rather than raising — this is a read-only listing API. The underlying
+    _load() raises StateCorruptionError to prevent silent overwrites; this
+    caller catches it for display purposes.
     """
-    data = _load(config)
+    try:
+        data = _load(config)
+    except StateCorruptionError as exc:
+        _log_event("state_corruption", level="error", component="pending_actions",
+                   error=str(exc))
+        return []
     actions = list(data["actions"].values())
     if state:
         actions = [a for a in actions if a.get("state") == state]

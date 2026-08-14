@@ -198,16 +198,33 @@ def _replay_cache_path(config: Any) -> Path:
 
 
 def _load_replay_cache(config: Any) -> dict[str, Any]:
+    """Load replay cache from disk.
+
+    Returns empty structure if the file is absent.
+    Raises StateCorruptionError if the file exists but is unreadable —
+    replay protection is a security control and must fail closed, not
+    silently vanish.
+    """
+    from pending_actions import StateCorruptionError
+
     path = _replay_cache_path(config)
     if not path.exists():
         return {"entries": {}, "_version": 0}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "entries" not in data:
-            return {"entries": {}, "_version": 0}
+            raise StateCorruptionError(
+                f"Replay cache {path} exists but has invalid structure"
+            )
         return data
-    except (json.JSONDecodeError, OSError):
-        return {"entries": {}, "_version": 0}
+    except json.JSONDecodeError as exc:
+        raise StateCorruptionError(
+            f"Replay cache {path} is corrupt: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise StateCorruptionError(
+            f"Cannot read replay cache {path}: {exc}"
+        ) from exc
 
 
 def _save_replay_cache_unlocked(config: Any, data: dict[str, Any]) -> None:

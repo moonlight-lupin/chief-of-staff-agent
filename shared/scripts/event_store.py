@@ -65,18 +65,33 @@ def _now() -> str:
 
 
 def _load(config: Any) -> dict[str, Any]:
+    """Load events from disk.
+
+    Returns empty structure if the file is absent.
+    Raises StateCorruptionError if the file exists but is unreadable.
+    """
+    from pending_actions import StateCorruptionError
+
     path = _events_path(config)
     if not path.exists():
         return {"events": {}, "_version": 0}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "events" not in data:
-            return {"events": {}, "_version": 0}
+            raise StateCorruptionError(
+                f"Events file {path} exists but has invalid structure"
+            )
         if "_version" not in data:
             data["_version"] = 0
         return data
-    except (json.JSONDecodeError, OSError):
-        return {"events": {}, "_version": 0}
+    except json.JSONDecodeError as exc:
+        raise StateCorruptionError(
+            f"Events file {path} is corrupt: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise StateCorruptionError(
+            f"Cannot read events file {path}: {exc}"
+        ) from exc
 
 
 def _save(config: Any, data: dict[str, Any], expected_version: int | None = None) -> int:

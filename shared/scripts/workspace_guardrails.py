@@ -158,8 +158,12 @@ def requires_confirmation(action: str) -> bool:
 
     Destructive actions always require confirmation.
     Safe write actions only require confirmation if auto-approve is not set.
+    Unknown/unclassified writes always require confirmation (fail-closed).
+
+    Consistent with confirm_action's default-deny: unknown action IDs
+    are treated as writes that need confirmation, not as reads that skip it.
     """
-    if action not in WRITE_ACTIONS:
+    if action in READ_ACTIONS:
         return False
 
     if action in DESTRUCTIVE_ACTIONS:
@@ -168,7 +172,11 @@ def requires_confirmation(action: str) -> bool:
     if action in SAFE_WRITE_ACTIONS:
         return not _is_auto_approved()
 
-    return not _is_auto_approved()
+    # Unknown or unclassified write: always require confirmation.
+    # This makes adding a new WRITE_ACTIONS entry fail-closed by default
+    # — the author must also add it to SAFE_WRITE_ACTIONS or
+    # DESTRUCTIVE_ACTIONS to get auto-approve behavior.
+    return True
 
 
 def _is_auto_approved() -> bool:
