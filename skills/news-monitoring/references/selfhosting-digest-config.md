@@ -10,13 +10,13 @@ Self-hosting, homelab setups, and open-source infrastructure tools. Objective: *
 
 ```bash
 # Self-hosting tools & projects
-curl -sL "$SEARXNG_URL/search?q=self+hosted+tool+project+release+2025&format=json&categories=news&language=en&time_range=month"
+curl -sL "$SEARXNG_URL/search?q=self+hosted+tool+project+release+{current year}&format=json&categories=news&language=en&time_range=month"
 
 # Homelab setups & guides
-curl -sL "$SEARXNG_URL/search?q=homelab+home+server+setup+guide+2025&format=json&categories=news&language=en&time_range=month"
+curl -sL "$SEARXNG_URL/search?q=homelab+home+server+setup+guide+{current year}&format=json&categories=news&language=en&time_range=month"
 
 # Open source alternatives & infrastructure
-curl -sL "$SEARXNG_URL/search?q=open+source+self+hosted+alternative+new+2025&format=json&categories=news&language=en&time_range=month"
+curl -sL "$SEARXNG_URL/search?q=open+source+self+hosted+alternative+new+{current year}&format=json&categories=news&language=en&time_range=month"
 ```
 
 ### Must-Track RSS Sources (Always Include)
@@ -33,7 +33,7 @@ curl -sL "https://noted.lol/rss/"
 
 If SearXNG is down:
 ```bash
-ddgs news -q "self-hosted homelab new tool 2025" -m 15 -o json
+ddgs news -q "self-hosted homelab new tool {current year}" -m 15 -o json
 ```
 
 Or via Python:

@@ -71,6 +71,12 @@ result = web_search_tool('test query', limit=2)
 - **Firecrawl for extract only**: scraping/JS rendering/markdown conversion is Firecrawl's strength; 1k credits/mo is plenty when only used for extract (not search)
 - **DDGS as fallback**: free, no key, already installed — automatic retry if SearXNG container/NAS is down
 
+## Environment Troubleshooting
+
+- **SearXNG address changed.** If the NAS IP changes, update `SEARXNG_URL` in `~/.hermes/.env` and the curl commands in topic reference files.
+- **DDGS installed in Hermes venv.** No `PYTHONPATH` hacks needed — `ddgs` CLI and `from ddgs import DDGS` work directly. Do not use stale paths like `/root/.hermes/ddgs_lib` or `/opt/hermes/.venv/bin/python`.
+- **delegate_task with web toolset is unreliable for search-heavy tasks.** Run searches directly and parse output yourself.
+
 ## Pitfall: Masked .env Secrets
 
 Some agent runtimes mask secret values (display them as `***`) in terminal

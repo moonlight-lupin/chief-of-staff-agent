@@ -50,16 +50,14 @@ with DDGS() as d:
 - Chinese: `region='hk-zh'`
 - Each result: `title`, `url` (DIRECT link), `body`, `source`, `date`
 
-### 3. BrowserAct Google News API — Paid Alternative
+### 3. web_search — Harness Tool
 
-Uses `~/.hermes/skills/google-news-api-skill/scripts/google_news_api.py`. Requires `BROWSERACT_API_KEY` env var. Paid service (~25-50 credits/run).
-
-```bash
-export BROWSERACT_API_KEY="key-here"
-python -u ~/.hermes/skills/google-news-api-skill/scripts/google_news_api.py "香港 學生宿舍" "past week" 10
+```
+web_search(query="Hong Kong PBSA student accommodation investment", limit=10)
+web_search(query="香港 學生宿舍 投資", limit=10)
 ```
 
-Use this if DDGS is rate-limited or returning empty results. The script polls for results (10s intervals), so allow 1-3 minutes per run. Script returns: `headline`, `source`, `news_link` (direct URL), `published_time`, `author`.
+The harness `web_search` tool dispatches through the configured backend (SearXNG → DDGS fallback). Use this when you do not need the news-category, language, or time_range filters that SearXNG curl exposes.
 
 ### 4. Fallback: Bing News RSS (Free, Direct URLs)
 
@@ -103,14 +101,13 @@ Centurion Hong Kong student housing
 - Bing: `&format=rss` appended to search URL
 - Google EN: `hl=en&gl=HK&ceid=HK:en`
 - Google ZH: `hl=zh&gl=HK&ceid=HK:zh-Hant`
-- BrowserAct: `Publish_date` param = "past week", "past 24 hours", etc.
 
 ## Key Sources (Ranked by Relevance)
 
 ### Tier 1 — Most Reliable for HK PBSA
 - SearXNG (self-hosted, `$SEARXNG_URL`) — primary free method, multi-engine aggregation, direct URLs, good EN+ZH coverage
 - DDGS — fallback free method, direct URLs, good EN+ZH coverage
-- BrowserAct — paid, reliable, direct URLs, uses Google News directly
+- `web_search` — harness tool; same SearXNG → DDGS dispatch as SKILL.md Step 4
 - HK01 (hk01.com) — breaks news fast, wide HK coverage
 - 香港經濟日報 HKET (hket.com) — financial/property focus
 - SCMP — paywalled, but titles surface in News
