@@ -181,7 +181,8 @@ class TestGuardedDecorator:
         assert mock_audit.call_args[0][1] == "google_api"  # provider positional
 
     def test_guardrail_block_skips_body(self):
-        # No auto-approve + non-tty => safe write blocked.
+        # No auto-approve + non-tty => safe write blocked. Body must not run,
+        # but the denial is durably audited with status="blocked".
         client = _GuardedClient()
         with patch("workspace_audit.audit_workspace_action") as mock_audit:
             result = client.do("Team Sync")
@@ -189,7 +190,8 @@ class TestGuardedDecorator:
         assert result["error"] == "cancelled by guardrail"
         assert result["audited"] is False
         assert client.body_ran is False
-        mock_audit.assert_not_called()
+        mock_audit.assert_called_once()
+        assert mock_audit.call_args.kwargs.get("status") == "blocked"
 
     def test_failure_path_audits_with_status_failed(self):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"

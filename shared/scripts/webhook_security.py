@@ -210,26 +210,25 @@ def _load_replay_cache(config: Any) -> dict[str, Any]:
         return {"entries": {}, "_version": 0}
 
 
-def _save_replay_cache(config: Any, data: dict[str, Any]) -> None:
-    """Atomic write under an exclusive lock: unique temp file, fsync, then rename."""
+def _save_replay_cache_unlocked(config: Any, data: dict[str, Any]) -> None:
+    """Write replay cache atomically (caller must already hold the lock)."""
     path = _replay_cache_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with file_lock.with_lock(str(path), timeout=10):
-        new_version = (data.get("_version", 0) or 0) + 1
-        data["_version"] = new_version
-        tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    new_version = (data.get("_version", 0) or 0) + 1
+    data["_version"] = new_version
+    tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2))
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(path)
+    except Exception:
         try:
-            with tmp.open("w", encoding="utf-8") as fh:
-                fh.write(json.dumps(data, indent=2))
-                fh.flush()
-                os.fsync(fh.fileno())
-            tmp.replace(path)
-        except Exception:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def reserve_delivery(
@@ -237,50 +236,62 @@ def reserve_delivery(
     delivery_id: str,
     ttl_seconds: int = REPLAY_TTL_SECONDS,
 ) -> tuple[bool, str]:
-    """Reserve a delivery ID for processing."""
-    cache = _load_replay_cache(config)
-    now = time.time()
-    entries = cache.get("entries", {})
+    """Reserve a delivery ID for processing.
 
-    expired = [k for k, v in entries.items()
-               if now - v.get("ts", 0) > ttl_seconds]
-    for k in expired:
-        del entries[k]
+    The entire load-check-mutate-save transaction is under an exclusive
+    file lock so two concurrent workers cannot both reserve the same ID.
+    """
+    path = _replay_cache_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock.with_lock(str(path), timeout=10):
+        cache = _load_replay_cache(config)
+        now = time.time()
+        entries = cache.get("entries", {})
 
-    entry = entries.get(delivery_id)
-    if entry:
-        if entry.get("state") == "done":
-            return False, "Replay detected: delivery already completed"
-        if entry.get("state") == "processing":
-            return False, "Replay detected: delivery already processing"
-    else:
-        entries[delivery_id] = {"state": "processing", "ts": now}
-        cache["entries"] = entries
-        _save_replay_cache(config, cache)
-        return True, "OK"
+        expired = [k for k, v in entries.items()
+                   if now - v.get("ts", 0) > ttl_seconds]
+        for k in expired:
+            del entries[k]
 
-    return False, "Replay detected"
+        entry = entries.get(delivery_id)
+        if entry:
+            if entry.get("state") == "done":
+                return False, "Replay detected: delivery already completed"
+            if entry.get("state") == "processing":
+                return False, "Replay detected: delivery already processing"
+            return False, "Replay detected"
+        else:
+            entries[delivery_id] = {"state": "processing", "ts": now}
+            cache["entries"] = entries
+            _save_replay_cache_unlocked(config, cache)
+            return True, "OK"
 
 
 def complete_delivery(config: Any, delivery_id: str) -> None:
     """Mark a delivery as completed."""
-    cache = _load_replay_cache(config)
-    entries = cache.get("entries", {})
-    if delivery_id in entries:
-        entries[delivery_id]["state"] = "done"
-        entries[delivery_id]["ts"] = time.time()
-        cache["entries"] = entries
-        _save_replay_cache(config, cache)
+    path = _replay_cache_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock.with_lock(str(path), timeout=10):
+        cache = _load_replay_cache(config)
+        entries = cache.get("entries", {})
+        if delivery_id in entries:
+            entries[delivery_id]["state"] = "done"
+            entries[delivery_id]["ts"] = time.time()
+            cache["entries"] = entries
+            _save_replay_cache_unlocked(config, cache)
 
 
 def release_delivery(config: Any, delivery_id: str) -> None:
     """Release a delivery reservation on failure (allows retry)."""
-    cache = _load_replay_cache(config)
-    entries = cache.get("entries", {})
-    if delivery_id in entries:
-        del entries[delivery_id]
-        cache["entries"] = entries
-        _save_replay_cache(config, cache)
+    path = _replay_cache_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock.with_lock(str(path), timeout=10):
+        cache = _load_replay_cache(config)
+        entries = cache.get("entries", {})
+        if delivery_id in entries:
+            del entries[delivery_id]
+            cache["entries"] = entries
+            _save_replay_cache_unlocked(config, cache)
 
 
 def validate_secret_config() -> dict[str, Any]:

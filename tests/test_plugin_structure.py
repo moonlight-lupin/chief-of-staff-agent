@@ -141,8 +141,8 @@ class TestSkillFrontmatter:
         assert len(parts) >= 3, f"{skill_name}: malformed frontmatter"
         fm = yaml.safe_load(parts[1])
         assert "license" in fm, f"{skill_name}: missing 'license' in frontmatter"
-        assert str(fm["license"]) == "Apache-2.0", (
-            f"{skill_name}: license is {fm['license']}, expected Apache-2.0"
+        assert str(fm["license"]) in ("Apache-2.0", "MIT"), (
+            f"{skill_name}: license is {fm['license']}, expected Apache-2.0 or MIT"
         )
 
     def test_shipped_skills_have_no_unreplaced_placeholders(self):

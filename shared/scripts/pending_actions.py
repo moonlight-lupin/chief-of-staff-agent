@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Pending action storage for gated operations (e.g. Gmail send).
 
-State machine: requested → approved → executed | cancelled | dismissed
+State machine: requested → approved → executing → executed | cancelled | dismissed | expired | failed
                requested → cancelled | dismissed (skip approval)
+               executing → approved (retry, under MAX_RETRIES) | failed (retry cap)
 
 Concurrency: exclusive file lock (file_lock.with_lock) around load-check-write,
 plus a version counter as defense-in-depth. Concurrent writers serialize on
@@ -37,6 +38,12 @@ EXPIRY_HOURS = 72
 # Approved actions must be executed within APPROVED_EXPIRY_HOURS,
 # otherwise the approval lapses and the action must be re-approved.
 APPROVED_EXPIRY_HOURS = 24
+
+# Cap on mark_failed → approved retries. At MAX_RETRIES the action
+# transitions to terminal 'failed' so a poison / ambiguous-504 send
+# cannot be re-armed forever (and duplicate a message that may have
+# already been delivered).
+MAX_RETRIES = 3
 
 # Risk classification for email recipients.
 # Internal = same domain as the company. External = different domain.
@@ -210,7 +217,7 @@ def classify_recipient_risk(
                 if "://" in company_domain:
                     company_domain = company_domain.split("://", 1)[1]
                 company_domain = company_domain.rstrip("/").split("/")[0]
-                if company_domain in domain or domain in company_domain:
+                if domain == company_domain or domain.endswith("." + company_domain):
                     return {"level": "internal", "domain": domain,
                             "reason": f"Same domain as company ({company_domain})"}
         # Also check google.domain
@@ -541,10 +548,12 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
 
 
 def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | None:
-    """Transition an executing action to 'failed' with an error message.
+    """Record a provider failure on an executing action.
 
     Called when the provider method raises an exception or returns failure.
-    The action transitions back to 'approved' so it can be retried.
+    Increments ``retry_count``. Under ``MAX_RETRIES`` the action returns to
+    ``approved`` so it can be retried; at the cap it transitions to terminal
+    ``failed`` and cannot be re-executed.
 
     Returns the updated action, or None if not in 'executing' state.
     """
@@ -554,9 +563,12 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
     if not action or action["state"] != "executing":
         return None
 
-    action["state"] = "approved"  # back to approved for retry
-    action["last_error"] = error
     action["retry_count"] = action.get("retry_count", 0) + 1
+    if action["retry_count"] >= MAX_RETRIES:
+        action["state"] = "failed"
+    else:
+        action["state"] = "approved"  # back to approved for retry
+    action["last_error"] = error
     _save(config, data, expected_version=expected_version)
 
     try:

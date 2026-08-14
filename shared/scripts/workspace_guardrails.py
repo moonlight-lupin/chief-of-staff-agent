@@ -84,7 +84,10 @@ READ_ACTIONS: frozenset[str] = frozenset({
     "files.search",
     "files.list",
     "files.read",
-    "unknown",  # events that don't map to a known action
+    # NOTE: "unknown" is intentionally NOT in READ_ACTIONS. Unknown action
+    # IDs must be denied by default-deny, not allowed as reads. Event
+    # classification's "unknown" category is separate from executable
+    # action IDs and must not bypass the guardrail.
 })
 
 # Actions that are destructive and should always require explicit confirmation
@@ -312,11 +315,13 @@ def guarded(
 
       1. Resolves the target from the ``target_arg`` parameter.
       2. Calls ``confirm_action(action_id, **{target_arg: target})``; if the
-         guardrail refuses, returns an error ActionResult WITHOUT invoking the
-         body (nothing is audited).
-      3. Invokes the body. On success, audits the action and returns a success
-         ActionResult wrapping the body's returned dict. On exception, audits a
-         failure and returns an error ActionResult carrying ``str(exc)``.
+         guardrail refuses, audits status="blocked" (best-effort) and returns
+         an error ActionResult WITHOUT invoking the body.
+      3. Invokes the body. On success, audits the action (audit failure is
+         logged and ``audited=False`` — it never masks a successful mutation)
+         and returns a success ActionResult wrapping the body's returned dict.
+         On exception, audits a failure and returns an error ActionResult
+         carrying ``str(exc)``.
 
     The action id is passed explicitly so existing providers keep emitting their
     LEGACY ids ("gmail.send", "drive.upload", "calendar.create", ...) — stored
@@ -361,7 +366,16 @@ def guarded(
                 # specific gate reason; emitting again here would duplicate the
                 # event, so the decorator's block path stays silent. On success
                 # nothing is logged either — the provider layer (_request)
-                # covers the operational events.
+                # covers the operational events. Denied writes ARE durably
+                # audited (status="blocked") so they leave a trace even when
+                # no run is active and runtime_log no-ops.
+                try:
+                    audit_workspace_action(
+                        self.config, audit_provider, operation,
+                        str(resolved_audit_tool), target=target, status="blocked",
+                    )
+                except Exception:  # pragma: no cover - audit must never mask the block
+                    pass
                 return ActionResult(
                     success=False, action=action_id, provider=provider,
                     tool_slug=str(resolved_tool_slug), target=target, error=block_error,
@@ -379,13 +393,29 @@ def guarded(
                     tool_slug=str(resolved_tool_slug), target=target, error=str(exc), audited=True,
                 ).to_dict()
 
-            audit_workspace_action(
-                self.config, audit_provider, operation, str(resolved_audit_tool), target=target,
-            )
+            # Audit the success — failure here must NOT mask the mutation.
+            audit_ok = True
+            try:
+                audit_workspace_action(
+                    self.config, audit_provider, operation, str(resolved_audit_tool),
+                    target=target,
+                )
+            except Exception:
+                audit_ok = False
+                try:
+                    from runtime_log import log_event
+                    log_event(
+                        "audit_failed", level="warning", component="guardrails",
+                        action=str(action_id), operation=str(operation),
+                        target=target,
+                    )
+                except Exception:  # pragma: no cover - logging must never break the caller
+                    pass
+
             return ActionResult(
                 success=True, action=action_id, provider=provider,
                 tool_slug=str(resolved_tool_slug), target=target,
-                data=data if isinstance(data, dict) else {}, audited=True,
+                data=data if isinstance(data, dict) else {}, audited=audit_ok,
             ).to_dict()
 
         return wrapper

@@ -31,8 +31,8 @@ All HTTP is routed through :meth:`_request` and all token acquisition through
 msal required).  Non-2xx responses raise RuntimeError carrying the Graph status
 and error message; the ``@guarded`` wrapper converts that into an audited
 failure ActionResult.  Read methods (mail_search, calendar_list, files_search,
-mail_list_tags) follow the Google provider's pattern: warn + return ``[]`` on
-failure.
+mail_list_tags, mail_list_folders) follow the Google provider's pattern:
+warn + return ``[]`` on failure.
 
 Operational behaviour (Tier 1 hardening):
   * **Method-aware throttle backoff.**  :meth:`_request` retries a request up to
@@ -933,30 +933,34 @@ class M365GraphClient(WorkspaceClient):
     def mail_list_folders(self, include_hidden: bool = False,
                           max_results: int = 100) -> list[dict[str, Any]]:
         """List top-level mail folders (GET /mailFolders)."""
-        params: dict[str, Any] = {
-            "$top": max_results,
-            "$select": "id,displayName,parentFolderId,childFolderCount,"
-                       "unreadItemCount,totalItemCount,isHidden",
-        }
-        # Graph hides isHidden=true folders unless includeHiddenFolders=true.
-        if include_hidden:
-            params["includeHiddenFolders"] = "true"
-        data = self._request("GET", f"{self._user_base()}/mailFolders", params=params)
-        value = data.get("value", []) if isinstance(data, Mapping) else []
-        out: list[dict[str, Any]] = []
-        for f in value or []:
-            if not isinstance(f, Mapping):
-                continue
-            out.append({
-                "id": f.get("id"),
-                "name": f.get("displayName") or "",
-                "parent_id": f.get("parentFolderId"),
-                "unread": f.get("unreadItemCount"),
-                "total": f.get("totalItemCount"),
-                "child_count": f.get("childFolderCount"),
-                "hidden": bool(f.get("isHidden")) if f.get("isHidden") is not None else None,
-            })
-        return out
+        try:
+            params: dict[str, Any] = {
+                "$top": max_results,
+                "$select": "id,displayName,parentFolderId,childFolderCount,"
+                           "unreadItemCount,totalItemCount,isHidden",
+            }
+            # Graph hides isHidden=true folders unless includeHiddenFolders=true.
+            if include_hidden:
+                params["includeHiddenFolders"] = "true"
+            data = self._request("GET", f"{self._user_base()}/mailFolders", params=params)
+            value = data.get("value", []) if isinstance(data, Mapping) else []
+            out: list[dict[str, Any]] = []
+            for f in value or []:
+                if not isinstance(f, Mapping):
+                    continue
+                out.append({
+                    "id": f.get("id"),
+                    "name": f.get("displayName") or "",
+                    "parent_id": f.get("parentFolderId"),
+                    "unread": f.get("unreadItemCount"),
+                    "total": f.get("totalItemCount"),
+                    "child_count": f.get("childFolderCount"),
+                    "hidden": bool(f.get("isHidden")) if f.get("isHidden") is not None else None,
+                })
+            return out
+        except Exception as exc:  # noqa: BLE001
+            warnings.warn(f"m365 mail_list_folders failed: {exc}")
+            return []
 
     def _move(self, message_id: str, destination: str) -> dict[str, Any]:
         return self._request(
