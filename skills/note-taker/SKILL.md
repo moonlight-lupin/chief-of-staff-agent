@@ -1,7 +1,7 @@
 ---
 name: note-taker
-description: Maintain a Chief of Staff second-brain wiki for business and personal knowledge using a three-layer markdown architecture with OKF v0.1 frontmatter.
-version: 0.1.0
+description: Maintain a Chief of Staff second-brain wiki for business and personal knowledge using a three-layer markdown architecture with OKF v0.2 frontmatter.
+version: 0.2.0
 author: moonlight-lupin
 license: Apache-2.0
 metadata:
@@ -72,9 +72,9 @@ wiki/
 
 Always read `purpose.md`, `SCHEMA.md`, `index.md`, and recent `log.md` before ingesting or answering from an existing wiki.
 
-## OKF v0.1 Conformance
+## OKF v0.2 Conformance
 
-Every curated `.md` page must have parseable YAML frontmatter with a non-empty `type` field. This aligns the wiki with Open Knowledge Format v0.1 expectations while allowing Chief of Staff extensions.
+Every curated `.md` page must have parseable YAML frontmatter with a non-empty `type` field. This aligns the wiki with Open Knowledge Format v0.2 expectations while allowing Chief of Staff extensions.
 
 Curated page frontmatter:
 
@@ -87,10 +87,24 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 tags: [clients, contracts]
 sources: [raw/transcripts/acme-kickoff-2026-07-09.md]
-confidence: high | medium | low
+confidence: high | medium | low | 0.0-1.0
 contested: false
+seq: 1
+aliases: [ACME, Acme Corp]
+relations:
+  - type: client_of
+    target: [[phronesis-applied]]
+  - type: competitor_of
+    target: [[rival-co]]
 ---
 ```
+
+OKF v0.2 fields:
+
+- `seq`: monotonic integer for ordering pages within a type. Auto-assigned by wiki_curator on creation. Used for stable sorting.
+- `aliases`: list of alternative names for entity pages. Used for fuzzy matching during search and ingest.
+- `relations`: list of typed edges to other pages. Each relation has `type` (e.g. `client_of`, `competitor_of`, `subsidiary_of`, `vendor_of`) and `target` (a `[[wikilink]]`).
+- `confidence`: now accepts 0-1 float in addition to high/medium/low. 0.0 = unverified, 0.5 = medium, 1.0 = confirmed. Float takes precedence.
 
 Raw source frontmatter:
 
@@ -109,7 +123,7 @@ Root `index.md` must declare:
 ```yaml
 ---
 type: index
-okf_version: "0.1"
+okf_version: "0.2"
 updated: YYYY-MM-DD
 ---
 ```
@@ -282,6 +296,33 @@ Lint checks the wiki for structural decay:
 - Stale pages not updated in 90+ days when related sources changed.
 
 Report findings by severity and append a lint entry to `log.md`.
+
+## Scheduled Curation
+
+For a compounding knowledge base, run the wiki curator on a daily schedule.
+This catches un-ingested sources, fixes broken links, and regenerates the
+overview.
+
+### Daily Cron (recommended)
+
+```bash
+# Run at 6 AM daily — catches overnight sources, lint before the day starts
+0 6 * * * cd ~/.hermes/plugins/chief-of-staff && \
+  python skills/note-taker/scripts/wiki_curator.py lint --summary >> \
+  ~/.hermes/projects/$(company)/wiki/.curator.log 2>&1
+```
+
+### Weekly Deep Curation
+
+```bash
+# Sunday 5 AM — full lint + validate + overview regeneration
+0 5 * * 0 cd ~/.hermes/plugins/chief-of-staff && \
+  python skills/note-taker/scripts/wiki_curator.py validate && \
+  python skills/note-taker/scripts/wiki_curator.py lint --summary
+```
+
+The curator is read-only safe: it never calls providers, approves actions,
+or deletes pages. It writes only inside the wiki directory.
 
 ## Integrations
 

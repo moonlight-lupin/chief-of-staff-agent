@@ -464,6 +464,56 @@ def deadline_urgency_injection(context: dict = None, **kwargs) -> Optional[str]:
     return None
 
 
+# ── 8. Note Capture Reminder (post_llm_call) ─────────────────────────────────
+
+# Patterns that indicate the LLM output contains note-worthy content
+_NOTE_PATTERNS = [
+    r"##\s+(meeting\s+)?notes?\b",
+    r"##\s+(action\s+items?|decisions?)\b",
+    r"##\s+(research\s+)?(summary|findings?)\b",
+    r"##\s+(key\s+)?(takeaways?|insights?)\b",
+    r"##\s+(trip\s+)?(learnings?|reflections?)\b",
+    r"##\s+(follow-up|next\s+steps?)\b",
+]
+_NOTE_RE = re.compile("|".join(_NOTE_PATTERNS), re.IGNORECASE)
+
+
+def note_capture_reminder(response: str = "", context: dict = None, **kwargs) -> Optional[str]:
+    """After LLM output, detect note-worthy content and remind ingestion.
+
+    Fires when the response contains meeting notes, research findings,
+    decisions, or action items — and the note-taker skill is loaded.
+    """
+    if not _cos_skills_loaded(context):
+        return None
+
+    # Only fire if note-taker is in the loaded skills
+    loaded = context.get("loaded_skills", []) if context else []
+    if not any("note-taker" in s for s in loaded):
+        return None
+
+    if not response or not isinstance(response, str):
+        return None
+
+    # Check if the response contains note-worthy patterns
+    if not _NOTE_RE.search(response):
+        return None
+
+    # Don't fire if the response already mentions wiki/ingest/note-taker
+    # (the agent is already handling it)
+    lower = response.lower()
+    if any(w in lower for w in ("wiki_curator", "note-taker skill", "ingest", "[[", "raw/transcripts")):
+        return None
+
+    return (
+        "📝 This output contains note-worthy content (meeting notes, decisions, "
+        "or research findings). Consider ingesting it into the wiki via the "
+        "note-taker skill: capture the source into raw/, then create or update "
+        "entity/concept pages with [[wikilinks]]. Run "
+        "`python skills/note-taker/scripts/wiki_curator.py lint` after."
+    )
+
+
 # ── Registration helper ──────────────────────────────────────────────────────
 
 ALL_HOOKS = {
@@ -483,12 +533,13 @@ ALL_HOOKS = {
     ],
     "post_llm_call": [
         ("format_enforcer", format_enforcer),
+        ("note_capture_reminder", note_capture_reminder),
     ],
 }
 
 
 def register_all_hooks(ctx):
-    """Register all 7 hooks. Called from __init__.py."""
+    """Register all 8 hooks. Called from __init__.py."""
     for event, hooks in ALL_HOOKS.items():
         for name, callback in hooks:
             try:

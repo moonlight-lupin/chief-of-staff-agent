@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for hooks.py — all 7 quality hooks."""
+"""Tests for hooks.py — all 8 quality hooks."""
 
 import sys
 import os
@@ -493,7 +493,7 @@ class TestHookRegistration:
     def test_all_hooks_defined(self):
         from hooks import ALL_HOOKS
         total = sum(len(hooks) for hooks in ALL_HOOKS.values())
-        assert total == 7
+        assert total == 8
 
     def test_all_events_covered(self):
         from hooks import ALL_HOOKS

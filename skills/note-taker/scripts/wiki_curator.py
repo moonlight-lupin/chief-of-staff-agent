@@ -51,6 +51,13 @@ TEXT_FIELDS = ("summary", "text", "content", "body", "note", "notes", "descripti
 TIME_FIELDS = ("received_at", "created_at", "updated_at", "timestamp", "time", "date", "ts")
 SECTION_RE = re.compile(r"(?m)^##\s+(.+?)\s*$")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
+_CONFIDENCE_LABELS = {
+    "high": 1.0,
+    "medium": 0.5,
+    "low": 0.0,
+    "confirmed": 1.0,
+    "unverified": 0.0,
+}
 
 
 @dataclass
@@ -380,6 +387,19 @@ def _wiki_path(config: Mapping[str, Any], project_root: Path) -> Path:
     return path.resolve()
 
 
+def _with_wiki_override(config: Mapping[str, Any], wiki: str | None) -> Mapping[str, Any]:
+    """Return a copy of config with paths.wiki_path overridden when ``wiki`` is set."""
+
+    if not wiki:
+        return config
+    updated = dict(config)
+    paths = updated.get("paths")
+    paths_dict = dict(paths) if isinstance(paths, Mapping) else {}
+    paths_dict["wiki_path"] = wiki
+    updated["paths"] = paths_dict
+    return updated
+
+
 def _assert_under_wiki(path: Path, wiki_path: Path) -> None:
     resolved_parent = path.parent.resolve()
     resolved_wiki = wiki_path.resolve()
@@ -484,12 +504,46 @@ def _set_section_text(body: str, heading: str, text: str) -> tuple[str, bool]:
     return body[:start] + replacement + body[end:], True
 
 
+def _confidence_as_float(value: Any) -> float | None:
+    """Interpret confidence as a 0-1 float. Numeric values take precedence over labels."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0.0, min(1.0, float(value)))
+    text = _safe_str(value).casefold()
+    if not text:
+        return None
+    if text in _CONFIDENCE_LABELS:
+        return _CONFIDENCE_LABELS[text]
+    try:
+        return max(0.0, min(1.0, float(text)))
+    except ValueError:
+        return None
+
+
+def _normalise_confidence(value: Any, default: float = 0.5) -> Any:
+    """Accept 0-1 floats and high/medium/low labels. Preserve existing labels."""
+
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return max(0.0, min(1.0, float(value)))
+    text = _safe_str(value)
+    if text.casefold() in _CONFIDENCE_LABELS:
+        return text
+    parsed = _confidence_as_float(value)
+    return default if parsed is None else parsed
+
+
 def _merge_frontmatter(existing: Mapping[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
     merged = dict(existing)
     for key, value in updates.items():
         if key in {"tags", "sources", "aliases"}:
             merged[key] = _unique(_as_list(merged.get(key)) + _as_list(value))
-        elif key in {"status", "confidence"} and merged.get(key) not in (None, ""):
+        elif key in {"status", "confidence", "seq"} and merged.get(key) not in (None, ""):
             continue
         else:
             merged[key] = value
@@ -596,6 +650,7 @@ class WikiCurator:
         self.now = _now(config)
         self.today = self.now.date().isoformat()
         self.changes: list[Change] = []
+        self._seq_max: dict[str, int] = {}
 
     def _relative(self, path: Path) -> str:
         try:
@@ -625,6 +680,25 @@ class WikiCurator:
         self.changes.append(Change(action=action, path=path, detail=detail))
         if not self.dry_run:
             _atomic_write(path, normalized, self.wiki_path)
+
+    def _next_seq(self, page_type: str) -> int:
+        """Assign the next monotonic seq for pages of the same type."""
+
+        if page_type not in self._seq_max:
+            max_seq = 0
+            for path in self.all_markdown_pages():
+                frontmatter, _body, _title = self._page_summary(path)
+                if _safe_str(frontmatter.get("type")) != page_type:
+                    continue
+                try:
+                    seq = int(frontmatter.get("seq"))
+                except (TypeError, ValueError):
+                    continue
+                if seq > max_seq:
+                    max_seq = seq
+            self._seq_max[page_type] = max_seq
+        self._seq_max[page_type] += 1
+        return self._seq_max[page_type]
 
     def page_path(self, page_type: str, title: str) -> Path:
         folder = {"person": "people", "project": "projects", "entity": "entities", "decision": "decisions", "daily": "daily"}.get(page_type, "entities")
@@ -690,12 +764,13 @@ class WikiCurator:
         observation = f"[{day}] {observation_text} [source: {source_ref}]"
         activity = f"[{day}] Mentioned in {item.source_kind}: {item.title} [source: {source_ref}]"
         tags = _unique([page_type, item.source_kind, *item.tags, *extra_tags])
-        if path.exists():
-            old = path.read_text(encoding="utf-8")
-            frontmatter, body, _valid = split_frontmatter(old)
-        else:
+        is_new = not path.exists()
+        if is_new:
             frontmatter = {}
             body = self._new_page_body(title, observation=observation, activity=activity, sources=[source_ref])
+        else:
+            old = path.read_text(encoding="utf-8")
+            frontmatter, body, _valid = split_frontmatter(old)
         updates = {
             "type": page_type,
             "title": title,
@@ -704,9 +779,14 @@ class WikiCurator:
             "tags": tags,
             "sources": [source_ref],
             "status": "draft",
-            "confidence": frontmatter.get("confidence", 0.5),
+            "confidence": _normalise_confidence(frontmatter.get("confidence"), 0.5),
             "last_seen": self.now.isoformat(),
         }
+        if is_new:
+            updates["seq"] = self._next_seq(page_type)
+            updates["relations"] = []
+            if page_type == "entity":
+                updates["aliases"] = []
         merged = _merge_frontmatter(frontmatter, updates)
         body = ensure_section(body, "Operator-confirmed facts")
         body, _ = _append_bullets(body, "Source-backed observations", [observation])
@@ -725,12 +805,13 @@ class WikiCurator:
         path = self.page_path("daily", item.day)
         activity = f"[{item.timestamp.strftime('%H:%M')}] {item.title} [source: {item.source_id}]"
         related = [f"[[{title}]]" for title in related_titles if title]
-        if path.exists():
-            old = path.read_text(encoding="utf-8")
-            frontmatter, body, _valid = split_frontmatter(old)
-        else:
+        is_new = not path.exists()
+        if is_new:
             frontmatter = {}
             body = self._new_page_body(item.day, activity=activity, sources=[item.source_id])
+        else:
+            old = path.read_text(encoding="utf-8")
+            frontmatter, body, _valid = split_frontmatter(old)
         updates = {
             "type": "daily",
             "title": item.day,
@@ -739,8 +820,11 @@ class WikiCurator:
             "tags": _unique(["daily", *item.tags]),
             "sources": [item.source_id],
             "status": "draft",
-            "confidence": frontmatter.get("confidence", 0.5),
+            "confidence": _normalise_confidence(frontmatter.get("confidence"), 0.5),
         }
+        if is_new:
+            updates["seq"] = self._next_seq("daily")
+            updates["relations"] = []
         merged = _merge_frontmatter(frontmatter, updates)
         body, _ = _append_bullets(body, "Recent activity", [activity])
         body, _ = _append_bullets(body, "Related pages", related)
@@ -827,7 +911,7 @@ class WikiCurator:
         for page_type in sorted(grouped):
             sections.append(f"## {page_type.title()}\n\n" + "\n".join(sorted(grouped[page_type])))
         body = "# Wiki Index\n\nAuto-regenerated content catalog.\n\n" + ("\n\n".join(sections) if sections else "(No pages yet)") + "\n"
-        frontmatter = {"type": "index", "okf_version": "0.1", "updated": self.today, "title": "Wiki Index"}
+        frontmatter = {"type": "index", "okf_version": "0.2", "updated": self.today, "title": "Wiki Index"}
         self.maybe_write(self.wiki_path / "index.md", join_frontmatter(frontmatter, body), "update", "refresh content catalog")
 
     def refresh_overview(self) -> None:
@@ -1026,10 +1110,7 @@ def validate_wiki(config: Mapping[str, Any]) -> list[Finding]:
 
         if valid:
             if "confidence" in frontmatter:
-                try:
-                    confidence = float(frontmatter["confidence"])
-                except (TypeError, ValueError):
-                    confidence = None
+                confidence = _confidence_as_float(frontmatter["confidence"])
                 if confidence is not None and confidence < 0.5:
                     findings.append(
                         Finding("WARN", rel, f"Low confidence page: confidence={frontmatter['confidence']}")
@@ -1094,7 +1175,7 @@ def collect_items(config: Mapping[str, Any], since: timedelta) -> tuple[WikiCura
 
 
 def run_command(args: argparse.Namespace, write: bool) -> int:
-    config = _load_configuration(args.config)
+    config = _with_wiki_override(_load_configuration(args.config), getattr(args, "wiki", None))
     dry_run = bool(args.dry_run or not write)
     curator = WikiCurator(config, dry_run=dry_run)
     since = parse_since(args.since)
@@ -1110,7 +1191,7 @@ def run_command(args: argparse.Namespace, write: bool) -> int:
 
 
 def validate_command(args: argparse.Namespace) -> int:
-    config = _load_configuration(args.config)
+    config = _with_wiki_override(_load_configuration(args.config), getattr(args, "wiki", None))
     findings = validate_wiki(config)
     print(format_findings(findings))
     return 1 if any(f.severity == "ERROR" for f in findings) else 0
@@ -1118,7 +1199,7 @@ def validate_command(args: argparse.Namespace) -> int:
 
 def lint_command(args: argparse.Namespace) -> int:
     """Lint wiki structure (alias for validate, with optional summary mode)."""
-    config = _load_configuration(args.config)
+    config = _with_wiki_override(_load_configuration(args.config), getattr(args, "wiki", None))
     findings = validate_wiki(config)
     if getattr(args, "summary", False):
         counts: dict[str, int] = {"ERROR": 0, "WARN": 0, "INFO": 0}
@@ -1143,23 +1224,28 @@ cmd_lint = lint_command
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Maintain the Chief-of-Staff Markdown wiki from local memory/events.")
     parser.add_argument("--config", help="Path to company.yaml (default: shared/config/company.yaml or CHIEF_OF_STAFF_CONFIG)")
+    parser.add_argument("--wiki", default=None, help="Override wiki directory path")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="Create/update wiki pages from memory and recent events")
     run.add_argument("--since", default="24h", help="Lookback window such as 24h, 7d, or 90m")
     run.add_argument("--dry-run", action="store_true", help="Report planned changes without writing")
     run.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    run.add_argument("--wiki", dest="wiki", default=None, help="Override wiki directory path")
 
     report = sub.add_parser("report", help="Print planned wiki maintenance summary without writing")
     report.add_argument("--since", default="24h", help="Lookback window such as 24h, 7d, or 90m")
     report.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    report.add_argument("--wiki", dest="wiki", default=None, help="Override wiki directory path")
 
     validate = sub.add_parser("validate", help="Lint wiki structure")
     validate.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    validate.add_argument("--wiki", dest="wiki", default=None, help="Override wiki directory path")
 
     lint = sub.add_parser("lint", help="Lint wiki structure (alias for validate with summary)")
     lint.add_argument("--summary", action="store_true", help="Print summary counts only")
     lint.add_argument("--config", dest="sub_config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    lint.add_argument("--wiki", dest="wiki", default=None, help="Override wiki directory path")
     return parser
 
 

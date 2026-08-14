@@ -81,7 +81,7 @@ def _esign_url_configured() -> bool:
 
 
 def register(ctx):
-    """Register skills based on the active profile + 7 quality hooks.
+    """Register skills based on the active profile + 8 quality hooks.
 
     Profiles are defined in plugin.yaml → skill_profiles.
     Set CHIEF_OF_STAFF_SKILL_PROFILE=enterprise to use the enterprise profile
@@ -95,6 +95,6 @@ def register(ctx):
         skill_path = overlay if overlay.exists() else shipped
         ctx.register_skill(skill_name, skill_path)
 
-    # Register all 7 quality hooks
+    # Register all 8 quality hooks
     from . import hooks
     hooks.register_all_hooks(ctx)
