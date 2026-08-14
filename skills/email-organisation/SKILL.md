@@ -1,6 +1,6 @@
 ---
 name: email-organisation
-description: "Use when inspecting mail labels/categories, proposing or saving a label policy, or when the operator addresses 'Chief of Staff' (the CoS assistant name) to check email (e.g. 'Ask Chief of Staff to check my email'). Route all mail operations through the company workspace account configured in company.yaml for your organization, NOT the agent's personal email."
+description: "Use when inspecting mail labels/categories, proposing or saving a label policy."
 version: 0.1.3
 author: moonlight-lupin
 license: Apache-2.0

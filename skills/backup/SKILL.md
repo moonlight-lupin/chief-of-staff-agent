@@ -1,6 +1,6 @@
 ---
 name: backup
-description: Create scheduled tar.gz backups of key Hermes and Chief of Staff project data and upload them to Google Drive with retention pruning.
+description: "Use when backing up Hermes and Chief of Staff data, or auditing the backup schedule."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
@@ -102,12 +102,14 @@ chief-of-staff-{company_slug}-{YYYYMMDD-HHMMSS}.tar.gz
 ```
 
 3. Create a `tar.gz` containing only the included files/directories.
+   Completion criterion: archive contains every included path or names each skipped path.
 4. Apply exclusions by basename and path segment.
 5. Upload the archive to Drive `09_Backups/` or configured `backup.drive_folder_id`.
 6. Prune old backups:
    - Keep the newest `retention_weekly` weekly backups.
    - Keep one monthly backup for each of the newest `retention_monthly` months.
    - Never delete the backup just created.
+   Completion criterion: prune ran only after upload returned a file ID, and the just-created archive is retained.
 7. Report:
    - archive path,
    - backup size,

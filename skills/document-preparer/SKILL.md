@@ -1,6 +1,6 @@
 ---
 name: document-preparer
-description: Generate DOCX documents from tokenized templates and reverse-engineer reusable templates for the Chief of Staff document workflow.
+description: "Use when generating a document from a template, or turning a document into a reusable template."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0

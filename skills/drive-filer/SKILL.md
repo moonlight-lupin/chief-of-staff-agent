@@ -1,6 +1,6 @@
 ---
 name: drive-filer
-description: "File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules. When the user addresses 'Chief of Staff' (the CoS assistant name) to file or sync documents, use the company workspace account configured in company.yaml for your organization for all Gmail/Drive operations, NOT the agent's personal email."
+description: "File email attachments and local project documents into the Chief of Staff Google Drive structure using configurable drive-map.yaml rules."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
@@ -37,7 +37,9 @@ Trigger this skill on:
 - Daily Briefing auto-suggestions for emails with attachments.
 - Another Chief of Staff skill producing a document that should be filed.
 
-Do not use it for local-only archiving; Drive Filer's job is Google Drive organization.
+Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "<name>, file the attachment from Acme".
+
+Drive Filer's job is file-store organization (Google Drive or Microsoft 365).
 
 ## Configuration Sources
 
@@ -159,14 +161,9 @@ Root/                              (company Drive root — ID from company.yaml)
 
 ## Workspace Access
 
-Drive Filer's intent is: search the file store, ensure/create folders, and upload/download files. Prefer the `drive_file.py` wrapper (shown in the Overview) — it routes through `WorkspaceClient` and applies guardrails/audit. Normalize files you read or report to the canonical `file` shape in `shared/scripts/schemas.py` (`{id, name, mime_type?, modified?, link?, parents?, source?}`).
+Drive Filer's intent is: search the file store, ensure/create folders, and upload/download files. Prefer the `drive_file.py` wrapper (shown in the Overview). Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
-If you access the file store directly instead of through the wrapper, use the first available path in this order:
-
-1. **Native connector tools** in the agent's environment — the Google Drive connector, or the Microsoft 365 OneDrive / SharePoint connector.
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).files_search(query, max_results=...)`, `.files_upload(file_path, parent_id=...)`, `.files_download(file_id, output_path)`, `.files_trash(file_id)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
-
-Search queries in these examples use the Google Drive query dialect; the `m365` provider translates the same intent to Microsoft Graph, and native connectors accept natural-language/structured queries. To fetch a mail attachment before filing, obtain it through an approved mail access path (a Gmail/Outlook connector or `workspace_client` mail methods), then return to Drive Filer for classification and upload.
+To fetch a mail attachment before filing, obtain it through an approved mail access path, then return to Drive Filer for classification and upload.
 
 ## Workflow A — File Email Attachment
 

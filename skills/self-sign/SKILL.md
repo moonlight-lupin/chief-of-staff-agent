@@ -1,6 +1,6 @@
 ---
 name: self-sign
-description: Detect signature blocks in PDF or DOCX documents, confirm the correct party blocks with the user, and place the user's prepared signature without external e-sign services.
+description: "Use when placing the operator's own signature on a document. For collecting third-party signatures, use esign-connector."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
@@ -52,33 +52,6 @@ self_sign:
     - "Consultant"
     - "Contractor"
     - "The Company"
-  detection_patterns:
-    signature:
-      - "Signature:"
-      - "Signed by:"
-      - "Sign here:"
-      - "Authorised Signatory:"
-      - "For and on behalf of"
-      - "______________"
-    date:
-      - "Date:"
-      - "Date Signed:"
-      - "Dated this"
-    party:
-      - "For and on behalf of"
-      - "Party A"
-      - "Party B"
-      - "First Party"
-      - "Second Party"
-      - "The Client"
-      - "The Service Provider"
-      - "The Consultant"
-      - "Lessor"
-      - "Lessee"
-      - "Buyer"
-      - "Seller"
-      - "Employer"
-      - "Employee"
 ```
 
 Defaults:
@@ -86,7 +59,7 @@ Defaults:
 - `auto_date`: true.
 - `output_format`: pdf.
 - `party_aliases`: service-provider/consultant/contractor aliases for `professional_services` businesses.
-- `detection_patterns`: built-in signature/date/party patterns from the script.
+- `detection_patterns` — optional override; defaults ship in `sign_detector.py`. Run `sign_detector.py --show-patterns` to list them.
 
 ## Signature Detection
 

@@ -1,15 +1,6 @@
 ---
 name: deep-research
-description: >
-  Autonomous multi-step deep research engine implementing an iterative
-  Think → Search → Extract → Synthesize → Stop loop. The LLM drives every
-  decision: what to search, what's relevant, what's missing, and when to stop.
-  Produces a cited, magazine-quality report with inline citations, category-
-  specific formatting, and research stats. Trigger when the user asks for
-  "deep research", "research report on", "comprehensive analysis of", "look
-  into X in depth", "write a report on X", or any question needing multi-source
-  synthesis beyond a single search. For entity vetting/dossiers use entity-research;
-  for news digests use news-monitoring; for source-grounded Q&A use notebooklm-mode.
+description: "Use when the user asks for deep research or a written multi-source report."
 version: 1.5.0
 author: moonlight-lupin
 license: MIT
@@ -28,30 +19,8 @@ iterative loop where the agent plans, searches, extracts, synthesizes, and
 decides when to stop — producing a cited report with structured evidence,
 source quality tiers, and explicit gaps/contradictions sections.
 
-Inspired by PewDiePie's Odysseus project, Alibaba/Tongyi's IterResearch
-approach, and the sn-deep-research evidence-structuring architecture
-(OpenSenseNova/SenseNova-Skills, MIT). The full 9-role sn pipeline was
-evaluated and intentionally NOT adopted — only the evidence.json layer and
-refute-polarity requirement were ported, based on empirical side-by-side
-testing (July 2026). See `references/structured-evidence-format.md`.
-
-**v1.2.0 changes (July 2026):** overview-first report structure (comparison
-table right after executive summary), language anchoring (BCP 47), structured
-evidence step (3e), refute polarity requirement, source quality classification,
-explicit contradictions + gaps sections. Architecture diagram corrected.
-
-**v1.3.0 changes (July 2026):** source quality ranking and weighting —
-primary (3×) > secondary (2×) > tertiary (1×). Conflict resolution by quality
-tier. Quality distribution check (healthy/acceptable/weak) before writing.
-Tertiary source overreliance pitfall. Source table now shows quality
-distribution summary. Prompted by user noting too many tertiary sources in
-the self-hosting vs API report.
-
-**v1.5.0 changes (July 2026):** adaptive depth (complexity-based round caps),
-optional clarification phase (Step 0), token budget awareness, numbered
-citations, progressive empty-search refinement, explicit synthesis prompt
-structure. Concepts adapted from DocsGPT's ResearchAgent (arc53/DocsGPT, MIT).
-See `references/docsgpt-concepts.md` for the concept mapping.
+See `references/structured-evidence-format.md` for the evidence.json layer and
+`references/docsgpt-concepts.md` for adaptive-depth concept mapping.
 
 ## When to use
 
@@ -409,29 +378,9 @@ After the report, output a compact stats block:
 
 ## Follow-on Investment Analysis (optional)
 
-When the research report covers a real estate or investment question and the
-user subsequently provides specific deal parameters (price, area, location),
-build a quantitative pro-forma using `execute_code`. The pattern:
+When the report covers an investment question and the user provides deal parameters, build a quantitative pro-forma using `execute_code`. Always model the as-is use as a baseline. See `references/real-estate-investment-analysis.md` for the template.
 
-1. **Benchmark the asking price** against recent transaction comparables
-   (Cushman & Wakefield, CBRE, Savills, JLL — cap rates + price per tsubo)
-2. **Model alternative uses** (e.g., office as-is vs hotel converted) with
-   full P&L: revenue → operating expenses → NOI
-3. **Estimate conversion costs** (per-tsubo renovation rates, per-room costs)
-4. **Compute return metrics**: NOI yield vs market cap rates, payback period
-5. **Sensitivity table**: 3 revenue scenarios × 3 cost scenarios
-6. **Break-even analysis**: what price/ADR/occupancy achieves market yield?
-
-**Critical:** Always model the as-is use case as a baseline. If the
-alternative-use NOI exceeds the converted-use NOI, the conversion destroys
-value at that acquisition price — say so clearly.
-
-See `references/real-estate-investment-analysis.md` for the full template,
-Japan-specific data sources, renovation cost benchmarks, and cap rate ranges.
-
-See `references/structured-evidence-format.md` for the evidence.json schema,
-claim rules, writing-context vs claims distinction, and the side-by-side test
-results that validated the structured-evidence approach (July 2026).
+See `references/structured-evidence-format.md` for the evidence.json schema and writing-context vs claims distinction.
 
 ## Vault Integration (optional)
 
@@ -471,37 +420,23 @@ delegate_task(
 
 ## Pitfalls
 
-- **Skipping the research plan** — without sub-questions, the loop has no direction and the stopping check has no baseline. Always plan first.
-- **Stale year in queries** — always inject date grounding. Models default to training-cutoff years.
-- **Re-fetching same URLs** — track analyzed URLs across rounds. Wastes time and tokens.
-- **Over-searching** — most topics converge in 2-3 rounds. Don't pad to the complexity cap if the stopping check says YES at round 1 or 2. The cap is a ceiling, not a target.
-- **Under-searching** — broad topics with 1 round produce shallow reports. If the stopping check says NO, continue.
-- **No quality filter** — including thin/irrelevant sources dilutes the report. Filter before extraction.
-- **Listing instead of synthesizing** — the report should synthesize findings, not list them. Resolve contradictions, identify themes, draw conclusions.
-- **Missing citations** — every factual claim in the final report must have an inline citation — either `[N]` matching the source table, or `(Source: URL, "Title")` for claims from sources not in the numbered table.
-- **Missing evidence-basis tags** — a material fact with a citation but no `[VERIFIED]`/`[SOURCED]`/`[REASONED]`/`[ESTIMATED]` tag is half-graded. Tag it, and include the Evidence key so the tags decode.
-- **Improvised evidence labels** — use only the four canonical tags. A synonym like `[Official]`, `[Confirmed]`, or `[Consensus]` breaks the discipline; map it to one of the four.
-- **Overclaiming basis** — don't tag a single-source fact `[VERIFIED]`, and don't restate precision the source didn't give. When torn between two labels, pick the weaker one.
-- **Synthesis failure produces nothing** — always use the fallback report if synthesis fails. Raw findings > no output.
-- **Ignoring contradictions** — if sources disagree, present both. Don't silently pick one.
-- **Fabricating sources** — never invent URLs, titles, or facts. If a sub-question can't be answered, document it as a gap — never a `[REASONED]` guess dressed as a sourced fact.
-- **No counter-evidence search** — only searching for supporting evidence produces biased research. Round 2+ must include at least one counter-evidence query. If none found, say so explicitly.
-- **Missing gaps/contradictions sections** — the report must surface what's unknown and where sources disagree. Omitting these sections hides uncertainty from the reader and signals incomplete research.
-- **No source quality classification** — unclassified sources make it impossible to judge evidence strength. Always tag primary/secondary/tertiary in the source table.
-- **Tertiary source overreliance** — if 0 primary sources and >50% tertiary, the evidence base is weak. Flag it in the Gaps section and attempt to fetch primary sources (official docs, model cards, pricing pages) before finalizing. Tertiary sources are valuable for refute polarity and real-world anecdotes, but should never be the sole support for a factual claim when primary/secondary sources exist. Qualify tertiary-sourced claims: "Community reports suggest..." not "X is true."
-- **Conflating claims with context** — facts about the research subject (claims) vs boundary conditions (scope limits, methodology notes, availability gaps) are different things. Use the writing_context concept from the structured evidence format to separate them.
-- **Burying the comparison table** — the overview/comparison table goes right after the executive summary, not after the detailed analysis. Readers need the at-a-glance picture first; the detailed sections are supporting reasoning. Putting the table last forces readers to scroll through analysis before seeing the answer.
-- **Subagent synthesis** — never delegate the synthesis step. The orchestrator must see all findings to synthesize honestly.
-- **CBD rents for non-CBD locations** — when modeling real estate income, do not apply Marunouchi/Otemachi Grade A office rents (¥70K–100K/tsubo) to secondary locations like Koto-ku. Use submarket-appropriate rents (¥20K–30K/tsubo for mid-tier Koto-ku). This single mistake can inflate projected NOI by 3× and make a bad deal look good.
-- **Clarification loop** — if the user responds to a clarification with more vagueness, do not clarify again. Proceed to research with the best interpretation of intent. At most one clarification round.
-- **Complexity misclassification** — don't classify as "complex" just because the topic sounds impressive. A 6-sub-question plan on a narrow factual topic is "moderate." Complexity is about the breadth of synthesis needed, not the perceived importance of the topic.
-- **Token budget complacency** — the budget check is not a formality. On complex multi-round research with long web extractions, context can fill up before the complexity cap is reached. Summarize aggressively when the budget is tight.
+Keep only what the steps do not already bind:
+
+- **Overclaiming basis** — when torn between two labels, pick the weaker one. A source's "about half" stays `~50% [SOURCED]`.
+- **Conflating claims with context** — subject facts are claims; scope, methodology, and availability limits are writing_context.
+- **Subagent self-reports** — verify source URLs exist before citing. The orchestrator synthesizes.
+- **Clarification: one round** — if the reply is still vague, proceed with the best interpretation of intent.
+- **Complexity misclassification** — complexity is breadth of synthesis, not how impressive the topic sounds. A narrow factual topic with six sub-questions is moderate.
+- **Token budget fills before the cap** — on long extractions, summarize aggressively when context is tight rather than waiting for the round ceiling.
+- **Word-boundary matching** — "port" matching "transport" or "support" is a false hit; filter on topical relevance, not substring overlap.
+- **Fallback if synthesis fails** — compile raw findings with citations and tags; empty output is the failure mode.
+- **Evidence key** — paste the four-label legend under the Sources table so `[VERIFIED]` / `[SOURCED]` / `[REASONED]` / `[ESTIMATED]` decode.
 
 ## Related Work
 
 [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) — PewDiePie's self-hosted AI workspace — includes a "Deep Research" feature with multi-step web research and source reading, conceptually similar to this skill's Think → Search → Extract → Synthesize → Stop loop. This skill is a pure-prompt workflow (no UI, no server) designed to run inside any agent's tool loop.
 
-[DocsGPT](https://github.com/arc53/DocsGPT) (arc53, MIT) — Private AI platform with a ResearchAgent (`application/agents/research_agent.py`) that implements a Plan → Research → Synthesize pipeline with adaptive depth (complexity caps), clarification phase, token budget tracking, citation deduplication, and progressive empty-search refinement. v1.5.0 of this skill adapted these concepts from DocsGPT's ResearchAgent; see `references/docsgpt-concepts.md` for the mapping.
+[DocsGPT](https://github.com/arc53/DocsGPT) (arc53, MIT) — ResearchAgent Plan → Research → Synthesize with adaptive depth, clarification, token-budget tracking, and empty-search refinement. Mapping: `references/docsgpt-concepts.md`.
 
 ## Evals
 

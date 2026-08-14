@@ -6,7 +6,7 @@ The plugin is designed for a single company/operator per Hermes instance. It use
 
 ## Features
 
-The plugin registers 16 Hermes skills:
+The plugin registers 18 Hermes skills:
 
 1. **daily-briefing** — daily command-center briefing from inbox, calendar, deadlines, pipeline, to-dos, and finance.
 2. **deadline-tracker** — statutory and custom deadline tracking from company config and jurisdiction packs.
@@ -24,12 +24,13 @@ The plugin registers 16 Hermes skills:
 14. **travel-itinerary** — structured business-trip itineraries from confirmations and travel documents.
 15. **backup** — scheduled backup of Hermes config, skills, project data, and wiki to Drive.
 16. **self-sign** — scan documents for the operator's signature blocks and place signature assets locally.
+17. **email-organisation** — inspect mail labels/categories, propose a label policy, and apply approved organisation through the review queue.
+18. **esign-connector** — send documents for third-party e-signature via self-hosted DocuSeal.
 
 ## Prerequisites
 
 - Hermes Agent installed and working.
-- The `google-workspace` skill installed and configured.
-- Google Workspace service account with domain-wide delegation for Gmail, Calendar, and Drive, or an equivalent account configuration supported by `google-workspace`.
+- A workspace provider configured via `integrations.workspace.provider` in `company.yaml` (`google_api`, `composio`, `m365`, or `agent`). Skills use the provider-neutral `WorkspaceClient`.
 - Python packages used by specific skills:
   - `pyyaml`
   - `python-docx`
@@ -70,7 +71,7 @@ Check skill availability in a fresh Hermes session:
 /skill chief-of-staff:weekly-review
 ```
 
-If your Hermes build uses a different plugin namespace display, list installed skills and look for the 16 skill names above.
+If your Hermes build uses a different plugin namespace display, list installed skills and look for the 18 skill names above.
 
 ## Quick Start
 

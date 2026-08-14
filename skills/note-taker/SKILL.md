@@ -1,6 +1,6 @@
 ---
 name: note-taker
-description: Maintain a Chief of Staff second-brain wiki for business and personal knowledge using a three-layer markdown architecture with OKF v0.2 frontmatter.
+description: "Use when capturing durable knowledge into the wiki, querying it, or linting it."
 version: 0.2.0
 author: moonlight-lupin
 license: Apache-2.0

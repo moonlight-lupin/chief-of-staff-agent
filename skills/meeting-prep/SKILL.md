@@ -1,6 +1,6 @@
 ---
 name: meeting-prep
-description: "Use when preparing a concise pre-meeting intelligence brief from calendar event metadata, recent Gmail threads, wiki notes, pipeline status, invoices, to-dos, and entity research. When the user addresses 'Chief of Staff' (the CoS assistant name) for meeting prep, use the company workspace account configured in company.yaml for your organization, NOT the agent's personal email."
+description: "Use when preparing a concise pre-meeting intelligence brief from calendar event metadata, recent Gmail threads, wiki notes, pipeline status, invoices, to-dos, and entity research."
 version: 0.1.0
 author: "moonlight-lupin"
 license: Apache-2.0
@@ -26,7 +26,7 @@ Use this skill when:
 - Calendar Manager invokes a self-contained cron prompt with event title, attendees, and Meet link.
 - A meeting starts soon and the operator needs a concise context packet.
 
-Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "Ask <name> to check my email" / "<name>, what's on today?".
+Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "<name>, who am I meeting at 3?".
 
 Do **not** use this skill for scheduling or modifying meetings; use `calendar-manager`. Do **not** use it for general entity due diligence unless the meeting context specifically requires it; use `entity-research` directly.
 
@@ -55,13 +55,9 @@ python skills/meeting-prep/scripts/workspace_actions.py calendar-context --start
 python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "meeting notes" --max 5
 ```
 
-Normalize records to the canonical `message`, `event`, and `file` shapes in `shared/scripts/schemas.py`. Obtain the data through the first available path in this order:
+Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
-1. **Agent-side connectors** — native Gmail / Calendar / Drive / Microsoft 365 connectors, **or an already-authed Hermes Composio MCP session** (mail/calendar/files read tools). Use as a **read front-end only**; CoS writes still go through `get_workspace_client`.
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).mail_search(...)`, `.calendar_list(start, end)`, `.files_search(...)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365` | `agent`).
-3. **Pre-fetched data via `--input`** — when the agent has already gathered the context with path 1, pass it to `workspace_actions.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
-
-For ad hoc attendee searches when there is no pipeline client name, use a narrow attendee email query. The template below is the Gmail search dialect; the `m365` provider translates the same intent to Microsoft Graph, and native connectors accept natural-language equivalents:
+For ad hoc attendee searches when there is no pipeline client name, use a narrow 90-day attendee email query:
 
 ```text
 newer_than:90d (from:{attendee_email} OR to:{attendee_email})

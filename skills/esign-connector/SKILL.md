@@ -415,3 +415,13 @@ The coordinate extraction pipeline works on any PDF with a detectable signature 
 - **SMTP relay** — email notifications go through the configured SMTP relay (e.g. smtp-relay.gmail.com:587). Set in DocuSeal's Settings → Email → SMTP.
 - **Custom domain** — signing URLs use the configured domain (set in DocuSeal `HOST` env).
 - **Multiple submitters** — if only one signature is needed (e.g., director resolution), use one submitter, not two.
+
+## Verification Checklist
+
+- [ ] Template created with the correct signature/date fields and unique field names per role.
+- [ ] Submitter roles match the parties (`esign.provider_role` / `esign.client_role`).
+- [ ] Send response persisted (`submission_id` / slug stored, e.g. on the Pipeline Manager deal).
+- [ ] Status trackable via `GET /api/submissions/{id}` (`pending` / `completed` / `declined` / `expired`).
+- [ ] Download integrity verified (signed PDF retrieved and offered to Drive Filer).
+- [ ] Cancel confirmed (`DELETE /api/submissions/{id}` succeeded before any re-send).
+

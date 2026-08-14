@@ -1,6 +1,6 @@
 ---
 name: daily-briefing
-description: "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, deadlines, pipeline, to-dos, and bookkeeping sources. When the user addresses 'Chief of Staff' (the CoS assistant name), route all mail/calendar/file operations through the company workspace account configured in company.yaml for your organization, NOT the agent's personal email."
+description: "Use when producing the Chief-of-Staff daily command-center briefing from Gmail, Calendar, deadlines, pipeline, to-dos, and bookkeeping sources."
 version: 0.1.0
 author: "moonlight-lupin"
 license: Apache-2.0
@@ -16,7 +16,7 @@ metadata:
 
 Daily Briefing is the Chief-of-Staff plugin's daily command center. It consolidates the minimum set of signals the operator needs to act today: urgent email, today's and tomorrow's calendar, statutory/commercial deadlines, stale pipeline, overdue/open to-dos, and accounts receivable/payable risk.
 
-This skill is intentionally **read-only**. It observes and reports. It must never mark email as read, update a calendar event, move a deal, edit a to-do, change invoices, file documents, or create new tasks without a separate explicit user instruction and the relevant source skill loaded.
+Read-only. Every mutation routes to its source skill with explicit user confirmation.
 
 ## When to Use
 
@@ -67,22 +67,9 @@ If `shared/config/company.yaml` is missing, stop and tell the user to copy `shar
 
 ## Workspace Access
 
-Daily Briefing needs two kinds of workspace data: **unread priority mail** and **today + tomorrow calendar events with join links**. This skill states *what* to obtain and the *shape* to normalize to; it does not prescribe a single vendor API. Normalize every record to the canonical shapes in `shared/scripts/schemas.py`:
-
-- Mail → `message` records: `{id, sender, subject, date, thread_id?, snippet?, tags?, has_attachments?, link?, source?}`.
-- Calendar → `event` records: `{id, title, start, end, attendees?, organizer?, location?, conference_link?, status?, source?}`.
-
-Obtain the data through the first available path in this order:
-
-1. **Agent-side connectors** — native Gmail / Google Calendar / Microsoft 365 connectors, **or an already-authed Hermes Composio MCP session** (`GMAIL_FETCH_EMAILS` / `OUTLOOK_QUERY_EMAILS`, `GOOGLECALENDAR_FIND_EVENT` / `OUTLOOK_GET_CALENDAR_VIEW`, …). Map results to the canonical shapes. Prefer this when Hermes already has Composio connected: use it as a **read front-end only**; do not call Composio write tools from the agent for CoS workflows.
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).mail_search(query, max_results=...)` for mail and `.calendar_list(start, end)` for events. The provider is selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365` | `agent`); all non-`agent` providers expose the same neutral method surface. Use this path for any **writes** (draft/send/archive/tag) so `@guarded` + audit apply.
-3. **Pre-fetched data via `--input`** — when the agent has already gathered workspace data with path 1, hand it to `skills/daily-briefing/scripts/daily_briefing.py --input <file>` as a `schemas.py` workspace envelope (`{generated_at?, source?, messages: [...], events: [...], files: [...]}`); the compute pipeline consumes the normalized records directly. Set `source` to `"agent"` or `"composio-mcp"` as appropriate.
-
-Resolve account/delegate identity from `company.yaml` (`google.account`, `google.delegate_email`) when the chosen path needs it.
+Daily Briefing needs **unread priority mail** and **today + tomorrow calendar events with join links**. Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 ### Mail Query Rules
-
-The query templates in `shared/config/queries.yaml` are written in the **Gmail search dialect**. Native Gmail connectors and `google_api` accept them as-is; the `m365` provider translates the same intent to Microsoft Graph (`$search`/`$filter`); native connectors may take natural-language equivalents. Preserve the *intent* of each template regardless of provider.
 
 1. Load templates from `shared/config/queries.yaml` first. If absent, fall back to `shared/config/queries.yaml.example` and state that defaults are being used.
 2. Use only pre-built templates; do not invent broad mailbox searches for scheduled briefings.
@@ -295,7 +282,7 @@ Required skill: chief-of-staff:daily-briefing
 Task:
 1. Load the chief-of-staff daily-briefing skill.
 2. Read company.yaml for delivery.briefing_time, delivery.channel, delivery.timezone, google account/delegate, and paths.project_root.
-3. Pull unread priority/client/signature/invoice mail signals through an approved workspace access path (native connector tools, workspace_client, or pre-fetched --input), using queries.yaml templates only.
+3. Pull unread priority/client/signature/invoice mail signals through an approved workspace access path, using queries.yaml templates only.
 4. Pull calendar events for today and tomorrow with join links through an approved workspace access path.
 5. Read deadlines from company.yaml plus the jurisdiction pack and categorize overdue, ≤7 days, and ≤30 days.
 6. Read pipeline.yaml, todos.yaml, and invoices.yaml from paths.project_root.

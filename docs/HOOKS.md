@@ -2,6 +2,8 @@
 
 Hooks are Hermes plugin callbacks that fire at specific points in the agent lifecycle. They can improve output quality, enforce conventions, and provide guardrails.
 
+All 7 quality hooks are registered and active in `__init__.py`.
+
 ## Available Hooks
 
 Hermes plugins can register hooks via `__init__.py` using `ctx.register_hook(event, callback)`. The chief-of-staff plugin uses the following hooks:
@@ -27,9 +29,11 @@ def briefing_quality_check(response: str, context: dict) -> str | None:
     return None
 ```
 
-### 2. `pre_tool_call` — Drive Filer Safety
+### 2. `pre_tool_call` — Drive Filer Safety (unimplemented stub)
 
 **Purpose:** Before any Drive upload or file deletion, verify the target folder matches the drive-map rules. Prevents filing sensitive documents to wrong folders.
+
+**Status: unimplemented.** This stub is documentation-only. It is not registered in `__init__.py` and always returns `None`.
 
 ```python
 def drive_filer_safety(tool_name: str, args: dict, context: dict) -> str | None:
@@ -112,41 +116,40 @@ def calendar_modification_guard(tool_name: str, args: dict, context: dict) -> st
 
 ## Registering Hooks in `__init__.py`
 
-To enable these hooks, update `__init__.py`:
+Live registration is already in `__init__.py` (`hooks.register_all_hooks(ctx)`). Skill list for the default profile:
 
 ```python
 def register(ctx):
-    """Register all 17 skills + quality hooks."""
+    """Register all 18 skills + quality hooks."""
     for skill_name in [
         "daily-briefing", "deadline-tracker", "note-taker",
         "todo-list", "calendar-manager", "drive-filer",
         "meeting-prep", "weekly-review", "document-preparer",
         "pipeline-manager", "bookkeeper", "deep-research",
         "entity-research", "travel-itinerary", "backup", "self-sign",
+        "email-organisation", "esign-connector",
     ]:
         ctx.register_skill(skill_name, f"skills/{skill_name}/SKILL.md")
 
-    # Register quality hooks (optional — uncomment to enable)
-    # from .hooks import (
-    #     briefing_quality_check,
-    #     drive_filer_safety,
-    #     self_sign_audit,
-    #     config_validation,
-    #     calendar_modification_guard,
-    # )
-    # ctx.register_hook("post_llm_call", briefing_quality_check)
-    # ctx.register_hook("pre_tool_call", drive_filer_safety)
-    # ctx.register_hook("post_tool_call", self_sign_audit)
-    # ctx.register_hook("on_session_start", config_validation)
-    # ctx.register_hook("pre_approval_request", calendar_modification_guard)
+    from .hooks import (
+        briefing_quality_check,
+        self_sign_audit,
+        config_validation,
+        calendar_modification_guard,
+    )
+    ctx.register_hook("post_llm_call", briefing_quality_check)
+    ctx.register_hook("post_tool_call", self_sign_audit)
+    ctx.register_hook("on_session_start", config_validation)
+    ctx.register_hook("pre_approval_request", calendar_modification_guard)
+    # drive_filer_safety is an unimplemented stub — not registered.
 ```
 
-Hooks are **commented out by default** — enable them per deployment as needed. This keeps the plugin lightweight for users who don't want hooks, while providing quality guardrails for managed service customers.
+Quality hooks are registered from `__init__.py` via `hooks.register_all_hooks(ctx)`. The `drive_filer_safety` stub above is unimplemented and is not registered.
 
 ## Hook Design Principles
 
 1. **Soft warnings, not hard blocks** — hooks return advisory messages, not exceptions. The agent and user can proceed after seeing the warning.
 2. **Skill-aware** — hooks check which skills are loaded before firing. No point checking briefing format if briefing skill isn't active.
-3. **Zero overhead when disabled** — commented out in `__init__.py` means zero import cost.
+3. **Registered by default** — `__init__.py` calls `hooks.register_all_hooks(ctx)` so the live hooks run in every session. The `drive_filer_safety` stub is not in that set.
 4. **Composable** — each hook is independent. Enable any subset without conflicts.
 5. **Auditable** — hook messages are prefixed with emoji (⚠️, ℹ️, 📅) for easy identification in logs.

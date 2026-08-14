@@ -1,6 +1,6 @@
 ---
 name: calendar-manager
-description: "Calendar visibility and safe Google Calendar operations for the Chief of Staff plugin, including proactive pre-meeting prep reminders via one-shot Hermes cron jobs. When the user addresses 'Chief of Staff' (the CoS assistant name) for calendar operations, use the company workspace account configured in company.yaml for your organization, NOT the agent's personal email."
+description: "Calendar visibility and safe Google Calendar operations for the Chief of Staff plugin, including proactive pre-meeting prep reminders via one-shot Hermes cron jobs."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
@@ -36,7 +36,7 @@ Use this skill when the user asks to:
 - Move, rename, update attendees for, or cancel an event.
 - Enable, audit, or troubleshoot pre-meeting prep reminders.
 
-Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "Ask <name> to check my email" / "<name>, what's on today?".
+Also use when the operator addresses their Chief of Staff by its configured name (`assistant.name` in company.yaml), e.g. "<name>, what's on my calendar Thursday?".
 
 Do not use this skill for meeting intelligence itself; Calendar Manager hands event metadata to `meeting-prep`, which produces the brief.
 
@@ -82,12 +82,7 @@ If an event looks ambiguous, list matching events and ask the user to choose one
 
 ## Workspace Access
 
-Calendar Manager's intent is: list events in a window, create an event with a join link, update an event, and cancel/delete an event. Prefer the `calendar_actions.py` wrapper (shown in the Overview) — it routes through `WorkspaceClient` and applies guardrails/audit. Normalize every event you read or report to the canonical `event` shape in `shared/scripts/schemas.py` (`{id, title, start, end, attendees?, organizer?, location?, conference_link?, status?, source?}`).
-
-If you access the calendar directly instead of through the wrapper, use the first available path in this order:
-
-1. **Native connector tools** in the agent's environment — the Google Calendar connector, or the Microsoft 365 Outlook Calendar connector.
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).calendar_list(start, end)`, `.calendar_create(title, start, end, attendees=..., description=...)`, `.calendar_update(event_id, **fields)`, `.calendar_cancel(event_id)`. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`).
+Calendar Manager's intent is: list events in a window, create an event with a join link, update an event, and cancel/delete an event. Prefer the `calendar_actions.py` wrapper (shown in the Overview). Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 Request a conference/join link on create (Google Meet on Google, Teams on Microsoft 365). Always capture and report event IDs and join links returned by the provider.
 

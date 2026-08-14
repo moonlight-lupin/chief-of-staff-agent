@@ -84,15 +84,9 @@ If the user requests a different week, honor that window and state it in the hea
 
 ## Workspace Access
 
-Weekly Review reads two kinds of workspace data (read-only): **calendar meetings** for this week and next week, and **optional file/filing summaries**. Prefer the `workspace_collect.py` wrapper (shown above) — it routes through `WorkspaceClient`. Normalize records to the canonical `event` and `file` shapes in `shared/scripts/schemas.py`.
+Weekly Review reads **calendar meetings** for this week and next week, and **optional file/filing summaries**. Prefer the `workspace_collect.py` wrapper (shown above). Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
-Obtain the data through the first available path in this order:
-
-1. **Agent-side connectors** — native Google Calendar / Drive / Microsoft 365 connectors, **or an already-authed Hermes Composio MCP session** (calendar/files read tools). Use as a **read front-end only**; CoS writes still go through `get_workspace_client`.
-2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config).calendar_list(start, end)` for the two windows, and `.files_search(query)` for filing summaries. The provider is chosen by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365` | `agent`).
-3. **Pre-fetched data via `--input`** — when the agent has already gathered the data with path 1, pass it to `skills/weekly-review/scripts/workspace_collect.py --input <file>` as a `schemas.py` workspace envelope (`{messages: [...], events: [...], files: [...]}`).
-
-Pass the two calendar windows (this-week `week_start`→`week_end`, and next-week bounds) to whichever path is used. Optional file queries use the Google Drive query dialect; the `m365` provider translates the same intent to Microsoft Graph. Do not fail the weekly review if file/filing summaries are unavailable; state the limitation.
+Pass the two calendar windows (this-week `week_start`→`week_end`, and next-week bounds) to whichever path is used. State a limitation if file/filing summaries are unavailable; the review still completes.
 
 ## Aggregation Workflow
 
@@ -290,7 +284,7 @@ Task:
 5. Read pipeline.yaml for new deals, stage movements/activity, closed/lost deals, and stale proposals.
 6. Read invoices.yaml and expenses.yaml for invoices sent, payments received, overdue/outstanding AR/AP, and a P&L snapshot.
 7. Read todos.yaml for completed/opened/carry-over/overdue tasks and completion rate.
-8. Pull calendar meetings for this week and next week through an approved workspace access path (connector tools, workspace_client, or pre-fetched --input).
+8. Pull calendar meetings for this week and next week through an approved workspace access path.
 9. Inspect paths.wiki_path for new or updated wiki pages this week.
 10. Summarize Drive Filer, Document Preparer, Self-Sign, Deep Research, Entity Research, Travel, and Backup activity only where source records/logs/files provide evidence.
 11. Produce the Weekly Review in the required format:

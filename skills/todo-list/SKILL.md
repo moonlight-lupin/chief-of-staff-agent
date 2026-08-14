@@ -119,9 +119,13 @@ Default columns:
 
 | ID | Priority | Due | Status | Title | Tags | Source |
 
+Completion criterion: every open task is represented with its priority and due date.
+
 ### Update
 
 Update title, priority, due date, tags, source, or notes. Preserve `id`, `created`, and completed history unless explicitly correcting malformed data. When changing due date, state whether the item was deferred or simply corrected.
+
+Completion criterion: exactly one intended record changed and timestamps are consistent.
 
 ### Mark Done
 
@@ -130,6 +134,8 @@ Update title, priority, due date, tags, source, or notes. Preserve `id`, `create
 3. Set `completed` to today.
 4. Preserve due date for review metrics.
 5. Report completion.
+
+Completion criterion: status is done, completed is today, and due is preserved.
 
 ### Defer
 
@@ -165,8 +171,6 @@ Compute:
 - carry-over items from prior weeks
 - high-priority unresolved items
 
-Do not game the metrics by deleting tasks; use `done` or `cancelled`.
-
 ## Rules
 
 - Ask before writing unless the user directly asked to add/update/complete a task.
@@ -174,7 +178,7 @@ Do not game the metrics by deleting tasks; use `done` or `cancelled`.
 - Do not duplicate existing open tasks; if a likely duplicate exists, ask whether to update it.
 - Keep tags lowercase and hyphenated (`acme-corp`, `compliance`, `sales`).
 - Use `null` for unknown due dates, not fake dates.
-- Never delete tasks during normal operation.
+- Close tasks with done or cancelled; the record stays for Weekly Review.
 - Avoid storing sensitive full email bodies or document contents in task titles/notes.
 
 ## Common Pitfalls

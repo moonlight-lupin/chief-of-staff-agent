@@ -156,6 +156,8 @@ Default list columns:
 
 | ID | Client | Stage | Value | Last activity | Stale? | Next suggested action |
 
+Completion criterion: every nonterminal deal is represented with stage and last_activity.
+
 ### Show Detail
 
 Show every field plus linked documents and notes in reverse chronological order. Include integrations: invoice status from Bookkeeper if `deal_id` appears in `invoices.yaml`, and meeting context if requested.
@@ -172,6 +174,8 @@ Append a note object:
 
 Update `last_activity` unless the user explicitly says the note is archival.
 
+Completion criterion: the note is appended to the deal's history and last_activity is updated.
+
 ### Link Document
 
 Append a document object:
@@ -184,6 +188,8 @@ Append a document object:
 ```
 
 Prefer Drive-relative paths when available; absolute local paths are allowed for unfiled documents but should trigger a Drive Filer suggestion.
+
+Completion criterion: the document object is appended, last_activity updated, and no existing entry was replaced.
 
 ## Stale Detection
 
@@ -214,7 +220,7 @@ Daily Briefing should show stale deals that need attention. Weekly Review should
 ## Rules
 
 - Ask before creating, modifying, or deleting records.
-- Never delete deals during normal use; move to a terminal stage or add a note.
+- Retire deals by moving them to a terminal stage.
 - Use exact configured stage names in data files.
 - Preserve audit history in notes when changing meaningful fields.
 - Treat `pipeline.yaml` as authoritative for CRM state, not email threads.
