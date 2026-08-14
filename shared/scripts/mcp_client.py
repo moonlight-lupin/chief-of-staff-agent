@@ -90,11 +90,15 @@ class MCPClient:
         result = self._parse_sse(r.text)
         self._initialized = True
 
-        # Send initialized notification (required by MCP protocol)
+        # Send initialized notification (required by MCP protocol).
+        # Per the MCP Streamable HTTP spec, the server MUST return 202
+        # Accepted (no body) for notifications. Some servers return 200
+        # or 204 — accept all three.
         notif = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
         r = requests.post(self.endpoint, headers=self._headers(), json=notif, timeout=10)
-        if r.status_code != 200:
+        if r.status_code not in (200, 202, 204):
             self._initialized = False
+            self._session_id = None
             raise ConnectionError(
                 f"MCP notifications/initialized failed: HTTP {r.status_code} — {r.text[:200]}"
             )

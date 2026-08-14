@@ -51,11 +51,13 @@ def verify_signature(
         return False
     if timestamp is not None:
         try:
-            skew = abs(int(time.time()) - int(timestamp))
+            skew = abs(int(time.time()) - float(timestamp))
         except (ValueError, TypeError):
             return False
         if skew > 300:
             return False
+    if not signature:
+        return False
     expected = sign_payload(body, secret, timestamp=timestamp)
     return hmac.compare_digest(expected, signature)
 
@@ -323,9 +325,10 @@ def complete_delivery(
 ) -> None:
     """Mark a delivery as completed.
 
-    If ``lease_token`` is provided and the entry has a different token,
-    this is a stale owner and the call is a no-op. ``lease_token=None``
-    (legacy callers) still completes the delivery.
+    If the entry has a ``lease_token`` and the caller provides a
+    non-None ``lease_token`` that does not match, this is a stale owner
+    and the call is a no-op. Legacy callers (``lease_token=None``)
+    are still allowed for backward compatibility.
     """
     path = _replay_cache_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,8 +336,9 @@ def complete_delivery(
         cache = _load_replay_cache(config)
         entries = cache.get("entries", {})
         entry = entries.get(delivery_id)
-        if entry and lease_token and entry.get("lease_token") and entry.get("lease_token") != lease_token:
-            return  # stale owner — no-op
+        if entry and entry.get("lease_token") and lease_token is not None:
+            if lease_token != entry.get("lease_token"):
+                return  # stale owner — no-op
         if delivery_id in entries:
             entries[delivery_id]["state"] = "done"
             entries[delivery_id]["ts"] = time.time()
@@ -347,9 +351,10 @@ def release_delivery(
 ) -> None:
     """Release a delivery reservation on failure (allows retry).
 
-    If ``lease_token`` is provided and the entry has a different token,
-    this is a stale owner and the call is a no-op. ``lease_token=None``
-    (legacy callers) still releases the delivery.
+    If the entry has a ``lease_token`` and the caller provides a
+    non-None ``lease_token`` that does not match, this is a stale owner
+    and the call is a no-op. Legacy callers (``lease_token=None``)
+    are still allowed for backward compatibility.
     """
     path = _replay_cache_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,8 +362,9 @@ def release_delivery(
         cache = _load_replay_cache(config)
         entries = cache.get("entries", {})
         entry = entries.get(delivery_id)
-        if entry and lease_token and entry.get("lease_token") and entry.get("lease_token") != lease_token:
-            return  # stale owner — no-op
+        if entry and entry.get("lease_token") and lease_token is not None:
+            if lease_token != entry.get("lease_token"):
+                return  # stale owner — no-op
         if delivery_id in entries:
             del entries[delivery_id]
             cache["entries"] = entries
