@@ -166,10 +166,16 @@ def load_store(store_name: str, config: Mapping[str, Any] | None = None) -> dict
         data = _template(store_name)
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with with_lock(path, timeout=5):
+            if _holding_store_lock(path):
+                # Already inside with_store_lock — create directly
                 if not path.exists():
                     with path.open("w", encoding="utf-8") as fh:
                         yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
+            else:
+                with with_lock(path, timeout=5):
+                    if not path.exists():
+                        with path.open("w", encoding="utf-8") as fh:
+                            yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
         except (OSError, FileLockError) as exc:
             raise StateStoreError(f"Cannot create empty store {path}: {exc}") from exc
         return data

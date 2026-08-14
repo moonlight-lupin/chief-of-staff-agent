@@ -112,7 +112,8 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
                 else:
                     # Dev/proxy mode with HMAC
                     signature = self.headers.get("X-Webhook-Signature", "")
-                    if not verify_signature(body, signature):
+                    timestamp = self.headers.get("X-Webhook-Timestamp", "")
+                    if not verify_signature(body, signature, timestamp=timestamp or None):
                         stats.rejected_signature += 1
                         self._respond(401, {"error": "Invalid or missing signature (no OIDC token or HMAC)"})
                         return
@@ -126,9 +127,10 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
                     return
 
             else:
-                # Generic: HMAC signature
+                # Generic: HMAC signature with timestamp
                 signature = self.headers.get("X-Webhook-Signature", "")
-                if not verify_signature(body, signature):
+                timestamp = self.headers.get("X-Webhook-Timestamp", "")
+                if not verify_signature(body, signature, timestamp=timestamp or None):
                     stats.rejected_signature += 1
                     self._respond(401, {"error": "Invalid or missing signature"})
                     return
