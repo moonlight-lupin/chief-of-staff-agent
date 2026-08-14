@@ -22,7 +22,7 @@ Those are 1–2 days of work, not engineering. But shipped as-is, a first-time v
 | Observability / diagnosability | **A** | Correlation IDs, redacted JSONL, `logs diagnose`, support bundles |
 | Install / first-run robustness | **C** | No dependency preflight; the most likely install failure produces a Rust panic traceback |
 | Release artifacts + versioning | **D** | 0 tags, 0 GitHub releases, changelog 36 commits stale |
-| Doc accuracy | **C** | Roadmap verdict stale, skill count wrong, demo data expired |
+| Doc accuracy | **C** | Roadmap verdict stale, skill count wrong, demo data expired, CLI reports v0.3.7 |
 | Repo governance | **C** | No SECURITY.md, CONTRIBUTING.md, NOTICE, or issue templates |
 
 ### Evidence
@@ -60,13 +60,15 @@ tests/test_jwt_crypto_v0202.py tests/test_webhook_hotfix_v0201.py tests/test_e2e
 
 **S1 — Demo data has expired.** `examples/sample-workspace.json` hard-codes `2026-07-12`. The demo prints those events under the heading "Calendar / deadlines (next 48h)" — today is 2026-08-14. The 60-second first impression is visibly wrong and degrades every day. Generate the sample envelope relative to `today()`.
 
-**S2 — Skill count is wrong in two places.** README says "Eighteen skills"; `plugin.yaml` registers 19 (`news-monitoring` landed in the last two commits). `doctor` reports "all 18 effective skills present" because `esign-connector` is filtered out when DocuSeal is unconfigured — so 18 is right for a default install and 19 is right for the manifest, and neither document says which it means.
+**S2 — The CLI reports the wrong version.** `chief_of_staff.py:2215` hardcodes `"Chief-of-Staff v0.3.7 — read-only daily operating loop…"` in the argparse description, while `VERSION = "0.3.24"` sits at line 40. `--help` is the first thing a human or an agent sees, and it names a version 17 releases old. Two more `v0.3.7` strings survive in section comments (lines 1264, 1797).
 
-**S3 — License hygiene for vendored work.** `skills/deep-research/SKILL.md` declares `license: MIT` inside an Apache-2.0 repo. The test was relaxed to allow it (Phase 1.9), which is the correct call, but there is no `NOTICE` file recording the upstream attribution.
+**S3 — Skill count is wrong in two places.** README says "Eighteen skills"; `plugin.yaml` registers 19 (`news-monitoring` landed in the last two commits). `doctor` reports "all 18 effective skills present" because `esign-connector` is filtered out when DocuSeal is unconfigured — so 18 is right for a default install and 19 is right for the manifest, and neither document says which it means.
 
-**S4 — Governance files absent.** No `SECURITY.md` (this project handles mail, calendars, and credentials — it needs a disclosure address), no `CONTRIBUTING.md`, no issue or PR templates.
+**S4 — License hygiene for vendored work.** `skills/deep-research/SKILL.md` declares `license: MIT` inside an Apache-2.0 repo. The test was relaxed to allow it (Phase 1.9), which is the correct call, but there is no `NOTICE` file recording the upstream attribution.
 
-**S5 — Make lint mean something.** Fix the 67 auto-fixable findings, then drop `continue-on-error` and widen coverage to `skills/` and `hooks.py`. Roadmap task 2.13 also called for mypy; not done.
+**S5 — Governance files absent.** No `SECURITY.md` (this project handles mail, calendars, and credentials — it needs a disclosure address), no `CONTRIBUTING.md`, no issue or PR templates.
+
+**S6 — Make lint mean something.** Fix the 67 auto-fixable findings, then drop `continue-on-error` and widen coverage to `skills/` and `hooks.py`. Roadmap task 2.13 also called for mypy; not done.
 
 ### Accepted for now
 
@@ -82,98 +84,95 @@ Sequence: R1 → R2 → R4 → S1 → S2 → tag → R3. Roughly two days.
 
 ---
 
-## Part B — Running this as a Claude Desktop / Cowork plugin
+## Part B — Closing the gap for Claude agents (Hermes stays the runtime of record)
 
-### The core mismatch
+### Framing
 
-This is a **Hermes** plugin: `plugin.yaml`, `__init__.py:register(ctx)`, `ctx.register_skill()`, `ctx.register_hook()`, nine Python callbacks on `pre_llm_call` / `post_llm_call` / `pre_tool_call` / `post_tool_call` / `on_session_start`, state under `~/.hermes/projects/<slug>`, and cron installed into the system crontab.
+**This is not a port.** Hermes remains the plugin runtime. The goal is narrower and much cheaper: a Claude agent — in Claude Desktop, or a Cowork remote session — should be able to clone this repo and *drive it competently* without anyone rewriting the plugin shell.
 
-Claude Code plugins — which is what Claude Desktop and Cowork consume — use `.claude-plugin/plugin.json`, auto-scanned `skills/<name>/SKILL.md`, and `hooks/hooks.json` declaring **subprocess** hooks on a different event vocabulary.
+That is close to what the project already promises. The README's headline install is "paste this to your agent," every CLI emits JSON by default, and the `agent` workspace provider already models the exact split Cowork needs: Claude fetches with its own connectors, Chief of Staff computes and guards.
 
-The good news: **the skills layer is already compatible.** `skills/<name>/SKILL.md` with `name` + `description` frontmatter, `scripts/`, `references/`, `templates/` is exactly the expected shape. Nineteen skills port with near-zero content change. The work is in the plugin shell, the hooks, and — for remote — in state and secrets.
+So the work divides cleanly into three tiers, and **only the middle one really matters**:
 
-### Gap register
+- **Tier 0** — additive files Hermes never reads. Costs nothing, risks nothing.
+- **Tier 1** — the genuine functional gap, and it is *not* a format problem. An agent can install and read everything today, then hits a wall the moment it tries to execute an approved action.
+- **Tier 2** — remote state durability. A real architectural decision; defer until you want it.
 
-Severity: **B** = blocks install/operation · **F** = functionality lost · **P** = polish.
+Everything from the previous draft that was pure format conversion — porting nine hooks to `hooks.json`, rebuilding skill-profile filtering, restructuring frontmatter — is **dropped**. It buys an agent nothing.
 
-| # | Gap | Today | Required | Sev | Est |
-|---|---|---|---|---|---|
-| P1 | Manifest | `plugin.yaml` | `.claude-plugin/plugin.json` (`name` required; `version`, `description`, `author{}`, `license`, `keywords`, `homepage`, `repository`) | B | 2h |
-| P2 | Marketplace | none | `.claude-plugin/marketplace.json` at repo root → `/plugin marketplace add moonlight-lupin/chief-of-staff-agent` | B | 1h |
-| P3 | Skill frontmatter | `version:`, `author:` at top level | Not recognized fields — move under `metadata:`. Keep `name`, `description`, `license` | P | 1h |
-| P4 | Skill profiles | `__init__.py` filters `esign-connector` when DocuSeal is unconfigured | No equivalent — every `skills/*/SKILL.md` loads. Guard inside the SKILL body, or `disable-model-invocation: true` | F | 3h |
-| P5 | Hooks | 9 Python callbacks, in-process | `hooks/hooks.json`; each hook becomes a CLI reading hook JSON on stdin. Event map below | F | 2d |
-| P6 | Python deps | "run `pip install -r requirements.txt`" | Cloud VM has none. `SessionStart` hook running an idempotent installer into `${CLAUDE_PLUGIN_DATA}`, plus a documented setup script | B | 1d |
-| P7 | **State persistence** | YAML/Markdown under `paths.project_root` | Cloud sessions are a **fresh VM with a fresh clone**; nothing else carries over. Every deal, invoice, todo, and wiki page vanishes at session end | **B** | 1–2w |
-| P8 | **Secrets** | `.env` in plugin root | Cloud environment variables are **plaintext and readable by anyone using the environment**; the docs explicitly say not to put credentials there. Desktop plugins get `userConfig` with `sensitive: true` → OS keychain → `CLAUDE_PLUGIN_OPTION_<KEY>` | **B** | 2d |
-| P9 | Agent-executed writes | `agent` provider raises `NotImplementedError` on every write | Cowork's own Gmail/Outlook/Drive connectors are the natural write path, but there's no way to record their outcome in the audit chain — `mark_executed()` exists in Python and is not exposed as a CLI subcommand | **B** | 3d |
-| P10 | Scheduling | `install_cron.py` → system crontab, `hermes` binary | Routines / scheduled tasks. `doctor` already warns `cannot inspect cron jobs: No such file or directory: 'hermes'` | F | 1d |
-| P11 | Network egress | assumes open internet | Cloud default is a **Trusted allowlist**; `graph.microsoft.com`, `login.microsoftonline.com`, Composio, Google APIs, and DocuSeal are **not** on it. Needs a documented Custom domain list | B | 2h |
-| P12 | Inbound webhooks | `webhook_receiver.py` HTTP server | No inbound ports in cloud sessions — polling only, remote | P | doc |
-| P13 | Path assumptions | `~/.hermes`, `HERMES_HOME`, `hermes` CLI | Use `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`. The existing `CHIEF_OF_STAFF_HERMES_HOME` override is the right seam — 12 call sites already route through it | P | 4h |
-| P14 | Skill surface | 19 always-listed skills | Every description competes in one picker. Audit trigger quality; `user-invocable: false` for background-knowledge skills; consider splitting core vs. research into two plugins | P | 1d |
+### Tier 0 — additive compatibility (½ day, zero Hermes risk)
 
-### Hook event mapping (P5)
+Three files Hermes ignores entirely, because it only reads `plugin.yaml` and `__init__.py`.
 
-| Hermes event | Hook | Claude Code event | Notes |
+**T0.1 — `CLAUDE.md` at the repo root. The single highest-leverage artifact here.**
+
+Claude Code and Cowork load it automatically at session start; Hermes never looks at it. Today an agent cloning this repo gets no orientation at all and has to reverse-engineer the operating contract from 20 docs. `CLAUDE.md` should state, tersely:
+
+- What this is, and the one invariant: *suggest → approve → execute → audit*, never collapsed
+- Where config and state live (`company.yaml`, `paths.project_root`), and that secrets go in `.env` only
+- The command index — the ten `chief_of_staff.py` subcommands and the review-queue verbs — with the note that JSON is the default output and `--summary` is the human form
+- The fetch/compute split: fetch reads with your own connector tools, normalize to `shared/scripts/schemas.py`, pass via `--input`
+- The hard prohibitions: **never** call connector *write* tools directly for CoS workflows; **never** set `CHIEF_OF_STAFF_AUTO_APPROVE` or `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` to work around a block; **never** invent action IDs
+- What to do on failure: `logs diagnose --latest-failed` before guessing
+
+This is the difference between an agent that operates the system correctly and one that improvises around it. It also pays off in Hermes indirectly, since the same text is what you would paste into any other host.
+
+**T0.2 — `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`.**
+
+Two small JSON files in a directory Hermes doesn't read. They make `/plugin marketplace add moonlight-lupin/chief-of-staff-agent` work, so the 19 skills load natively in Desktop and Cowork with no conversion — the `skills/<name>/SKILL.md` layout is already exactly the expected shape. `plugin.json` needs only `name`; fill in `version`, `description`, `author`, `license`, `repository` for the install UI.
+
+Worth one sanity check on first load: the skills carry `version:` and `author:` at the frontmatter top level, which aren't in Claude Code's field list. If it warns, moving them under `metadata:` is a ten-minute change that Hermes tolerates too. If it doesn't warn, leave them.
+
+**T0.3 — fix the `v0.3.7` help string** (S2 above). An agent reads `--help` first.
+
+### Tier 1 — the actual gap (2–3 days)
+
+None of this is Claude-specific. It is what any agent needs to operate the system, and it improves the Hermes experience identically.
+
+**T1.1 — `review_queue.py record-execution` (~1 day). The linchpin.**
+
+Today an agent using its own connectors can prepare an action and approve it, and then **every write dead-ends**: the `agent` provider raises `NotImplementedError` by construction, and `mark_executed()` exists in `pending_actions.py` but is not exposed as a CLI subcommand. The queue has `list / preview / approve / dismiss / execute / summary / audit` — there is no verb for "I executed this outside the Python client, here is what happened."
+
+The seam:
+
+1. `review_queue.py approve --action-id …` → the existing `mark_executing` pre-flight handles the approval-lapse race
+2. Claude performs the mutation with its connector tool
+3. `review_queue.py record-execution --action-id … --result-json …` → wraps `mark_executed()`, writes the workspace-audit record, and **enforces that the action was genuinely in `executing`** so this cannot become a bypass
+
+That last clause is the whole design: it must be a narrow recording verb, not a second execution path. Done right it preserves the approve→execute→audit invariant while letting the agent be the effector. Done loosely it is a hole straight through the safety model, so it deserves the same adversarial tests as the guardrail work.
+
+This one change is what converts an agent from "can read your briefing" to "can actually run your day."
+
+**T1.2 — `doctor:dependencies` (~½ day).** Same item as R4, but it matters twice as much here: an agent that hits a Rust panic on import has nothing actionable to reason about, whereas a JSON finding naming the package and the fix is exactly what `logs diagnose` was built to produce. Check `cryptography`, `msal`, `google.auth`, `fitz`/pymupdf, `docx` with version floors.
+
+**T1.3 — a machine-readable capability call (~½ day).** An agent currently infers what it may do from prose across `README.md`, `SETUP.md`, and the capability table. `workspace_capabilities.py` already holds the truth, including the honest per-capability `False` reasons for M365. Surface it as one call — `chief_of_staff.py capabilities --json`, or a section in `readiness` — returning: active provider, permitted operations, unverified operations *with reasons*, project root, and configured/missing state. One call, and the agent knows its own envelope instead of guessing.
+
+**T1.4 — remote-session guardrails (~½ day).** In a cloud session, `CLAUDE_CODE_REMOTE_SESSION_ID` is set. Use it:
+
+- **Refuse the credential-holding providers.** Cloud environment variables are documented as plaintext and readable by anyone using the environment, with no secrets store. `google_api`, `m365`, and `composio` should hard-fail there with a pointer to the `agent` provider, which holds no credentials because Claude's connectors do the I/O. This is cheap and it prevents someone pasting a tenant secret into a shared environment.
+- **Warn that state is ephemeral** until Tier 2 lands, so nothing is silently lost at session teardown.
+
+**T1.5 — document the two environment facts (~2h, docs only).** Cloud sessions default to a *Trusted* domain allowlist that does **not** include `graph.microsoft.com`, `login.microsoftonline.com`, Composio, Google APIs, or a self-hosted DocuSeal — so a Custom allowed-domain list is required for anything but the `agent` provider. And there are no inbound ports, so remote is polling-only; the Pub/Sub receiver is desktop/server territory. Both belong in `SETUP.md` next to the provider walkthroughs.
+
+### Tier 2 — remote state durability (defer)
+
+The one genuine architectural question, and **only** for Cowork remote. On Claude Desktop the filesystem persists and this is a non-issue; the plugin works there today the way it works under Hermes.
+
+A cloud session is a fresh VM with a fresh clone and nothing else carried over, so every deal, invoice, todo, and wiki page written during the session vanishes at teardown. The option that fits this project is **git-backed state**: a private state repo attached as a session source, with mutations committed and pushed. It keeps the plain-files promise exactly, adds free history, and reuses the atomic-write and locking discipline already built. It needs conflict handling for concurrent sessions and a `cos sync` verb.
+
+Don't build it until you want stateful remote operation. Until then, Tier 1's ephemerality warning is the honest answer, and read-only remote briefings are genuinely useful on their own.
+
+### What this comes to
+
+| Tier | Contents | Outcome | Est |
 |---|---|---|---|
-| `pre_llm_call` | `company_context_primer` | `UserPromptSubmit` | Return context via `additionalContext` |
-| `pre_llm_call` | `deadline_urgency_injection` | `UserPromptSubmit` | Same |
-| `pre_llm_call` | `wiki_context_injection` | `UserPromptSubmit` | Same; keeps its question-intent gating |
-| `pre_tool_call` | `pipeline_stage_validator` | `PreToolUse` | `matcher: "Write\|Edit"` |
-| `post_tool_call` | `yaml_integrity_checker` | `PostToolUse` | `matcher: "Write\|Edit"` |
-| `post_tool_call` | `self_sign_guard` | `PostToolUse` | `matcher: "Bash"` |
-| `post_llm_call` | `format_enforcer` | `Stop` | **Semantics change**: fires once at turn end, not per LLM call |
-| `post_llm_call` | `note_capture_reminder` | `Stop` | Same caveat |
-| `on_session_start` | `stale_briefing_detector` | `SessionStart` | `matcher: "startup\|resume"` |
+| **0** | `CLAUDE.md`, `.claude-plugin/*`, version-string fix | Skills load natively in Desktop/Cowork; any agent gets a correct operating contract on arrival | ½ d |
+| **1** | `record-execution`, dependency preflight, capabilities call, remote guardrails, env docs | An agent can install, verify, brief, prepare, approve, execute via its own connectors, and audit — end to end | 2–3 d |
+| **2** | Git-backed state | Cowork remote becomes stateful | 1–2 w, defer |
 
-Each becomes a small executable reading the hook payload as JSON on stdin and emitting a JSON decision. The existing callbacks are pure functions over a `context` dict, so the porting cost is a thin adapter per hook plus payload-shape changes — the logic itself carries over.
+**Tiers 0 + 1 are about 3½ days** and leave Hermes untouched — no manifest migration, no hook port, no skill rewrites. Compare with roughly two weeks for the full conversion in the previous draft.
 
-`_cos_skills_loaded()` deserves a rethink: it exists because the Hermes runtime never passes `loaded_skills`, so it defaults to `False` and the persona only appears when a CoS skill is confirmed loaded. Under Claude Code the hook payload is different, and the gating needs to be rebuilt against what's actually available.
-
-### The two hard problems
-
-Everything above except **P7** and **P8** is mechanical. These two decide whether Cowork *remote* is viable at all.
-
-**P7 — where does the state live?**
-
-The project's second-biggest selling point is "your data is yours, in plain files on your own machine." A cloud session is a fresh VM with a fresh clone of a repo and nothing else. `${CLAUDE_PLUGIN_DATA}` survives plugin *updates*, not session teardown.
-
-Three options:
-
-- **(a) Git-backed state.** A private state repo attached as a session source; mutations commit and push. Preserves the plain-files philosophy exactly, gives free versioning and audit-adjacent history, and reuses the existing atomic-write + locking discipline. Needs conflict handling for concurrent sessions and a `cos sync` command. **Recommended.**
-- **(b) SQLite + object store.** More robust concurrently, but abandons the "readable files you can walk away from" promise and duplicates the YAML-to-SQLite migration already sketched in `shared/docs/`.
-- **(c) Desktop-local only.** Full read/write on the desktop app where the filesystem persists; remote sessions get a read-only briefing view. Cheapest, and honest — but it means "Cowork remote" never really operates the assistant.
-
-**P8 — where do the credentials live?**
-
-Cloud environment variables are explicitly documented as unsuitable for credentials: plaintext, visible to anyone using the environment, no secrets store. That rules out `M365_CLIENT_SECRET`, Google service-account JSON, `COMPOSIO_MCP_KEY`, and `DOCUSEAL_API_KEY` in any shared remote environment.
-
-The split that works:
-
-- **Desktop (local sessions):** declare each secret in `plugin.json` `userConfig` with `sensitive: true`. Values go to the OS keychain and arrive as `CLAUDE_PLUGIN_OPTION_<KEY>`. Teach `config_loader` to read those alongside `.env` — a small, well-isolated change.
-- **Cowork remote:** **refuse the credential-holding providers entirely.** Only the `agent` provider is safe there, because it holds no credentials — Claude's own connectors do the I/O. `readiness` should hard-fail `google_api` / `m365` / `composio` when it detects a cloud session (`CLAUDE_CODE_REMOTE_SESSION_ID` is set), rather than letting someone paste a tenant secret into a shared environment.
-
-That makes **P9 the linchpin of the whole remote story.** The `agent` provider is read-only by construction — every write raises `NotImplementedError` pointing back at `get_workspace_client()`. So on Cowork remote today: briefings work, review-queue *preparation* works, and nothing can ever execute. Closing it needs a documented three-step seam:
-
-1. `review_queue.py approve` → action reaches `executing` (the existing `mark_executing` pre-flight already handles the approval-lapse race)
-2. Claude executes the mutation with its own connector tool
-3. `review_queue.py record-execution --action-id … --result-json …` → wraps `mark_executed()`, writes the workspace-audit record, enforces that the action was genuinely in `executing`
-
-Step 3 does not exist as a CLI. It is roughly a day of work and it is what converts remote Cowork from a read-only viewer into an actual chief of staff — while keeping the approve→execute→audit invariant intact.
-
-### Suggested phasing
-
-| Phase | Contents | Outcome | Est |
-|---|---|---|---|
-| **A — Installable** | P1, P2, P3, P13, P11 (docs) | `/plugin install` works; 19 skills load on desktop; scripts run against a local project root | 2–3d |
-| **B — Full desktop parity** | P5 hooks, P4 profiles, P6 deps, P8 desktop half | Feature-equivalent to the Hermes plugin on Claude Desktop | 4–5d |
-| **C — Cowork remote read-only** | P6 remote, P8 refusal logic, P9 step 1, P10 routines, P12 docs | Briefings, deadlines, pipeline, research run remotely; writes prepare but do not execute | 3–4d |
-| **D — Cowork remote operating** | P7 git-backed state, P9 record-execution | State survives sessions; approved actions execute through connectors and land in the audit chain | 1–2w |
-
-Phases A and B are worth doing regardless — they widen distribution with no architectural commitment. **Phase D is where the real decision is**, and it is a state-architecture decision (P7) more than a plugin-format one.
-
-A reasonable sequencing: finish the Part A release hygiene and tag v0.4.0 first, then Phase A+B as v0.5.0 ("runs on Claude Desktop"), and treat C+D as its own milestone once the state question is settled.
+Worth noting that T1.1 through T1.4 are not concessions to Claude. `record-execution` closes a real hole in the agent provider, the dependency check fixes the top install failure, the capabilities call removes prose-inference from every host, and the remote guardrails stop a credential mistake. They belong in the Hermes product regardless — which is the argument for doing them right after the v0.4.0 release rather than treating them as a side quest.
 
 ---
 
@@ -193,5 +192,6 @@ ruff check shared/ skills/ hooks.py                          # 113 findings
 
 python shared/scripts/chief_of_staff.py demo
 python shared/scripts/chief_of_staff.py doctor --summary
-git log --oneline f3e0b41..HEAD | wc -l                      # 36 unreleased commits
+python shared/scripts/chief_of_staff.py --help | head -6      # reports v0.3.7
+git log --oneline f3e0b41..HEAD | wc -l                       # 36 unreleased commits
 ```
