@@ -212,13 +212,23 @@ def _with_retry(
     ``mutate_fn(config)`` must perform the full load→mutate→save cycle so
     each attempt sees a fresh snapshot. Returns the mutate function's
     result, or None if every attempt raises ConcurrencyError.
+
+    A small jittered backoff between attempts reduces contention when
+    multiple workers retry simultaneously. On exhaustion, logs the event
+    so the conflict is visible to operators.
     """
+    import time as _time
+    import random as _random
     for attempt in range(max_attempts):
         try:
             return mutate_fn(config)
         except ConcurrencyError:
             if attempt == max_attempts - 1:
+                _log_event("concurrency_exhausted", level="warning",
+                           component="pending_actions",
+                           attempt=attempt + 1, max=max_attempts)
                 return None
+            _time.sleep(_random.uniform(0.01, 0.05))
     return None
 
 
