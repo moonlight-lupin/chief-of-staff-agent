@@ -1,0 +1,27 @@
+{
+  "changes": [
+    {
+      "id": "memchg_20260814T161507.0025100000_index.md",
+      "timestamp": "2026-08-14T16:15:07.002510+00:00",
+      "mode": "autonomous",
+      "change_type": "wiki_update",
+      "target": "wiki/index.md",
+      "summary": "refresh content catalog",
+      "source_ids": [],
+      "risk": "low",
+      "reversible": true
+    },
+    {
+      "id": "memchg_20260814T161507.0025100000_overview.md",
+      "timestamp": "2026-08-14T16:15:07.002510+00:00",
+      "mode": "autonomous",
+      "change_type": "wiki_update",
+      "target": "wiki/overview.md",
+      "summary": "refresh wiki overview",
+      "source_ids": [],
+      "risk": "low",
+      "reversible": true
+    }
+  ],
+  "_version": 1
+}

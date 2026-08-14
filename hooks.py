@@ -466,31 +466,38 @@ def deadline_urgency_injection(context: dict = None, **kwargs) -> Optional[str]:
 
 # ── 8. Note Capture Reminder (post_llm_call) ─────────────────────────────────
 
-# Patterns that indicate the LLM output contains note-worthy content
+# Patterns that indicate the LLM output contains note-worthy content.
+# Require stronger evidence than generic headings to avoid false positives:
+# meeting notes need a decision/action item companion, research needs
+# findings + citation markers, etc.
 _NOTE_PATTERNS = [
-    r"##\s+(meeting\s+)?notes?\b",
-    r"##\s+(action\s+items?|decisions?)\b",
-    r"##\s+(research\s+)?(summary|findings?)\b",
-    r"##\s+(key\s+)?(takeaways?|insights?)\b",
-    r"##\s+(trip\s+)?(learnings?|reflections?)\b",
-    r"##\s+(follow-up|next\s+steps?)\b",
+    r"##\s+meeting\s+notes?\b.*\n.*(?:decision|action\s+item|attendee)",
+    r"##\s+decisions?\b.*\n.*(?:action\s+item|follow.?up|owner|responsible)",
+    r"##\s+(action\s+items?|follow.?up)\b.*\n.*(?:owner|due|responsible|assign)",
+    r"##\s+research\s+(summary|findings?)\b.*\n.*(?:source|citation|\[\d+\]|reference)",
+    r"##\s+(key\s+)?(takeaways?|insights?)\b.*\n.*(?:lesson|implication|recommend)",
+    r"##\s+(trip\s+)?(learnings?|reflections?)\b.*\n.*(?:lesson|insight|recommend)",
 ]
-_NOTE_RE = re.compile("|".join(_NOTE_PATTERNS), re.IGNORECASE)
+_NOTE_RE = re.compile("|".join(_NOTE_PATTERNS), re.IGNORECASE | re.DOTALL)
 
 
 def note_capture_reminder(response: str = "", context: dict = None, **kwargs) -> Optional[str]:
     """After LLM output, detect note-worthy content and remind ingestion.
 
-    Fires when the response contains meeting notes, research findings,
-    decisions, or action items — and the note-taker skill is loaded.
-    """
-    if not _cos_skills_loaded(context):
-        return None
+    Fires when the response contains meeting notes with decisions,
+    research findings with citations, or action items with owners.
 
-    # Only fire if note-taker is in the loaded skills
-    loaded = context.get("loaded_skills", []) if context else []
-    if not any("note-taker" in s for s in loaded):
-        return None
+    The hook checks ``loaded_skills`` when Hermes provides it. When the
+    context is absent (the documented Hermes runtime does not pass
+    ``loaded_skills`` to plugin hooks), the hook fires on content alone
+    — the post_llm_call event only fires during active sessions, so the
+    note-taker skill is likely available.
+    """
+    # Check loaded_skills if available, but don't block when absent
+    if context:
+        loaded = context.get("loaded_skills", [])
+        if loaded and not any("note-taker" in s for s in loaded):
+            return None  # note-taker not loaded, skip
 
     if not response or not isinstance(response, str):
         return None
@@ -499,10 +506,13 @@ def note_capture_reminder(response: str = "", context: dict = None, **kwargs) ->
     if not _NOTE_RE.search(response):
         return None
 
-    # Don't fire if the response already mentions wiki/ingest/note-taker
-    # (the agent is already handling it)
+    # Don't fire if the response shows evidence of completed capture:
+    # explicit wiki path writes or curator runs (not just vocabulary)
     lower = response.lower()
-    if any(w in lower for w in ("wiki_curator", "note-taker skill", "ingest", "[[", "raw/transcripts")):
+    if "wiki_curator" in lower or "raw/transcripts" in lower:
+        return None
+    # Check for actual wiki file creation/update, not just [[wikilinks]]
+    if re.search(r"(created|updated|wrote|saved).*\.md", lower):
         return None
 
     return (

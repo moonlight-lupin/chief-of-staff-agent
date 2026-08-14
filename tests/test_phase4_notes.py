@@ -194,7 +194,7 @@ class TestNoteCaptureHook:
         """Hook must fire when LLM output contains research findings."""
         from hooks import note_capture_reminder
         context = {"loaded_skills": ["note-taker", "deep-research"]}
-        response = "## Research Summary\nThe competitor analysis reveals three key findings..."
+        response = "## Research Summary\nThe competitor analysis reveals three key findings [1]. Sources cited below."
         result = note_capture_reminder(response=response, context=context)
         assert result is not None, "Hook must fire on research findings"
 

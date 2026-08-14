@@ -93,17 +93,17 @@ seq: 1
 aliases: [ACME, Acme Corp]
 relations:
   - type: client_of
-    target: [[phronesis-applied]]
+    target: "[[phronesis-applied]]"
   - type: competitor_of
-    target: [[rival-co]]
+    target: "[[rival-co]]"
 ---
 ```
 
 OKF v0.2 fields:
 
 - `seq`: monotonic integer for ordering pages within a type. Auto-assigned by wiki_curator on creation. Used for stable sorting.
-- `aliases`: list of alternative names for entity pages. Used for fuzzy matching during search and ingest.
-- `relations`: list of typed edges to other pages. Each relation has `type` (e.g. `client_of`, `competitor_of`, `subsidiary_of`, `vendor_of`) and `target` (a `[[wikilink]]`).
+- `aliases`: list of alternative names for entity pages. Preserved by wiki_curator; future search/ingest will use them for fuzzy matching.
+- `relations`: list of typed edges to other pages. Each relation has `type` (e.g. `client_of`, `competitor_of`, `subsidiary_of`, `vendor_of`) and `target` (a quoted `"[[wikilink]]"` string). Preserved by wiki_curator; validation enforces list-of-dicts shape.
 - `confidence`: now accepts 0-1 float in addition to high/medium/low. 0.0 = unverified, 0.5 = medium, 1.0 = confirmed. Float takes precedence.
 
 Raw source frontmatter:
@@ -300,29 +300,34 @@ Report findings by severity and append a lint entry to `log.md`.
 ## Scheduled Curation
 
 For a compounding knowledge base, run the wiki curator on a daily schedule.
-This catches un-ingested sources, fixes broken links, and regenerates the
-overview.
 
 ### Daily Cron (recommended)
 
 ```bash
-# Run at 6 AM daily — catches overnight sources, lint before the day starts
+# Run at 6 AM daily — lint checks structure, links, and frontmatter.
+# Replace PROJECT_ROOT with your configured project root path.
 0 6 * * * cd ~/.hermes/plugins/chief-of-staff && \
-  python skills/note-taker/scripts/wiki_curator.py lint --summary >> \
-  ~/.hermes/projects/$(company)/wiki/.curator.log 2>&1
+  python skills/note-taker/scripts/wiki_curator.py lint --summary \
+  --wiki ~/.hermes/projects/default/wiki >> \
+  ~/.hermes/projects/default/wiki/.curator.log 2>&1
 ```
 
 ### Weekly Deep Curation
 
 ```bash
-# Sunday 5 AM — full lint + validate + overview regeneration
+# Sunday 5 AM — validate (stricter than lint) + lint summary
 0 5 * * 0 cd ~/.hermes/plugins/chief-of-staff && \
-  python skills/note-taker/scripts/wiki_curator.py validate && \
-  python skills/note-taker/scripts/wiki_curator.py lint --summary
+  python skills/note-taker/scripts/wiki_curator.py validate \
+  --wiki ~/.hermes/projects/default/wiki && \
+  python skills/note-taker/scripts/wiki_curator.py lint --summary \
+  --wiki ~/.hermes/projects/default/wiki
 ```
 
-The curator is read-only safe: it never calls providers, approves actions,
-or deletes pages. It writes only inside the wiki directory.
+**Read-only vs mutating commands:**
+- `lint` and `validate` are read-only — they check structure and report findings.
+- `run` is mutating — it ingests sources, creates/updates pages, regenerates
+  overview, and writes to `log.md`. Use `run --dry-run` first to preview changes.
+- The curator never calls providers, approves actions, or deletes pages.
 
 ## Integrations
 
