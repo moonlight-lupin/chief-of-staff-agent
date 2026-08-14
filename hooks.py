@@ -469,19 +469,39 @@ def deadline_urgency_injection(context: dict = None, **kwargs) -> Optional[str]:
 
 _SIMPLE_COMMAND_VERBS = {
     "run", "create", "delete", "update", "send", "file", "lint", "validate",
+    "deploy", "build", "push", "commit", "install", "test", "start", "stop",
+    "restart", "backup", "restore", "execute", "generate", "process", "check",
 }
+
+_QUESTION_HINTS = {"?", "what", "who", "whom", "whose", "where", "when", "why", "how",
+                   "which", "tell me about", "remind me", "do we have", "have we",
+                   "did we", "what about", "status of", "summary of"}
 
 
 def _is_simple_command(message: str) -> bool:
-    """True when the message looks like a verb plus a path or filename."""
-
-    words = message.strip().split()
+    """True when the message looks like an imperative command, not a question."""
+    text = message.strip().lower()
+    words = text.split()
     if len(words) < 2:
         return False
-    if words[0].lower() not in _SIMPLE_COMMAND_VERBS:
+    # Strip polite prefixes
+    while words and words[0] in ("please", "can", "could", "would", "just", "now"):
+        words = words[1:]
+    if not words:
         return False
-    token = words[1]
-    return "/" in token or "\\" in token or "." in token
+    if words[0] in _SIMPLE_COMMAND_VERBS:
+        return True
+    return False
+
+
+def _has_question_intent(message: str) -> bool:
+    """True when the message looks like a question or context lookup."""
+    text = message.strip().lower()
+    if "?" in text:
+        return True
+    if any(hint in text for hint in _QUESTION_HINTS):
+        return True
+    return False
 
 
 def _resolve_wiki_path(config: dict) -> Optional[Path]:
@@ -509,6 +529,9 @@ def wiki_context_injection(context: dict = None, message: str = "", **kwargs) ->
         if len(text.split()) < 5:
             return None
         if _is_simple_command(text):
+            return None
+        # Only fire on question-like intent to avoid noisy injections
+        if not _has_question_intent(text):
             return None
 
         config = _load_company_yaml()

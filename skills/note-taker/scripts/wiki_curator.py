@@ -45,7 +45,7 @@ except Exception:  # pragma: no cover - only used when event store is absent.
 
 
 WIKI_DIRS = ("raw", "daily", "projects", "entities", "people", "decisions")
-SEARCH_DIRS = ("entities", "concepts", "comparisons", "queries")
+SEARCH_DIRS = ("entities", "concepts", "comparisons", "queries", "people", "projects", "decisions")
 SEARCH_SKIP_NAMES = {"index.md", "overview.md", "SCHEMA.md", "purpose.md", "log.md"}
 MANAGED_ROOT_FILES = {"index.md", "overview.md"}
 SPECIAL_ROOT_FILES = {"index.md", "overview.md", "log.md", "purpose.md", "SCHEMA.md"}
@@ -1212,6 +1212,24 @@ def _iter_searchable_pages(wiki_path: Path) -> Iterable[Path]:
             yield path
 
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
+    "do", "does", "did", "done", "we", "he", "she", "it", "they", "you",
+    "i", "me", "my", "our", "us", "and", "or", "but", "not", "no", "so",
+    "if", "then", "that", "this", "these", "those", "what", "which", "who",
+    "how", "when", "where", "why", "can", "could", "would", "should", "will",
+    "about", "into", "over", "under", "than", "also", "just", "very", "more",
+    "some", "any", "all", "has", "have", "had", "been", "get", "got", "make",
+    "made", "let", "say", "said", "one", "two", "up", "down", "out", "now",
+})
+
+
+def _meaningful_tokens(text: str) -> list[str]:
+    """Return tokens excluding stop words and tokens shorter than 2 chars."""
+    return [t for t in _tokens(text) if len(t) >= 2 and t not in _STOP_WORDS]
+
+
 def _score_page(query: str, title: str, body: str, aliases: Sequence[str], tags: Sequence[str]) -> float:
     """Score a page against a query using title, body TF, alias, and tag signals."""
 
@@ -1219,39 +1237,44 @@ def _score_page(query: str, title: str, body: str, aliases: Sequence[str], tags:
     if not query_text:
         return 0.0
     query_fold = query_text.casefold()
-    query_tokens = _tokens(query_text)
+    query_tokens = _meaningful_tokens(query_text)
     if not query_tokens:
         return 0.0
 
     score = 0.0
 
+    # Title: match on meaningful tokens only (word-boundary)
     title_fold = _safe_str(title).casefold()
-    if title_fold and (query_fold in title_fold or any(token in title_fold for token in query_tokens)):
+    title_tokens = set(_tokens(title_fold))
+    if title_fold and any(t in title_tokens for t in query_tokens):
         score += 3.0
 
+    # Body: TF using meaningful tokens
     body_tokens = _tokens(body)
     if body_tokens:
         hit_count = sum(body_tokens.count(token) for token in query_tokens)
         score += (hit_count / len(body_tokens)) * 1.0
 
+    # Alias: exact normalized match only (no substring)
     alias_folds = [_safe_str(alias).casefold() for alias in aliases if _safe_str(alias)]
     if alias_folds:
-        alias_matched = query_fold in alias_folds
-        if not alias_matched:
-            alias_matched = any(
-                query_fold in alias or alias in query_fold for alias in alias_folds if alias
-            )
-        if not alias_matched:
-            alias_matched = any(
-                token in alias_folds or any(token in alias or alias in token for alias in alias_folds)
-                for token in query_tokens
-            )
-        if alias_matched:
+        alias_set = set(alias_folds)
+        alias_token_set = set()
+        for a in alias_folds:
+            alias_token_set.update(_tokens(a))
+        # Exact alias match gets full bonus
+        if query_fold in alias_set:
             score += 4.0
+        elif any(t in alias_token_set for t in query_tokens if len(t) >= 3):
+            score += 2.0  # partial alias token match, lower weight
 
+    # Tag: exact or meaningful token match
     tag_folds = {_safe_str(tag).casefold() for tag in tags if _safe_str(tag)}
-    if tag_folds and (query_fold in tag_folds or any(token in tag_folds for token in query_tokens)):
-        score += 2.0
+    if tag_folds:
+        if query_fold in tag_folds:
+            score += 2.0
+        elif any(t in tag_folds for t in query_tokens):
+            score += 1.0
 
     return score
 

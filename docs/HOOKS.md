@@ -2,7 +2,7 @@
 
 Hooks are Hermes plugin callbacks that fire at specific points in the agent lifecycle. They can improve output quality, enforce conventions, and provide guardrails.
 
-All 8 quality hooks are registered and active in `__init__.py` via `hooks.register_all_hooks(ctx)`.
+All 9 quality hooks are registered and active in `__init__.py` via `hooks.register_all_hooks(ctx)`.
 
 ## Available Hooks
 
@@ -140,6 +140,7 @@ The 8 registered hooks in `hooks.py → ALL_HOOKS`:
 | `post_tool_call` | `self_sign_guard` | Ensure all signature blocks presented |
 | `post_llm_call` | `format_enforcer` | Check briefing/review section markers |
 | `post_llm_call` | `note_capture_reminder` | Detect note-worthy output, remind ingestion |
+| `pre_llm_call` | `wiki_context_injection` | Search wiki and inject relevant context on question-like messages |
 | `on_session_start` | `stale_briefing_detector` | Warn if last briefing was > 26h ago |
 
 The `drive_filer_safety` hook described below is an unimplemented stub — not registered.
