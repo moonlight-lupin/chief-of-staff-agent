@@ -84,7 +84,7 @@ If the user requests a different week, honor that window and state it in the hea
 
 ## Workspace Access
 
-Weekly Review reads **calendar meetings** for this week and next week, and **optional file/filing summaries**. Prefer the `workspace_collect.py` wrapper (shown above). Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
+Weekly Review reads **calendar meetings** for this week and next week, and **optional file/filing summaries**. Prefer the `workspace_collect.py` wrapper (shown above). Obtain workspace data through an approved workspace access path — see `shared/docs/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 Pass the two calendar windows (this-week `week_start`→`week_end`, and next-week bounds) to whichever path is used. State a limitation if file/filing summaries are unavailable; the review still completes.
 

@@ -161,7 +161,7 @@ Root/                              (company Drive root — ID from company.yaml)
 
 ## Workspace Access
 
-Drive Filer's intent is: search the file store, ensure/create folders, and upload/download files. Prefer the `drive_file.py` wrapper (shown in the Overview). Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
+Drive Filer's intent is: search the file store, ensure/create folders, and upload/download files. Prefer the `drive_file.py` wrapper (shown in the Overview). Obtain workspace data through an approved workspace access path — see `shared/docs/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 To fetch a mail attachment before filing, obtain it through an approved mail access path, then return to Drive Filer for classification and upload.
 

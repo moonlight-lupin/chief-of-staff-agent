@@ -2,7 +2,7 @@
 
 Hooks are Hermes plugin callbacks that fire at specific points in the agent lifecycle. They can improve output quality, enforce conventions, and provide guardrails.
 
-All 7 quality hooks are registered and active in `__init__.py`.
+All 8 quality hooks are registered and active in `__init__.py` via `hooks.register_all_hooks(ctx)`.
 
 ## Available Hooks
 
@@ -116,35 +116,33 @@ def calendar_modification_guard(tool_name: str, args: dict, context: dict) -> st
 
 ## Registering Hooks in `__init__.py`
 
-Live registration is already in `__init__.py` (`hooks.register_all_hooks(ctx)`). Skill list for the default profile:
+Live registration is in `__init__.py`:
 
 ```python
 def register(ctx):
-    """Register all 18 skills + quality hooks."""
-    for skill_name in [
-        "daily-briefing", "deadline-tracker", "note-taker",
-        "todo-list", "calendar-manager", "drive-filer",
-        "meeting-prep", "weekly-review", "document-preparer",
-        "pipeline-manager", "bookkeeper", "deep-research",
-        "entity-research", "travel-itinerary", "backup", "self-sign",
-        "email-organisation", "esign-connector",
-    ]:
-        ctx.register_skill(skill_name, f"skills/{skill_name}/SKILL.md")
+    """Register all 18 skills + 8 quality hooks."""
+    skills = _get_registered_skills()
+    for skill_name in skills:
+        ctx.register_skill(skill_name, skill_path)
 
-    from .hooks import (
-        briefing_quality_check,
-        self_sign_audit,
-        config_validation,
-        calendar_modification_guard,
-    )
-    ctx.register_hook("post_llm_call", briefing_quality_check)
-    ctx.register_hook("post_tool_call", self_sign_audit)
-    ctx.register_hook("on_session_start", config_validation)
-    ctx.register_hook("pre_approval_request", calendar_modification_guard)
-    # drive_filer_safety is an unimplemented stub — not registered.
+    from . import hooks
+    hooks.register_all_hooks(ctx)
 ```
 
-Quality hooks are registered from `__init__.py` via `hooks.register_all_hooks(ctx)`. The `drive_filer_safety` stub above is unimplemented and is not registered.
+The 8 registered hooks in `hooks.py → ALL_HOOKS`:
+
+| Event | Hook | Purpose |
+|---|---|---|
+| `pre_llm_call` | `company_context_primer` | Inject company context strip |
+| `pre_llm_call` | `deadline_urgency_injection` | Inject overdue deadlines |
+| `pre_tool_call` | `pipeline_stage_validator` | Warn on invalid pipeline stages |
+| `post_tool_call` | `yaml_integrity_checker` | Verify YAML files after writes |
+| `post_tool_call` | `self_sign_guard` | Ensure all signature blocks presented |
+| `post_llm_call` | `format_enforcer` | Check briefing/review section markers |
+| `post_llm_call` | `note_capture_reminder` | Detect note-worthy output, remind ingestion |
+| `on_session_start` | `stale_briefing_detector` | Warn if last briefing was > 26h ago |
+
+The `drive_filer_safety` hook described below is an unimplemented stub — not registered.
 
 ## Hook Design Principles
 

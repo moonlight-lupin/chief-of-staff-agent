@@ -18,7 +18,7 @@ Use the first available path:
 2. **The configured workspace provider** via `shared/scripts/workspace_client.py`: `get_workspace_client(config)` then `.mail_search(query, max_results=...)`, `.calendar_list(start, end)`, `.files_search(...)`, and the matching write methods (`.calendar_create` / `.calendar_update` / `.calendar_cancel`, `.files_upload` / `.files_download` / `.files_trash`, mail draft/send/archive/tag). The provider is selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365` | `agent`); all non-`agent` providers expose the same neutral method surface. Use this path for any **writes** so `@guarded` + audit apply.
 3. **Pre-fetched data via `--input`** — when the agent has already gathered workspace data with path 1, hand it to the skill script as a `schemas.py` workspace envelope (`{generated_at?, source?, messages: [...], events: [...], files: [...]}`). Set `source` to `"agent"` or `"composio-mcp"` as appropriate.
 
-Skill wrappers (`daily_briefing.py`, `workspace_actions.py`, `workspace_collect.py`, `calendar_actions.py`, `drive_file.py`) route through `WorkspaceClient` and accept the same `--input` envelope.
+Skill wrappers `daily_briefing.py`, `workspace_actions.py`, and `workspace_collect.py` accept a pre-fetched `--input` envelope. Wrappers `calendar_actions.py` and `drive_file.py` route through `WorkspaceClient` directly and do not accept `--input`.
 
 ## Gmail-dialect note
 

@@ -67,7 +67,7 @@ If `shared/config/company.yaml` is missing, stop and tell the user to copy `shar
 
 ## Workspace Access
 
-Daily Briefing needs **unread priority mail** and **today + tomorrow calendar events with join links**. Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
+Daily Briefing needs **unread priority mail** and **today + tomorrow calendar events with join links**. Obtain workspace data through an approved workspace access path — see `shared/docs/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 ### Mail Query Rules
 

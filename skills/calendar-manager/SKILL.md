@@ -82,7 +82,7 @@ If an event looks ambiguous, list matching events and ask the user to choose one
 
 ## Workspace Access
 
-Calendar Manager's intent is: list events in a window, create an event with a join link, update an event, and cancel/delete an event. Prefer the `calendar_actions.py` wrapper (shown in the Overview). Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
+Calendar Manager's intent is: list events in a window, create an event with a join link, update an event, and cancel/delete an event. Prefer the `calendar_actions.py` wrapper (shown in the Overview). Obtain workspace data through an approved workspace access path — see `shared/docs/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 Request a conference/join link on create (Google Meet on Google, Teams on Microsoft 365). Always capture and report event IDs and join links returned by the provider.
 

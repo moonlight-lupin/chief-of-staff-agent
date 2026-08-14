@@ -55,7 +55,7 @@ python skills/meeting-prep/scripts/workspace_actions.py calendar-context --start
 python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "meeting notes" --max 5
 ```
 
-Obtain workspace data through an approved workspace access path — see `references/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
+Obtain workspace data through an approved workspace access path — see `shared/docs/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.
 
 For ad hoc attendee searches when there is no pipeline client name, use a narrow 90-day attendee email query:
 

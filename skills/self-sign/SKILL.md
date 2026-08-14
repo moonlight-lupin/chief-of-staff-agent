@@ -1,6 +1,6 @@
 ---
 name: self-sign
-description: "Use when placing the operator's own signature on a document. For collecting third-party signatures, use esign-connector."
+description: "Use when placing the operator's own signature on a document."
 version: 0.1.0
 author: moonlight-lupin
 license: Apache-2.0
