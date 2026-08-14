@@ -43,7 +43,12 @@ def _hash_record(prev_hash: str, record: Mapping[str, Any]) -> str:
 
 
 def _last_hash(path: Path) -> str:
-    """Return the ``_hash`` of the last JSONL record, or ``""`` if none."""
+    """Return the ``_hash`` of the last JSONL record, or ``""`` if none.
+
+    Raises ``RuntimeError`` if the last line exists but is unparseable
+    or lacks a ``_hash`` key — this distinguishes "empty log" (genesis)
+    from "corrupt tail" (must not silently restart the chain).
+    """
     if not path.exists() or path.stat().st_size == 0:
         return ""
     last_line = ""
@@ -55,18 +60,31 @@ def _last_hash(path: Path) -> str:
         return ""
     try:
         rec = json.loads(last_line)
-    except json.JSONDecodeError:
-        return ""
-    if isinstance(rec, dict):
-        return str(rec.get("_hash") or "")
-    return ""
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Audit log tail is corrupt (unparseable JSON): {exc}"
+        ) from exc
+    if not isinstance(rec, dict):
+        raise RuntimeError(
+            f"Audit log tail is not a JSON object: {last_line[:80]}"
+        )
+    if not rec.get("_hash"):
+        # Legacy record without _hash — write a genesis marker to
+        # restart the chain legally, rather than silently chaining
+        # from "".
+        raise RuntimeError(
+            "Audit log has legacy records without _hash — migration needed"
+        )
+    return str(rec["_hash"])
 
 
 def verify_audit_chain(config: Any) -> bool:
     """Return True iff every record's ``_hash`` matches the hash chain.
 
-    The first record uses ``prev_hash = ""``. Any missing hash, malformed
-    line, or content/hash mismatch returns False.
+    The first record uses ``prev_hash = ""``. A record with
+    ``_chain_restart=True`` is treated as a legal chain restart
+    (genesis marker for legacy/corrupt migration). Any missing hash,
+    malformed line, or content/hash mismatch returns False.
     """
     path = _audit_path(config)
     if not path.exists():
@@ -84,6 +102,18 @@ def verify_audit_chain(config: Any) -> bool:
                     return False
                 if not isinstance(record, dict):
                     return False
+                # Legal chain restart (migration marker)
+                if record.get("_chain_restart"):
+                    prev_hash = ""
+                    stored = record.get("_hash")
+                    if not stored:
+                        return False
+                    content = {k: v for k, v in record.items() if k != "_hash"}
+                    expected = _hash_record("", content)
+                    if stored != expected:
+                        return False
+                    prev_hash = stored
+                    continue
                 stored = record.get("_hash")
                 if not stored:
                     return False
@@ -143,7 +173,21 @@ def audit_workspace_action(
         path.parent.mkdir(parents=True, exist_ok=True)
 
         def _append() -> None:
-            prev_hash = _last_hash(path)
+            try:
+                prev_hash = _last_hash(path)
+            except RuntimeError as exc:
+                # Corrupt or legacy tail — log and chain from genesis
+                # with a migration marker so the break is visible.
+                import sys
+                print(f"[workspace_audit] WARNING: {exc}", file=sys.stderr)
+                prev_hash = ""
+                to_write = dict(record)
+                to_write["_chain_restart"] = True
+                to_write["_restart_reason"] = str(exc)
+                to_write["_hash"] = _hash_record(prev_hash, to_write)
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(to_write) + "\n")
+                return
             to_write = dict(record)
             to_write["_hash"] = _hash_record(prev_hash, to_write)
             with path.open("a", encoding="utf-8") as fh:

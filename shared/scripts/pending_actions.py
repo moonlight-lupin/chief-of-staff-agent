@@ -222,19 +222,31 @@ def _with_retry(
     return None
 
 
+def _parse_ts(value: str) -> datetime | None:
+    """Parse an ISO timestamp, normalizing naive timestamps to UTC.
+
+    Returns None if the value is empty or unparseable.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
 def _is_expired(action: dict[str, Any], expiry_hours: int = EXPIRY_HOURS) -> bool:
     """Check if a requested action is expired (older than expiry_hours)."""
     if action.get("state") != "requested":
         return False
-    created = action.get("created_at", "")
-    if not created:
+    dt = _parse_ts(action.get("created_at", ""))
+    if dt is None:
         return False
-    try:
-        dt = datetime.fromisoformat(created)
-        age = datetime.now(timezone.utc) - dt
-        return age > timedelta(hours=expiry_hours)
-    except (ValueError, TypeError):
-        return False
+    age = datetime.now(timezone.utc) - dt
+    return age > timedelta(hours=expiry_hours)
 
 
 def _is_approval_lapsed(action: dict[str, Any],
@@ -242,15 +254,11 @@ def _is_approval_lapsed(action: dict[str, Any],
     """Check if an approved action's approval has lapsed (not executed in time)."""
     if action.get("state") != "approved":
         return False
-    approved_at = action.get("approved_at", "")
-    if not approved_at:
+    dt = _parse_ts(action.get("approved_at", ""))
+    if dt is None:
         return False
-    try:
-        dt = datetime.fromisoformat(approved_at)
-        age = datetime.now(timezone.utc) - dt
-        return age > timedelta(hours=expiry_hours)
-    except (ValueError, TypeError):
-        return False
+    age = datetime.now(timezone.utc) - dt
+    return age > timedelta(hours=expiry_hours)
 
 
 def classify_recipient_risk(
@@ -785,7 +793,13 @@ def revert_stuck_action(config: Any, action_id: str,
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_minutes)
         if dt >= cutoff:
             return None  # Still actively executing — don't revert
-        action["state"] = "approved"
+        # Increment retry_count and share the MAX_RETRIES budget with
+        # mark_failed, so a stuck action cannot be re-armed without bound.
+        action["retry_count"] = action.get("retry_count", 0) + 1
+        if action["retry_count"] >= MAX_RETRIES:
+            action["state"] = "failed"
+        else:
+            action["state"] = "approved"
         action["executing_at"] = None
         _save(cfg, data, expected_version=expected_version)
         return action
