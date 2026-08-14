@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for plugin structure — all 18 skills present, frontmatter valid."""
+"""Tests for plugin structure — all 19 skills present, frontmatter valid."""
 
 from pathlib import Path
 import yaml
@@ -16,6 +16,7 @@ ALL_SKILLS = [
     "pipeline-manager", "bookkeeper", "deep-research",
     "entity-research", "travel-itinerary", "backup",
     "email-organisation", "self-sign", "esign-connector",
+    "news-monitoring",
 ]
 
 
@@ -56,7 +57,7 @@ class TestPluginStructure:
             assert not extra, (
                 f"plugin.yaml skill_profiles.{profile_name}.registered has unknown skills: {extra}"
             )
-            assert len(registered) == 18
+            assert len(registered) == len(ALL_SKILLS)
 
     def test_release_versions_agree(self):
         """plugin.yaml, pyproject.toml, and the chief_of_staff entrypoint must

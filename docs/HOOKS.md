@@ -120,7 +120,7 @@ Live registration is in `__init__.py`:
 
 ```python
 def register(ctx):
-    """Register all 18 skills + 8 quality hooks."""
+    """Register all 19 skills + 9 quality hooks."""
     skills = _get_registered_skills()
     for skill_name in skills:
         ctx.register_skill(skill_name, skill_path)

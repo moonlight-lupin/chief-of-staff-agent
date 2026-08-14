@@ -58,6 +58,7 @@ def _get_registered_skills() -> list[str]:
         "pipeline-manager", "bookkeeper", "deep-research",
         "entity-research", "travel-itinerary", "backup",
         "email-organisation", "self-sign", "esign-connector",
+        "news-monitoring",
     ])
 
 

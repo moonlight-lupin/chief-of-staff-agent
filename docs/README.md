@@ -6,7 +6,7 @@ The plugin is designed for a single company/operator per Hermes instance. It use
 
 ## Features
 
-The plugin registers 18 Hermes skills:
+The plugin registers 19 Hermes skills:
 
 1. **daily-briefing** — daily command-center briefing from inbox, calendar, deadlines, pipeline, to-dos, and finance.
 2. **deadline-tracker** — statutory and custom deadline tracking from company config and jurisdiction packs.
@@ -26,6 +26,7 @@ The plugin registers 18 Hermes skills:
 16. **self-sign** — scan documents for the operator's signature blocks and place signature assets locally.
 17. **email-organisation** — inspect mail labels/categories, propose a label policy, and apply approved organisation through the review queue.
 18. **esign-connector** — send documents for third-party e-signature via self-hosted DocuSeal.
+19. **news-monitoring** — recurring topic/news monitoring with web search, multi-language sources, and digest delivery via cron.
 
 ## Prerequisites
 
