@@ -20,22 +20,15 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-# Actions that modify external state (Gmail, Calendar, Drive)
+# Actions that modify external state (Gmail, Calendar, Drive).
 # Legacy gmail.*/drive.* ids are used by the Google/Composio providers;
 # neutral mail.*/files.* ids are used by newer providers (m365). Semantics mirror
 # each other exactly (e.g. mail.send gates like gmail.send).
 #
-# NOTE on the neutral mail.*/files.* mutation ids (mail.archive/unarchive/trash/
-# untrash/tag/create_tag, files.trash/untrash) and the shared calendar.cancel:
-# these are emitted by the m365 provider's @guarded methods. They MUST appear
-# here or the guardrail's confirm_action() (which permits any action NOT in
-# WRITE_ACTIONS) would let M365 archive/trash/tag/cancel/OneDrive-trash execute
-# with no gate.
-# The Google/Composio providers deliberately emit the LEGACY gmail.*/drive.*
-# spellings for these same operations (gmail.archive, gmail.trash, drive.trash);
-# those legacy spellings are intentionally left OUT of WRITE_ACTIONS so the
-# existing Google/Composio behaviour is unchanged — they are gated upstream by
-# the pending-action approval queue instead.
+# Both spellings MUST appear here. @guarded methods on Google/Composio emit the
+# legacy ids (gmail.archive, gmail.trash, drive.trash, …); m365 emits the
+# neutral ids. confirm_action() is default-deny: anything not in READ_ACTIONS
+# or WRITE_ACTIONS is blocked, so omitting a mutation id is a bypass.
 WRITE_ACTIONS: frozenset[str] = frozenset({
     "gmail.draft",
     "gmail.send",
@@ -45,6 +38,7 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "calendar.update",
     "calendar.delete",
     "calendar.cancel",   # m365 gates here; google uses it too (approval-queue gated)
+    "calendar.uncancel",
     "drive.upload",
     "drive.download",
     "drive.delete",
@@ -52,6 +46,8 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "files.download",
     "files.trash",       # m365 OneDrive recycle-bin (reversible)
     "files.untrash",     # restore from Drive trash / OneDrive recycle bin
+    "drive.trash",
+    "drive.untrash",
     "mail.archive",      # m365 move -> Archive (reversible)
     "mail.unarchive",    # m365 move -> Inbox
     "mail.trash",        # m365 move -> Deleted Items (30-day recoverable)
@@ -59,6 +55,36 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "mail.move",         # move to an arbitrary folder id / well-known name
     "mail.tag",          # m365 append Outlook category (trivially undoable)
     "mail.create_tag",   # m365 create Outlook master category
+    "gmail.archive",
+    "gmail.unarchive",
+    "gmail.trash",
+    "gmail.untrash",
+    "gmail.label",
+    "gmail.create_label",
+})
+
+# Explicit allowlist of read-only action IDs. confirm_action() permits these
+# without a gate. Unknown IDs are denied (not treated as reads).
+READ_ACTIONS: frozenset[str] = frozenset({
+    "gmail.search",
+    "gmail.read",
+    "gmail.list",
+    "gmail.labels.list",
+    "calendar.list",
+    "calendar.get",
+    "calendar.search",
+    "calendar.list_reminders",
+    "drive.search",
+    "drive.list",
+    "drive.read",
+    "mail.search",
+    "mail.read",
+    "mail.list_folders",
+    "mail.list_tags",
+    "files.search",
+    "files.list",
+    "files.read",
+    "unknown",  # events that don't map to a known action
 })
 
 # Actions that are destructive and should always require explicit confirmation
@@ -82,10 +108,15 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "drive.download",   # read-only (downloads to local)
     "files.upload",
     "files.download",
-    # Reversible m365 mutations (see WRITE_ACTIONS note above).
+    # Reversible mutations (see WRITE_ACTIONS note above). Neutral and
+    # legacy spellings are both listed so Google/Composio @guarded methods
+    # gate the same way as m365.
     "files.trash",      # OneDrive recycle bin — reversible
     "files.untrash",    # restore from trash / recycle bin
+    "drive.trash",
+    "drive.untrash",
     "calendar.cancel",  # reversible on providers with an uncancel path
+    "calendar.uncancel",
     "mail.archive",     # reversible: move back to Inbox
     "mail.unarchive",
     "mail.trash",       # reversible: 30-day Deleted Items recovery
@@ -93,12 +124,30 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "mail.move",        # reversible: move back to previous folder
     "mail.tag",         # reversible: remove the category
     "mail.create_tag",  # reversible: delete the category
+    "gmail.archive",
+    "gmail.unarchive",
+    "gmail.trash",
+    "gmail.untrash",
+    "gmail.label",
+    "gmail.create_label",
 })
 
 
+def is_read_action(action: str) -> bool:
+    """Check if an action is an explicit read-only allowlist member."""
+    return action in READ_ACTIONS
+
+
 def is_write_action(action: str) -> bool:
-    """Check if an action modifies external state."""
-    return action in WRITE_ACTIONS
+    """Check if an action modifies external state.
+
+    Known writes (WRITE_ACTIONS) return True. Explicit reads return False.
+    Unknown action IDs are treated as writes so default-deny cannot be
+    bypassed by inventing a new mutation id.
+    """
+    if action in READ_ACTIONS:
+        return False
+    return True
 
 
 def requires_confirmation(action: str) -> bool:
@@ -142,17 +191,26 @@ def confirm_action(action: str, **details: Any) -> bool:
     """Check if an action should proceed.
 
     Returns True if:
-    - The action is not a write action (always proceed)
-    - Auto-approve is enabled and the action is not destructive
+    - The action is in READ_ACTIONS (reads always pass)
+    - Auto-approve is enabled and the action is a non-destructive write
     - The user confirms interactively (if stdin is available)
 
     Returns False if:
+    - The action is in neither READ_ACTIONS nor WRITE_ACTIONS (unknown = deny)
     - The action is destructive and auto-approve is set (still blocks — use CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)
     - The user declines
     - stdin is not available and auto-approve is not set
     """
-    if not is_write_action(action):
+    if action in READ_ACTIONS:
         return True
+    if action not in WRITE_ACTIONS:
+        print(
+            f"⚠️  Unknown action '{action}' is not in the read or write allowlists. "
+            f"Blocked (default-deny).",
+            file=sys.stderr,
+        )
+        _log_guardrail_blocked(action, "unknown_action")
+        return False
 
     if action in DESTRUCTIVE_ACTIONS:
         if os.getenv("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", "").strip() not in ("1", "true", "yes"):

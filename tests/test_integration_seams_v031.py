@@ -174,11 +174,14 @@ class TestNeutralGuardrailClassification:
                            "calendar.cancel", "files.trash"):
             assert reversible in wg.SAFE_WRITE_ACTIONS, reversible
 
-    def test_legacy_soft_delete_ids_stay_ungated(self):
-        """The Google/Composio legacy spellings for archive/trash must remain
-        OUT of WRITE_ACTIONS so their existing (approval-queue-gated) behaviour
-        is unchanged — only the neutral m365 ids are newly gated."""
+    def test_legacy_soft_delete_ids_are_gated(self):
+        """Legacy Google/Composio archive/trash spellings must be WRITE_ACTIONS.
+
+        Previously they were left out so confirm_action() default-allowed them.
+        They are now gated the same way as their neutral twins.
+        """
         import workspace_guardrails as wg
 
         for legacy in ("gmail.archive", "gmail.trash", "drive.trash"):
-            assert legacy not in wg.WRITE_ACTIONS, legacy
+            assert legacy in wg.WRITE_ACTIONS, legacy
+            assert legacy in wg.SAFE_WRITE_ACTIONS, legacy

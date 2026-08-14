@@ -4,9 +4,9 @@
 State machine: requested → approved → executed | cancelled | dismissed
                requested → cancelled | dismissed (skip approval)
 
-Concurrency: optimistic versioning via version counter in the JSON file.
-Each save checks the version; if it changed since load, the write is rejected.
-This prevents lost updates from concurrent channels without external locks.
+Concurrency: exclusive file lock (file_lock.with_lock) around load-check-write,
+plus a version counter as defense-in-depth. Concurrent writers serialize on
+the lock; a stale expected_version still raises ConcurrencyError.
 
 Approval expiry: requested actions older than EXPIRY_HOURS are marked 'expired'.
 Expired actions cannot be approved or executed — they must be re-prepared.
@@ -23,6 +23,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+import file_lock
 
 # Ensure shared/scripts is importable
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -110,7 +112,7 @@ class ConcurrencyError(Exception):
 
 
 def _save(config: Any, data: dict[str, Any], expected_version: int | None = None) -> int:
-    """Atomically save pending actions to disk with optimistic versioning.
+    """Atomically save pending actions to disk with locking + versioning.
 
     If expected_version is provided, checks that the on-disk version matches.
     Returns the new version number.
@@ -119,23 +121,35 @@ def _save(config: Any, data: dict[str, Any], expected_version: int | None = None
     path = _pending_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Optimistic version check
-    if expected_version is not None:
-        current = _load(config)
-        current_version = current.get("_version", 0)
-        if current_version != expected_version:
-            raise ConcurrencyError(
-                f"Pending actions changed since load (expected v{expected_version}, "
-                f"found v{current_version}). Reload and retry."
-            )
+    with file_lock.with_lock(str(path), timeout=10):
+        # Version check inside the lock: defense in depth against a stale
+        # in-memory snapshot from before the lock was acquired.
+        if expected_version is not None:
+            current = _load(config)
+            current_version = current.get("_version", 0)
+            if current_version != expected_version:
+                raise ConcurrencyError(
+                    f"Pending actions changed since load (expected v{expected_version}, "
+                    f"found v{current_version}). Reload and retry."
+                )
 
-    new_version = (data.get("_version", 0) or 0) + 1
-    data["_version"] = new_version
+        new_version = (data.get("_version", 0) or 0) + 1
+        data["_version"] = new_version
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    tmp.replace(path)
-    return new_version
+        tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+                fh.flush()
+                os.fsync(fh.fileno())
+            tmp.replace(path)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return new_version
 
 
 def _is_expired(action: dict[str, Any], expiry_hours: int = EXPIRY_HOURS) -> bool:

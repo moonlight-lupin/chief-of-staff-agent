@@ -18,8 +18,11 @@ import hmac
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+import file_lock
 
 
 # ─── HMAC (generic endpoint) ──────────────────────────────────
@@ -208,14 +211,25 @@ def _load_replay_cache(config: Any) -> dict[str, Any]:
 
 
 def _save_replay_cache(config: Any, data: dict[str, Any]) -> None:
-    """Atomic write: write to temp file, then rename."""
+    """Atomic write under an exclusive lock: unique temp file, fsync, then rename."""
     path = _replay_cache_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    new_version = (data.get("_version", 0) or 0) + 1
-    data["_version"] = new_version
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    with file_lock.with_lock(str(path), timeout=10):
+        new_version = (data.get("_version", 0) or 0) + 1
+        data["_version"] = new_version
+        tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data, indent=2))
+                fh.flush()
+                os.fsync(fh.fileno())
+            tmp.replace(path)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
 
 def reserve_delivery(

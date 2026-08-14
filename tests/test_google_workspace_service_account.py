@@ -162,7 +162,8 @@ class TestWriteGuardrails:
         assert "acme.json" in kwargs["service_account_path"]
 
     def test_files_untrash_via_sa_rest(self, google_client):
-        """drive.untrash uses SA REST (no google_api.py CLI); legacy id skips WRITE_ACTIONS gate."""
+        """drive.untrash uses SA REST (no google_api.py CLI); gated as a safe write."""
+        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
         with patch(
             "providers.google_workspace._drive_untrash_via_service_account",
             return_value={"id": "file-9", "trashed": False, "reversible": True},
