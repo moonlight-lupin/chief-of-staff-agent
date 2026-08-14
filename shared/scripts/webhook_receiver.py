@@ -127,10 +127,11 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
                     return
 
             else:
-                # Generic: HMAC signature with timestamp
+                # Generic: HMAC signature with timestamp (timestamp required)
                 signature = self.headers.get("X-Webhook-Signature", "")
                 timestamp = self.headers.get("X-Webhook-Timestamp", "")
-                if not verify_signature(body, signature, timestamp=timestamp or None):
+                if not verify_signature(body, signature, timestamp=timestamp or None,
+                                        require_timestamp=True):
                     stats.rejected_signature += 1
                     self._respond(401, {"error": "Invalid or missing signature"})
                     return

@@ -44,10 +44,13 @@ def verify_signature(
     signature: str,
     secret: str | None = None,
     timestamp: str | None = None,
+    require_timestamp: bool = False,
 ) -> bool:
     if secret is None:
         secret = get_webhook_secret()
     if not secret:
+        return False
+    if require_timestamp and (timestamp is None or timestamp == ""):
         return False
     if timestamp is not None:
         try:
@@ -318,6 +321,29 @@ def reserve_delivery(
             cache["entries"] = entries
             _save_replay_cache_unlocked(config, cache)
             return True, "OK"
+
+
+def renew_delivery(config: Any, delivery_id: str, lease_token: str | None = None) -> bool:
+    """Extend the processing lease for a delivery.
+
+    Call this from long-running handlers to prevent lease expiry
+    and double-processing by a retry worker.
+    """
+    path = _replay_cache_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock.with_lock(str(path), timeout=10):
+        cache = _load_replay_cache(config)
+        entries = cache.get("entries", {})
+        entry = entries.get(delivery_id)
+        if not entry or entry.get("state") != "processing":
+            return False
+        if lease_token and entry.get("lease_token") and entry.get("lease_token") != lease_token:
+            return False
+        entry["ts"] = time.time()
+        entries[delivery_id] = entry
+        cache["entries"] = entries
+        _save_replay_cache_unlocked(config, cache)
+        return True
 
 
 def complete_delivery(

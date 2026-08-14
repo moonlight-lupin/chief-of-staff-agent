@@ -63,13 +63,13 @@ class TestTransactionalStateStore:
         # Initialize with empty pipeline
         data1 = load_store("pipeline", config=config)
         data1["deals"].append({"id": "deal-1", "name": "Deal 1"})
-        save_store_atomic("pipeline", data1, config=config)
+        save_store_atomic("pipeline", data1, config=config, _fill_defaults=True)
 
         # Second load + append (simulating concurrent process that loaded
         # before the first save completed)
         data2 = load_store("pipeline", config=config)
         data2["deals"].append({"id": "deal-2", "name": "Deal 2"})
-        save_store_atomic("pipeline", data2, config=config)
+        save_store_atomic("pipeline", data2, config=config, _fill_defaults=True)
 
         # Both deals must be present
         loaded = load_store("pipeline", config=config)
@@ -85,7 +85,7 @@ class TestTransactionalStateStore:
         # Initialize
         data = load_store("pipeline", config=config)
         data["deals"].append({"id": "deal-x", "name": "Deal X"})
-        save_store_atomic("pipeline", data, config=config)
+        save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         # Try using with_store_lock if it exists
         try:
@@ -97,7 +97,7 @@ class TestTransactionalStateStore:
         with with_store_lock("pipeline", config=config):
             data = load_store("pipeline", config=config)
             data["deals"].append({"id": "deal-y", "name": "Deal Y"})
-            save_store_atomic("pipeline", data, config=config)
+            save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         loaded = load_store("pipeline", config=config)
         deal_ids = [d["id"] for d in loaded["deals"]]

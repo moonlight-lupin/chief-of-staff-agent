@@ -129,7 +129,7 @@ Full provider walkthroughs (Google service account, Composio, Microsoft 365, Doc
 Observe → Understand → Suggest → Approve → Execute → Audit
 ```
 
-- **The daily loop never mutates anything** — no email sent, no events changed, no records written, no "auto-repair".
+- **The daily command is externally read-only (no workspace mutations) but writes local telemetry (.last_briefing timestamp) to prevent duplicate briefings.** No email is sent, no events are changed, no business records are written, and there is no "auto-repair".
 - **Destructive actions are double-gated**: sending email requires an explicit environment flag on top of approval.
 - **Reversibility is a design rule**: archive/trash/tag operations are chosen for their undo paths; anything without a restore path (like cancelling a Microsoft 365 calendar event) is honestly refused rather than silently risked.
 - **Logs are safe to share**: tokens, secrets, message bodies, and document contents never reach the operational logs — at any log level — and support bundles are redacted by construction.

@@ -47,6 +47,9 @@ Use this checklist before going live with the Chief-of-Staff daily operating loo
   - Review all 8 panels
   - Confirm **live sources** show Gmail/Calendar `ok` (or intentional degraded/failed)
   - Note any urgent items / review-queue work
+  - The daily command is externally read-only (no workspace mutations)
+    but writes local telemetry (.last_briefing timestamp) to prevent
+    duplicate briefings.
   - Run: `python3 shared/scripts/chief_of_staff.py daily --summary`
 
 - [ ] **6. Review pending actions**

@@ -56,7 +56,7 @@ class TestBackupRetention:
         for i in range(25):
             data = load_store("pipeline", config=config)
             data["deals"].append({"id": f"deal-{i}", "name": f"Deal {i}"})
-            save_store_atomic("pipeline", data, config=config)
+            save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         backup_dir = project / ".backups"
         if not backup_dir.exists():
@@ -77,7 +77,7 @@ class TestBackupRetention:
         # Create a backup
         data = load_store("pipeline", config=config)
         data["deals"].append({"id": "deal-1", "name": "Deal 1"})
-        save_store_atomic("pipeline", data, config=config)
+        save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         # Manually create an old backup (40 days ago)
         backup_dir = project / ".backups"
@@ -90,7 +90,7 @@ class TestBackupRetention:
         # Trigger another save (should prune the old backup)
         data = load_store("pipeline", config=config)
         data["deals"].append({"id": "deal-2", "name": "Deal 2"})
-        save_store_atomic("pipeline", data, config=config)
+        save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         # The old backup should be gone
         assert not old_file.exists(), (
@@ -118,7 +118,7 @@ class TestAuditStrictWhitespace:
         # Initialize the store
         data = load_store("pipeline", config=config)
         data["deals"].append({"id": "deal-1", "name": "Deal 1"})
-        save_store_atomic("pipeline", data, config=config)
+        save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         # Now save with strict mode for "pipeline, invoices" (with space)
         os.environ["CHIEF_OF_STAFF_AUDIT_STRICT"] = "pipeline, invoices"
@@ -130,7 +130,7 @@ class TestAuditStrictWhitespace:
             with patch("state_store.append_audit",
                        side_effect=Exception("audit DB down")):
                 with pytest.raises(StateStoreError, match="strict mode"):
-                    save_store_atomic("pipeline", data, config=config)
+                    save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
         finally:
             os.environ.pop("CHIEF_OF_STAFF_AUDIT_STRICT", None)
 
@@ -141,7 +141,7 @@ class TestAuditStrictWhitespace:
 
         data = load_store("pipeline", config=config)
         data["deals"].append({"id": "deal-1", "name": "Deal 1"})
-        save_store_atomic("pipeline", data, config=config)
+        save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
 
         os.environ["CHIEF_OF_STAFF_AUDIT_STRICT"] = "pipeline,invoices"
         try:
@@ -151,7 +151,7 @@ class TestAuditStrictWhitespace:
             with patch("state_store.append_audit",
                        side_effect=Exception("audit DB down")):
                 with pytest.raises(StateStoreError, match="strict mode"):
-                    save_store_atomic("pipeline", data, config=config)
+                    save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
         finally:
             os.environ.pop("CHIEF_OF_STAFF_AUDIT_STRICT", None)
 

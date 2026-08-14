@@ -155,7 +155,7 @@ shared/config/jurisdictions/{sg,hk,us,uk}.yaml
 
 ## Safety and Privacy
 
-- Aggregator skills (`daily-briefing`, `meeting-prep`, `weekly-review`) are read-only by default.
+- Aggregator skills (`daily-briefing`, `meeting-prep`, `weekly-review`) are read-only by default. The daily command is externally read-only (no workspace mutations) but writes local telemetry (.last_briefing timestamp) to prevent duplicate briefings.
 - Mutations such as sending email, changing calendar events, moving deals, marking invoices, signing documents, or filing to Drive require explicit confirmation through the relevant source skill.
 - Scheduled prompts are self-contained and should not rely on conversation history.
 - Set `delivery.use_client_codes: true` if briefings may be delivered to channels visible to others.

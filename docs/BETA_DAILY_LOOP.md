@@ -3,10 +3,13 @@
 ## Overview
 
 `chief_of_staff.py daily` is the canonical Google-first beta morning command.
-It is **read-only**: it never approves, executes, sends, or mutates provider /
-local business state. It now also collects **live** Gmail + Calendar (and local
-deadlines / pipeline / todos / invoices) via `daily_briefing.collect` without
-recording delivery or writing `.last_briefing`.
+The daily command is externally read-only (no workspace mutations)
+but writes local telemetry (.last_briefing timestamp) to prevent
+duplicate briefings. It never approves, executes, sends, or mutates provider /
+local business state. It collects **live** Gmail + Calendar (and local
+deadlines / pipeline / todos / invoices) via `daily_briefing.collect`.
+`chief_of_staff.py daily` itself does not record delivery; standalone
+`daily_briefing.py` (without `--dry-run`) writes `.last_briefing`.
 
 ## Beta readiness notes (v0.3.18)
 
@@ -85,7 +88,7 @@ python3 skills/daily-briefing/scripts/daily_briefing.py --dry-run --render
 - ❌ Delete or merge wiki pages
 - ❌ Mark memory facts as confirmed
 - ❌ Reset stuck executing actions
-- ❌ Record briefing delivery / write `.last_briefing`
+- ❌ Record briefing delivery via `chief_of_staff.py daily` (standalone `daily_briefing.py` may write `.last_briefing` telemetry)
 
 All mutations remain in specialized commands or approved Review Queue execution.
 

@@ -263,6 +263,7 @@ def save_store_atomic(
     after: Mapping[str, Any] | None = None,
     actor: str = "agent",
     config: Mapping[str, Any] | None = None,
+    _fill_defaults: bool = False,
 ) -> Path:
     """Atomically validate and write a YAML store, then append audit if requested."""
 
@@ -271,7 +272,8 @@ def save_store_atomic(
     tmp_path = root / f"{store_name}.yaml.tmp"
     backup_dir = root / ".backups"
     plain_data = _plain(dict(data))
-    _fill_required_store_fields(store_name, plain_data)
+    if _fill_defaults:
+        _fill_required_store_fields(store_name, plain_data)
     validate_store(store_name, plain_data, config=config)
 
     def _write_locked() -> None:

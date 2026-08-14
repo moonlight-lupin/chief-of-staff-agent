@@ -23,7 +23,8 @@ import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from collections.abc import Callable
+from typing import Any, Mapping, TypeVar
 
 import file_lock
 
@@ -198,6 +199,29 @@ def _save(config: Any, data: dict[str, Any], expected_version: int | None = None
         return new_version
 
 
+T = TypeVar("T")
+
+
+def _with_retry(
+    config: Any,
+    mutate_fn: Callable[[Any], T],
+    max_attempts: int = 3,
+) -> T | None:
+    """Run a load→mutate→save function, retrying on ConcurrencyError.
+
+    ``mutate_fn(config)`` must perform the full load→mutate→save cycle so
+    each attempt sees a fresh snapshot. Returns the mutate function's
+    result, or None if every attempt raises ConcurrencyError.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return mutate_fn(config)
+        except ConcurrencyError:
+            if attempt == max_attempts - 1:
+                return None
+    return None
+
+
 def _is_expired(action: dict[str, Any], expiry_hours: int = EXPIRY_HOURS) -> bool:
     """Check if a requested action is expired (older than expiry_hours)."""
     if action.get("state") != "requested":
@@ -285,10 +309,11 @@ def create_pending_action(
     summary: str | None = None,
     approver: str | None = None,
     reason: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Create a pending action in 'requested' state.
 
-    Returns the action dict with a unique ID.
+    Returns the action dict with a unique ID, or None on persistent
+    concurrency conflict.
     Audits the creation.
     """
     action_id = str(uuid.uuid4())[:12]
@@ -318,10 +343,16 @@ def create_pending_action(
         "risk": risk,
     }
 
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    data["actions"][action_id] = action
-    _save(config, data, expected_version=expected_version)
+    def _mutate(cfg: Any) -> dict[str, Any]:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        data["actions"][action_id] = action
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    result = _with_retry(config, _mutate)
+    if result is None:
+        return None
 
     # Audit
     try:
@@ -341,7 +372,7 @@ def create_pending_action(
         target=target,
     )
 
-    return action
+    return result
 
 
 def list_pending_actions(config: Any, state: str | None = None,
@@ -378,15 +409,25 @@ def get_pending_action(config: Any, action_id: str) -> dict[str, Any] | None:
 
 def check_expired(config: Any, action_id: str) -> bool:
     """Check if a specific action is expired. Marks it if so."""
-    data = _load(config)
-    action = data["actions"].get(action_id)
-    if not action:
+
+    def _mutate(cfg: Any) -> tuple[bool, dict[str, Any] | None]:
+        data = _load(cfg)
+        action = data["actions"].get(action_id)
+        if not action:
+            return False, None
+        if _is_expired(action):
+            expected_version = data.get("_version", 0)
+            action["state"] = "expired"
+            action["expired_at"] = _now()
+            _save(cfg, data, expected_version=expected_version)
+            return True, action
+        return False, None
+
+    result = _with_retry(config, _mutate)
+    if result is None:
         return False
-    if _is_expired(action):
-        expected_version = data.get("_version", 0)
-        action["state"] = "expired"
-        action["expired_at"] = _now()
-        _save(config, data, expected_version=expected_version)
+    marked, action = result
+    if marked and action is not None:
         try:
             from workspace_audit import audit_workspace_action
             audit_workspace_action(config, action["provider"], action["type"], "pending",
@@ -409,26 +450,34 @@ def approve_pending_action(
     - not found
     - not in 'requested' state
     - expired (stale)
+    - persistent concurrency conflict
     Audits the approval with approver/reason metadata.
     """
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    action = data["actions"].get(action_id)
-    if not action or action["state"] != "requested":
-        return None
 
-    # Check expiry
-    if _is_expired(action):
-        action["state"] = "expired"
-        action["expired_at"] = _now()
-        _save(config, data, expected_version=expected_version)
-        return None
+    def _mutate(cfg: Any) -> dict[str, Any] | None:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] != "requested":
+            return None
 
-    action["state"] = "approved"
-    action["approved_at"] = _now()
-    action["approver"] = approver
-    action["approval_reason"] = reason
-    _save(config, data, expected_version=expected_version)
+        # Check expiry
+        if _is_expired(action):
+            action["state"] = "expired"
+            action["expired_at"] = _now()
+            _save(cfg, data, expected_version=expected_version)
+            return None
+
+        action["state"] = "approved"
+        action["approved_at"] = _now()
+        action["approver"] = approver
+        action["approval_reason"] = reason
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    action = _with_retry(config, _mutate)
+    if action is None:
+        return None
 
     try:
         from workspace_audit import audit_workspace_action
@@ -450,19 +499,27 @@ def cancel_pending_action(
     """Transition a pending action to 'cancelled'.
 
     Can cancel from 'requested', 'approved', or 'expired' state.
-    Returns the updated action, or None if not found or already terminal.
+    Returns the updated action, or None if not found, already terminal,
+    or a concurrency conflict persists.
     """
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    action = data["actions"].get(action_id)
-    if not action or action["state"] in ("executed", "cancelled", "dismissed"):
-        return None
 
-    action["state"] = "cancelled"
-    action["cancelled_at"] = _now()
-    if reason:
-        action["cancel_reason"] = reason
-    _save(config, data, expected_version=expected_version)
+    def _mutate(cfg: Any) -> dict[str, Any] | None:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] in ("executed", "cancelled", "dismissed"):
+            return None
+
+        action["state"] = "cancelled"
+        action["cancelled_at"] = _now()
+        if reason:
+            action["cancel_reason"] = reason
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    action = _with_retry(config, _mutate)
+    if action is None:
+        return None
 
     try:
         from workspace_audit import audit_workspace_action
@@ -481,20 +538,29 @@ def dismiss_pending_action(
 ) -> dict[str, Any] | None:
     """Transition a pending action from 'requested', 'approved', or 'expired' to 'dismissed'.
 
-    Returns the updated action, or None if not found or not dismissible.
+    Returns the updated action, or None if not found, not dismissible,
+    or a concurrency conflict persists.
     """
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    action = data["actions"].get(action_id)
-    if not action or action["state"] not in ("requested", "approved", "expired"):
+
+    def _mutate(cfg: Any) -> dict[str, Any] | None:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] not in ("requested", "approved", "expired"):
+            return None
+
+        dismiss_reason = reason if reason is not None else "No dismiss reason provided"
+        action["state"] = "dismissed"
+        action["dismissed_at"] = _now()
+        action["dismiss_reason"] = dismiss_reason
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    action = _with_retry(config, _mutate)
+    if action is None:
         return None
 
-    dismiss_reason = reason if reason is not None else "No dismiss reason provided"
-    action["state"] = "dismissed"
-    action["dismissed_at"] = _now()
-    action["dismiss_reason"] = dismiss_reason
-    _save(config, data, expected_version=expected_version)
-
+    dismiss_reason = action.get("dismiss_reason", "No dismiss reason provided")
     try:
         from workspace_audit import audit_workspace_action
         audit_workspace_action(config, action["provider"], action["type"], "pending",
@@ -520,17 +586,33 @@ def mark_executing(config: Any, action_id: str) -> dict[str, Any] | None:
     - approval has lapsed (marks as expired)
     - concurrency conflict (version changed)
     """
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    action = data["actions"].get(action_id)
-    if not action or action["state"] != "approved":
+
+    def _mutate(cfg: Any) -> tuple[dict[str, Any], bool] | None:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] != "approved":
+            return None
+
+        # Check if approval has lapsed BEFORE any provider call
+        if _is_approval_lapsed(action):
+            action["state"] = "expired"
+            action["expired_at"] = _now()
+            _save(cfg, data, expected_version=expected_version)
+            return action, True
+
+        # Transition to executing
+        action["state"] = "executing"
+        action["executing_at"] = _now()
+        _save(cfg, data, expected_version=expected_version)
+        return action, False
+
+    result = _with_retry(config, _mutate)
+    if result is None:
         return None
 
-    # Check if approval has lapsed BEFORE any provider call
-    if _is_approval_lapsed(action):
-        action["state"] = "expired"
-        action["expired_at"] = _now()
-        _save(config, data, expected_version=expected_version)
+    action, lapsed = result
+    if lapsed:
         try:
             from workspace_audit import audit_workspace_action
             audit_workspace_action(config, action["provider"], action["type"], "pending",
@@ -539,11 +621,6 @@ def mark_executing(config: Any, action_id: str) -> dict[str, Any] | None:
         except Exception:
             pass
         return None
-
-    # Transition to executing
-    action["state"] = "executing"
-    action["executing_at"] = _now()
-    _save(config, data, expected_version=expected_version)
 
     try:
         from workspace_audit import audit_workspace_action
@@ -567,9 +644,9 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     - not in 'executing' state
     - ConcurrencyError persists after 3 attempts
     """
-    action: dict[str, Any] | None = None
-    for attempt in range(3):
-        data = _load(config)
+
+    def _mutate(cfg: Any) -> dict[str, Any] | None:
+        data = _load(cfg)
         expected_version = data.get("_version", 0)
         action = data["actions"].get(action_id)
         if not action or action["state"] != "executing":
@@ -577,13 +654,12 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
         action["state"] = "executed"
         action["executed_at"] = _now()
         action["result"] = result
-        try:
-            _save(config, data, expected_version=expected_version)
-            break
-        except ConcurrencyError:
-            if attempt == 2:
-                return None  # give up gracefully
-            continue
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    action = _with_retry(config, _mutate)
+    if action is None:
+        return None
 
     try:
         from workspace_audit import audit_workspace_action
@@ -615,9 +691,9 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
     Returns the updated action, or None if not in 'executing' state
     or ConcurrencyError persists after 3 attempts.
     """
-    action: dict[str, Any] | None = None
-    for attempt in range(3):
-        data = _load(config)
+
+    def _mutate(cfg: Any) -> dict[str, Any] | None:
+        data = _load(cfg)
         expected_version = data.get("_version", 0)
         action = data["actions"].get(action_id)
         if not action or action["state"] != "executing":
@@ -629,13 +705,12 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
         else:
             action["state"] = "approved"  # back to approved for retry
         action["last_error"] = error
-        try:
-            _save(config, data, expected_version=expected_version)
-            break
-        except ConcurrencyError:
-            if attempt == 2:
-                return None  # give up gracefully
-            continue
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    action = _with_retry(config, _mutate)
+    if action is None:
+        return None
 
     try:
         from workspace_audit import audit_workspace_action
@@ -650,6 +725,64 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
         action_id=action_id, action_type=action["type"],
         provider=action["provider"], error=error,
     )
+
+    return action
+
+
+def find_stuck_actions(config: Any, max_minutes: int = 15) -> list[dict[str, Any]]:
+    """Return actions stuck in 'executing' longer than ``max_minutes``.
+
+    A worker that crashes after ``mark_executing`` but before
+    ``mark_executed`` leaves the action in 'executing' forever. Callers
+    can use this list plus ``revert_stuck_action`` to re-arm them.
+    """
+    data = _load(config)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_minutes)
+    stuck: list[dict[str, Any]] = []
+    for action in data["actions"].values():
+        if action.get("state") != "executing":
+            continue
+        executing_at = action.get("executing_at") or ""
+        if not executing_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(executing_at)
+        except (ValueError, TypeError):
+            continue
+        if dt < cutoff:
+            stuck.append(action)
+    return stuck
+
+
+def revert_stuck_action(config: Any, action_id: str) -> dict[str, Any] | None:
+    """Revert a stuck 'executing' action back to 'approved' for retry.
+
+    Clears ``executing_at``. Returns the updated action, or None if the
+    action is not in 'executing' state (or a concurrency conflict persists).
+    """
+
+    def _mutate(cfg: Any) -> dict[str, Any] | None:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] != "executing":
+            return None
+        action["state"] = "approved"
+        action["executing_at"] = None
+        _save(cfg, data, expected_version=expected_version)
+        return action
+
+    action = _with_retry(config, _mutate)
+    if action is None:
+        return None
+
+    try:
+        from workspace_audit import audit_workspace_action
+        audit_workspace_action(config, action["provider"], action["type"], "pending",
+                               target=action["target"], status="approved",
+                               extra={"action_id": action_id, "reason": "stuck_reverted"})
+    except Exception:
+        pass
 
     return action
 
@@ -672,11 +805,16 @@ def assert_executable(config: Any, action_id: str) -> dict[str, Any] | None:
         return None
     if _is_approval_lapsed(action):
         # Mark as expired
-        data = _load(config)
-        expected_version = data.get("_version", 0)
-        data["actions"][action_id]["state"] = "expired"
-        data["actions"][action_id]["expired_at"] = _now()
-        _save(config, data, expected_version=expected_version)
+        def _mutate(cfg: Any) -> None:
+            data = _load(cfg)
+            expected_version = data.get("_version", 0)
+            stored = data["actions"].get(action_id)
+            if stored:
+                stored["state"] = "expired"
+                stored["expired_at"] = _now()
+                _save(cfg, data, expected_version=expected_version)
+
+        _with_retry(config, _mutate)
         return None
     return action
 
@@ -716,25 +854,30 @@ def preview_pending_action(config: Any, action_id: str) -> dict[str, Any] | None
 
 def cleanup_old_actions(config: Any, days: int = 30) -> int:
     """Remove executed/cancelled/expired actions older than N days. Returns count removed."""
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    removed = 0
-    for aid in list(data["actions"].keys()):
-        action = data["actions"][aid]
-        if action["state"] in ("executed", "cancelled", "expired"):
-            ts = action.get("executed_at") or action.get("cancelled_at") or action.get("expired_at") or ""
-            if ts:
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    if dt < cutoff:
-                        del data["actions"][aid]
-                        removed += 1
-                except (ValueError, TypeError):
-                    pass
-    if removed:
-        _save(config, data, expected_version=expected_version)
-    return removed
+
+    def _mutate(cfg: Any) -> int:
+        data = _load(cfg)
+        expected_version = data.get("_version", 0)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        removed = 0
+        for aid in list(data["actions"].keys()):
+            action = data["actions"][aid]
+            if action["state"] in ("executed", "cancelled", "expired"):
+                ts = action.get("executed_at") or action.get("cancelled_at") or action.get("expired_at") or ""
+                if ts:
+                    try:
+                        dt = datetime.fromisoformat(ts)
+                        if dt < cutoff:
+                            del data["actions"][aid]
+                            removed += 1
+                    except (ValueError, TypeError):
+                        pass
+        if removed:
+            _save(cfg, data, expected_version=expected_version)
+        return removed
+
+    result = _with_retry(config, _mutate)
+    return 0 if result is None else result
 
 
 def get_pending_summary(config: Any) -> dict[str, Any]:

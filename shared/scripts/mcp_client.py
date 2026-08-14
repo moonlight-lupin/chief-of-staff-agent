@@ -30,6 +30,11 @@ class MCPClient:
         self.key_env = key_env
         self._session_id: str | None = None
         self._initialized = False
+        self._id_counter = 0
+
+    def _next_id(self) -> int:
+        self._id_counter += 1
+        return self._id_counter
 
     def _get_key(self) -> str:
         key = os.getenv(self.key_env, "")
@@ -76,7 +81,7 @@ class MCPClient:
                 "capabilities": {},
                 "clientInfo": {"name": "chief-of-staff", "version": "0.3.15"},
             },
-            "id": 1,
+            "id": self._next_id(),
         }
         r = requests.post(self.endpoint, headers=self._headers(), json=payload, timeout=30)
         if r.status_code != 200:
@@ -116,9 +121,15 @@ class MCPClient:
             "jsonrpc": "2.0",
             "method": "tools/list",
             "params": {},
-            "id": 2,
+            "id": self._next_id(),
         }
         r = requests.post(self.endpoint, headers=self._headers(), json=payload, timeout=30)
+        if r.status_code in (401, 404, 410):
+            # Session lost — re-initialize and retry once
+            self._initialized = False
+            self._session_id = None
+            self.initialize()
+            r = requests.post(self.endpoint, headers=self._headers(), json=payload, timeout=30)
         if r.status_code != 200:
             raise ConnectionError(f"tools/list failed: HTTP {r.status_code}")
         result = self._parse_sse(r.text)
@@ -134,9 +145,15 @@ class MCPClient:
                 "name": name,
                 "arguments": arguments,
             },
-            "id": 3,
+            "id": self._next_id(),
         }
         r = requests.post(self.endpoint, headers=self._headers(), json=payload, timeout=60)
+        if r.status_code in (401, 404, 410):
+            # Session lost — re-initialize and retry once
+            self._initialized = False
+            self._session_id = None
+            self.initialize()
+            r = requests.post(self.endpoint, headers=self._headers(), json=payload, timeout=60)
         if r.status_code != 200:
             raise ConnectionError(f"tools/call '{name}' failed: HTTP {r.status_code} — {r.text[:200]}")
 
