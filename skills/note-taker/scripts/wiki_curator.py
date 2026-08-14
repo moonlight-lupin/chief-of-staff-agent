@@ -1249,11 +1249,13 @@ def _score_page(query: str, title: str, body: str, aliases: Sequence[str], tags:
     if title_fold and any(t in title_tokens for t in query_tokens):
         score += 3.0
 
-    # Body: TF using meaningful tokens
+    # Body: TF using meaningful tokens — scaled to compete with title/alias
     body_tokens = _tokens(body)
     if body_tokens:
         hit_count = sum(body_tokens.count(token) for token in query_tokens)
-        score += (hit_count / len(body_tokens)) * 1.0
+        if hit_count > 0:
+            # Log-damped: 1 hit = 1.0, 4 hits = 2.0, 16 hits = 3.0
+            score += min(3.0, 1.0 + (hit_count - 1) * 0.25)
 
     # Alias: exact normalized match only (no substring)
     alias_folds = [_safe_str(alias).casefold() for alias in aliases if _safe_str(alias)]

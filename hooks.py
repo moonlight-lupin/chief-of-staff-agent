@@ -551,6 +551,7 @@ def wiki_context_injection(context: dict = None, message: str = "", **kwargs) ->
                 sys.executable,
                 str(curator),
                 "search",
+                "--",
                 text,
                 "--format", "json",
                 "--limit", "5",
