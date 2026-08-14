@@ -115,6 +115,11 @@ def _save(config: Any, data: dict[str, Any], expected_version: int | None = None
                 fh.flush()
                 os.fsync(fh.fileno())
             tmp.replace(path)
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except Exception:
             try:
                 tmp.unlink(missing_ok=True)

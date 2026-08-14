@@ -155,16 +155,18 @@ def _save(config: Any, data: dict[str, Any], expected_version: int | None = None
     with file_lock.with_lock(str(path), timeout=10):
         # Version check inside the lock: defense in depth against a stale
         # in-memory snapshot from before the lock was acquired.
+        current = _load(config)
+        current_version = current.get("_version", 0) or 0
         if expected_version is not None:
-            current = _load(config)
-            current_version = current.get("_version", 0)
             if current_version != expected_version:
                 raise ConcurrencyError(
                     f"Pending actions changed since load (expected v{expected_version}, "
                     f"found v{current_version}). Reload and retry."
                 )
-
-        new_version = (data.get("_version", 0) or 0) + 1
+            new_version = current_version + 1
+        else:
+            # Derive from disk, not from stale in-memory data
+            new_version = max(data.get("_version", 0) or 0, current_version) + 1
         data["_version"] = new_version
 
         tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
@@ -174,6 +176,11 @@ def _save(config: Any, data: dict[str, Any], expected_version: int | None = None
                 fh.flush()
                 os.fsync(fh.fileno())
             tmp.replace(path)
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except Exception:
             try:
                 tmp.unlink(missing_ok=True)
@@ -550,17 +557,25 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     Returns the updated action, or None if:
     - not found
     - not in 'executing' state
+    - ConcurrencyError persists after 3 attempts
     """
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    action = data["actions"].get(action_id)
-    if not action or action["state"] != "executing":
-        return None
-
-    action["state"] = "executed"
-    action["executed_at"] = _now()
-    action["result"] = result
-    _save(config, data, expected_version=expected_version)
+    action: dict[str, Any] | None = None
+    for attempt in range(3):
+        data = _load(config)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] != "executing":
+            return None
+        action["state"] = "executed"
+        action["executed_at"] = _now()
+        action["result"] = result
+        try:
+            _save(config, data, expected_version=expected_version)
+            break
+        except ConcurrencyError:
+            if attempt == 2:
+                return None  # give up gracefully
+            continue
 
     try:
         from workspace_audit import audit_workspace_action
@@ -589,21 +604,30 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
     ``approved`` so it can be retried; at the cap it transitions to terminal
     ``failed`` and cannot be re-executed.
 
-    Returns the updated action, or None if not in 'executing' state.
+    Returns the updated action, or None if not in 'executing' state
+    or ConcurrencyError persists after 3 attempts.
     """
-    data = _load(config)
-    expected_version = data.get("_version", 0)
-    action = data["actions"].get(action_id)
-    if not action or action["state"] != "executing":
-        return None
+    action: dict[str, Any] | None = None
+    for attempt in range(3):
+        data = _load(config)
+        expected_version = data.get("_version", 0)
+        action = data["actions"].get(action_id)
+        if not action or action["state"] != "executing":
+            return None
 
-    action["retry_count"] = action.get("retry_count", 0) + 1
-    if action["retry_count"] >= MAX_RETRIES:
-        action["state"] = "failed"
-    else:
-        action["state"] = "approved"  # back to approved for retry
-    action["last_error"] = error
-    _save(config, data, expected_version=expected_version)
+        action["retry_count"] = action.get("retry_count", 0) + 1
+        if action["retry_count"] >= MAX_RETRIES:
+            action["state"] = "failed"
+        else:
+            action["state"] = "approved"  # back to approved for retry
+        action["last_error"] = error
+        try:
+            _save(config, data, expected_version=expected_version)
+            break
+        except ConcurrencyError:
+            if attempt == 2:
+                return None  # give up gracefully
+            continue
 
     try:
         from workspace_audit import audit_workspace_action

@@ -31,16 +31,32 @@ def get_webhook_secret() -> str | None:
     return os.getenv("CHIEF_OF_STAFF_WEBHOOK_SECRET")
 
 
-def sign_payload(body: bytes, secret: str) -> str:
-    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+def sign_payload(body: bytes, secret: str, timestamp: str | None = None) -> str:
+    if timestamp is not None:
+        message = timestamp.encode("utf-8") + b"." + body
+    else:
+        message = body
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
-def verify_signature(body: bytes, signature: str, secret: str | None = None) -> bool:
+def verify_signature(
+    body: bytes,
+    signature: str,
+    secret: str | None = None,
+    timestamp: str | None = None,
+) -> bool:
     if secret is None:
         secret = get_webhook_secret()
     if not secret:
         return False
-    expected = sign_payload(body, secret)
+    if timestamp is not None:
+        try:
+            skew = abs(int(time.time()) - int(timestamp))
+        except (ValueError, TypeError):
+            return False
+        if skew > 300:
+            return False
+    expected = sign_payload(body, secret, timestamp=timestamp)
     return hmac.compare_digest(expected, signature)
 
 
@@ -189,6 +205,7 @@ def validate_drive_headers(headers: dict[str, str]) -> tuple[bool, str]:
 # ─── Delivery-ID-based Replay Protection ─────────────────────
 
 REPLAY_TTL_SECONDS = 3600 * 24  # 24 hours
+PROCESSING_LEASE_SECONDS = 300  # 5 minutes — crashed-worker recovery
 
 
 def _replay_cache_path(config: Any) -> Path:
@@ -275,7 +292,14 @@ def reserve_delivery(
             if entry.get("state") == "done":
                 return False, "Replay detected: delivery already completed"
             if entry.get("state") == "processing":
-                return False, "Replay detected: delivery already processing"
+                age = now - entry.get("ts", 0)
+                if age < PROCESSING_LEASE_SECONDS:
+                    return False, "Replay detected: delivery already processing"
+                # Lease expired — reclaim
+                entries[delivery_id] = {"state": "processing", "ts": now}
+                cache["entries"] = entries
+                _save_replay_cache_unlocked(config, cache)
+                return True, "OK"
             return False, "Replay detected"
         else:
             entries[delivery_id] = {"state": "processing", "ts": now}

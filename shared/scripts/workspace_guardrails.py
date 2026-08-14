@@ -42,6 +42,7 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "drive.upload",
     "drive.download",
     "drive.delete",
+    "files.delete",
     "files.upload",
     "files.download",
     "files.trash",       # m365 OneDrive recycle-bin (reversible)
@@ -69,6 +70,7 @@ READ_ACTIONS: frozenset[str] = frozenset({
     "gmail.search",
     "gmail.read",
     "gmail.list",
+    "mail.list",
     "gmail.labels.list",
     "calendar.list",
     "calendar.get",
@@ -96,6 +98,7 @@ DESTRUCTIVE_ACTIONS: frozenset[str] = frozenset({
     "mail.send",
     "calendar.delete",
     "drive.delete",
+    "files.delete",
 })
 
 # Actions that create new objects but don't destroy existing ones, OR whose
