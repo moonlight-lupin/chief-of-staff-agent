@@ -295,26 +295,46 @@ def reserve_delivery(
                 age = now - entry.get("ts", 0)
                 if age < PROCESSING_LEASE_SECONDS:
                     return False, "Replay detected: delivery already processing"
-                # Lease expired — reclaim
-                entries[delivery_id] = {"state": "processing", "ts": now}
+                # Lease expired — reclaim with a new ownership token
+                lease_token = str(uuid.uuid4())
+                entries[delivery_id] = {
+                    "state": "processing",
+                    "ts": now,
+                    "lease_token": lease_token,
+                }
                 cache["entries"] = entries
                 _save_replay_cache_unlocked(config, cache)
                 return True, "OK"
             return False, "Replay detected"
         else:
-            entries[delivery_id] = {"state": "processing", "ts": now}
+            lease_token = str(uuid.uuid4())
+            entries[delivery_id] = {
+                "state": "processing",
+                "ts": now,
+                "lease_token": lease_token,
+            }
             cache["entries"] = entries
             _save_replay_cache_unlocked(config, cache)
             return True, "OK"
 
 
-def complete_delivery(config: Any, delivery_id: str) -> None:
-    """Mark a delivery as completed."""
+def complete_delivery(
+    config: Any, delivery_id: str, lease_token: str | None = None
+) -> None:
+    """Mark a delivery as completed.
+
+    If ``lease_token`` is provided and the entry has a different token,
+    this is a stale owner and the call is a no-op. ``lease_token=None``
+    (legacy callers) still completes the delivery.
+    """
     path = _replay_cache_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     with file_lock.with_lock(str(path), timeout=10):
         cache = _load_replay_cache(config)
         entries = cache.get("entries", {})
+        entry = entries.get(delivery_id)
+        if entry and lease_token and entry.get("lease_token") and entry.get("lease_token") != lease_token:
+            return  # stale owner — no-op
         if delivery_id in entries:
             entries[delivery_id]["state"] = "done"
             entries[delivery_id]["ts"] = time.time()
@@ -322,13 +342,23 @@ def complete_delivery(config: Any, delivery_id: str) -> None:
             _save_replay_cache_unlocked(config, cache)
 
 
-def release_delivery(config: Any, delivery_id: str) -> None:
-    """Release a delivery reservation on failure (allows retry)."""
+def release_delivery(
+    config: Any, delivery_id: str, lease_token: str | None = None
+) -> None:
+    """Release a delivery reservation on failure (allows retry).
+
+    If ``lease_token`` is provided and the entry has a different token,
+    this is a stale owner and the call is a no-op. ``lease_token=None``
+    (legacy callers) still releases the delivery.
+    """
     path = _replay_cache_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
     with file_lock.with_lock(str(path), timeout=10):
         cache = _load_replay_cache(config)
         entries = cache.get("entries", {})
+        entry = entries.get(delivery_id)
+        if entry and lease_token and entry.get("lease_token") and entry.get("lease_token") != lease_token:
+            return  # stale owner — no-op
         if delivery_id in entries:
             del entries[delivery_id]
             cache["entries"] = entries

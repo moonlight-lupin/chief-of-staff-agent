@@ -65,15 +65,23 @@ def _get_default_project_root_fallback() -> Path:
     return home / "projects" / "default"
 
 def _project_root(config: Any) -> Path:
-    """Get project root from config, env, or default."""
+    """Get project root from config or CHIEF_OF_STAFF_PROJECT_ROOT.
+
+    Raises RuntimeError when neither is set — do not silently write to
+    ~/.hermes/projects/default.
+    """
     root = None
     if isinstance(config, Mapping):
         paths = config.get("paths", {})
         if isinstance(paths, Mapping):
             root = paths.get("project_root")
     if not root:
-        root = os.getenv("CHIEF_OF_STAFF_PROJECT_ROOT",
-                         str(_get_default_project_root_fallback()))
+        root = os.getenv("CHIEF_OF_STAFF_PROJECT_ROOT")
+    if not root:
+        raise RuntimeError(
+            "Missing project root: set paths.project_root in config or "
+            "CHIEF_OF_STAFF_PROJECT_ROOT"
+        )
     return Path(str(root)).expanduser()
 
 

@@ -18,7 +18,7 @@ import json
 import os
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -49,6 +49,9 @@ EMPTY_TEMPLATES: dict[str, dict[str, list[Any]]] = {
     "expenses": {"expenses": []},
     "todos": {"todos": []},
 }
+
+MAX_BACKUPS = 20
+MAX_BACKUP_DAYS = 30
 
 
 def _plain(value: Any) -> Any:
@@ -190,6 +193,47 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
 
 
+def _backup_timestamp(path: Path, store_name: str) -> datetime:
+    """Parse timestamp from `{store}.{YYYYMMDDTHHMMSS.ffffffZ}.yaml`, else mtime."""
+    name = path.name
+    prefix = f"{store_name}."
+    suffix = ".yaml"
+    if name.startswith(prefix) and name.endswith(suffix):
+        ts_str = name[len(prefix) : -len(suffix)]
+        try:
+            return datetime.strptime(ts_str, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _prune_backups(backup_dir: Path, store_name: str) -> None:
+    """Keep at most MAX_BACKUPS recent files; drop backups older than MAX_BACKUP_DAYS."""
+    files = list(backup_dir.glob(f"{store_name}.*.yaml"))
+    if not files:
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_BACKUP_DAYS)
+    remaining: list[tuple[Path, datetime]] = []
+    for path in files:
+        ts = _backup_timestamp(path, store_name)
+        if ts < cutoff:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        remaining.append((path, ts))
+    remaining.sort(key=lambda item: item[1], reverse=True)
+    for path, _ in remaining[MAX_BACKUPS:]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def _fill_required_store_fields(store_name: str, data: dict[str, Any]) -> None:
     """Fill missing required schema fields on partial records.
 
@@ -242,6 +286,7 @@ def save_store_atomic(
         if path.exists():
             backup_path = backup_dir / f"{store_name}.{_timestamp()}.yaml"
             shutil.copy2(path, backup_path)
+            _prune_backups(backup_dir, store_name)
 
         os.replace(tmp_path, path)
         dir_fd = os.open(str(root), os.O_DIRECTORY)
@@ -270,14 +315,21 @@ def save_store_atomic(
             raise
         raise StateStoreError(f"Failed to save {store_name} store at {path}: {exc}") from exc
 
-    if action:
+    strict_stores = [s.strip() for s in os.getenv("CHIEF_OF_STAFF_AUDIT_STRICT", "").split(",") if s.strip()]
+    if action or store_name in strict_stores:
         try:
-            append_audit(store_name, action=action, before=dict(before or {}), after=dict(after or plain_data), actor=actor, config=config)
+            append_audit(
+                store_name,
+                action=action or "save",
+                before=dict(before or {}),
+                after=dict(after or plain_data),
+                actor=actor,
+                config=config,
+            )
         except Exception as audit_exc:
             # Best-effort audit: mutation already succeeded on disk.
             # Log warning to stderr but don't fail the operation.
             # Strict mode can be enabled per-store via CHIEF_OF_STAFF_AUDIT_STRICT env var.
-            strict_stores = os.getenv("CHIEF_OF_STAFF_AUDIT_STRICT", "").split(",")
             if store_name in strict_stores:
                 raise StateStoreError(
                     f"Mutation succeeded but audit log failed (strict mode for {store_name}): {audit_exc}"

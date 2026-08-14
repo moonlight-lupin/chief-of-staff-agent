@@ -35,7 +35,7 @@ from pending_actions import (  # noqa: E402
     mark_failed,
 )
 from schemas import generate_id  # noqa: E402
-from state_store import load_store, save_store_atomic  # noqa: E402
+from state_store import load_store, save_store_atomic, with_store_lock  # noqa: E402
 
 TERMINAL_STAGES = frozenset({"Paid", "Lost", "Cancelled"})
 DEFAULT_STALE_THRESHOLD_DAYS = 14
@@ -493,27 +493,28 @@ def _build_deal_from_payload(payload: Mapping[str, Any], config: Any) -> dict[st
 
 
 def _exec_deal_add(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
-    data = load_pipeline(config)
-    before = copy.deepcopy(data)
-    deals = data.setdefault("deals", [])
-    if not isinstance(deals, list):
-        raise ValueError("pipeline.yaml 'deals' must be a list")
+    with with_store_lock("pipeline", config=config):
+        data = load_pipeline(config)
+        before = copy.deepcopy(data)
+        deals = data.setdefault("deals", [])
+        if not isinstance(deals, list):
+            raise ValueError("pipeline.yaml 'deals' must be a list")
 
-    deal = _build_deal_from_payload(payload, config)
-    # Uniqueness check
-    existing_ids = {str(d.get("id")) for d in deals if isinstance(d, dict)}
-    if deal["id"] in existing_ids:
-        raise ValueError(f"Deal id already exists: {deal['id']}")
+        deal = _build_deal_from_payload(payload, config)
+        # Uniqueness check
+        existing_ids = {str(d.get("id")) for d in deals if isinstance(d, dict)}
+        if deal["id"] in existing_ids:
+            raise ValueError(f"Deal id already exists: {deal['id']}")
 
-    deals.append(deal)
-    save_pipeline(config, data, "add_deal", before, data)
-    return {
-        "success": True,
-        "action_type": "pipeline.deal.add",
-        "deal_id": deal["id"],
-        "client_name": deal.get("client_name"),
-        "stage": deal.get("stage"),
-    }
+        deals.append(deal)
+        save_pipeline(config, data, "add_deal", before, data)
+        return {
+            "success": True,
+            "action_type": "pipeline.deal.add",
+            "deal_id": deal["id"],
+            "client_name": deal.get("client_name"),
+            "stage": deal.get("stage"),
+        }
 
 
 def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -530,53 +531,54 @@ def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, 
             f"Invalid stage {new_stage!r}; valid stages: {', '.join(stages)}"
         )
 
-    data = load_pipeline(config)
-    before = copy.deepcopy(data)
-    deal = find_deal_by_id(data, deal_id)
-    if deal is None:
-        raise ValueError(f"Deal not found: {deal_id}")
-    _normalize_deal_lists(deal)
+    with with_store_lock("pipeline", config=config):
+        data = load_pipeline(config)
+        before = copy.deepcopy(data)
+        deal = find_deal_by_id(data, deal_id)
+        if deal is None:
+            raise ValueError(f"Deal not found: {deal_id}")
+        _normalize_deal_lists(deal)
 
-    old_stage = deal.get("stage")
-    now = _today()
-    note_text = str(payload.get("note") or payload.get("reason") or "").strip()
-    if not note_text:
-        note_text = f"Stage moved from {old_stage} to {new_stage}"
+        old_stage = deal.get("stage")
+        now = _today()
+        note_text = str(payload.get("note") or payload.get("reason") or "").strip()
+        if not note_text:
+            note_text = f"Stage moved from {old_stage} to {new_stage}"
 
-    deal["stage"] = new_stage
-    deal["last_activity"] = now
-    deal.setdefault("stage_history", []).append({"stage": new_stage, "at": now})
-    # Append audit note for stage move
-    deal.setdefault("notes", []).append(
-        {
-            "at": _now_iso(),
-            "note": note_text,
-            "kind": "stage_move",
+        deal["stage"] = new_stage
+        deal["last_activity"] = now
+        deal.setdefault("stage_history", []).append({"stage": new_stage, "at": now})
+        # Append audit note for stage move
+        deal.setdefault("notes", []).append(
+            {
+                "at": _now_iso(),
+                "note": note_text,
+                "kind": "stage_move",
+                "from_stage": old_stage,
+                "to_stage": new_stage,
+            }
+        )
+        if payload.get("status"):
+            deal["status"] = str(payload.get("status")).strip()
+
+        report = validate_deal(deal, config)
+        if not report["valid"]:
+            raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
+
+        save_pipeline(
+            config,
+            data,
+            "move_stage",
+            {"id": deal_id, "stage": old_stage},
+            {"id": deal_id, "stage": new_stage},
+        )
+        return {
+            "success": True,
+            "action_type": "pipeline.deal.move_stage",
+            "deal_id": deal_id,
             "from_stage": old_stage,
             "to_stage": new_stage,
         }
-    )
-    if payload.get("status"):
-        deal["status"] = str(payload.get("status")).strip()
-
-    report = validate_deal(deal, config)
-    if not report["valid"]:
-        raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
-
-    save_pipeline(
-        config,
-        data,
-        "move_stage",
-        {"id": deal_id, "stage": old_stage},
-        {"id": deal_id, "stage": new_stage},
-    )
-    return {
-        "success": True,
-        "action_type": "pipeline.deal.move_stage",
-        "deal_id": deal_id,
-        "from_stage": old_stage,
-        "to_stage": new_stage,
-    }
 
 
 def _exec_deal_add_note(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -587,38 +589,39 @@ def _exec_deal_add_note(config: Any, payload: Mapping[str, Any]) -> dict[str, An
     if note_text is None or str(note_text).strip() == "":
         raise ValueError("payload.note is required")
 
-    data = load_pipeline(config)
-    before = copy.deepcopy(data)
-    deal = find_deal_by_id(data, deal_id)
-    if deal is None:
-        raise ValueError(f"Deal not found: {deal_id}")
-    _normalize_deal_lists(deal)
+    with with_store_lock("pipeline", config=config):
+        data = load_pipeline(config)
+        before = copy.deepcopy(data)
+        deal = find_deal_by_id(data, deal_id)
+        if deal is None:
+            raise ValueError(f"Deal not found: {deal_id}")
+        _normalize_deal_lists(deal)
 
-    entry = {
-        "at": _now_iso(),
-        "note": str(note_text).strip(),
-    }
-    # Optional author / kind
-    if payload.get("author"):
-        entry["author"] = str(payload["author"])
-    if payload.get("kind"):
-        entry["kind"] = str(payload["kind"])
+        entry = {
+            "at": _now_iso(),
+            "note": str(note_text).strip(),
+        }
+        # Optional author / kind
+        if payload.get("author"):
+            entry["author"] = str(payload["author"])
+        if payload.get("kind"):
+            entry["kind"] = str(payload["kind"])
 
-    deal.setdefault("notes", []).append(entry)
-    if payload.get("touch_activity", True):
-        deal["last_activity"] = _today()
+        deal.setdefault("notes", []).append(entry)
+        if payload.get("touch_activity", True):
+            deal["last_activity"] = _today()
 
-    report = validate_deal(deal, config)
-    if not report["valid"]:
-        raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
+        report = validate_deal(deal, config)
+        if not report["valid"]:
+            raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
 
-    save_pipeline(config, data, "add_note", before, data)
-    return {
-        "success": True,
-        "action_type": "pipeline.deal.add_note",
-        "deal_id": deal_id,
-        "note": entry,
-    }
+        save_pipeline(config, data, "add_note", before, data)
+        return {
+            "success": True,
+            "action_type": "pipeline.deal.add_note",
+            "deal_id": deal_id,
+            "note": entry,
+        }
 
 
 def _exec_deal_link_document(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -647,37 +650,38 @@ def _exec_deal_link_document(config: Any, payload: Mapping[str, Any]) -> dict[st
     if not doc_path:
         raise ValueError("payload.path (document path) is required")
 
-    data = load_pipeline(config)
-    before = copy.deepcopy(data)
-    deal = find_deal_by_id(data, deal_id)
-    if deal is None:
-        raise ValueError(f"Deal not found: {deal_id}")
-    _normalize_deal_lists(deal)
+    with with_store_lock("pipeline", config=config):
+        data = load_pipeline(config)
+        before = copy.deepcopy(data)
+        deal = find_deal_by_id(data, deal_id)
+        if deal is None:
+            raise ValueError(f"Deal not found: {deal_id}")
+        _normalize_deal_lists(deal)
 
-    doc: dict[str, Any] = {
-        "type": doc_type,
-        "path": doc_path,
-        "status": doc_status,
-        "linked_at": _now_iso(),
-    }
-    if payload.get("name"):
-        doc["name"] = str(payload["name"])
+        doc: dict[str, Any] = {
+            "type": doc_type,
+            "path": doc_path,
+            "status": doc_status,
+            "linked_at": _now_iso(),
+        }
+        if payload.get("name"):
+            doc["name"] = str(payload["name"])
 
-    deal.setdefault("documents", []).append(doc)
-    if payload.get("touch_activity", True):
-        deal["last_activity"] = _today()
+        deal.setdefault("documents", []).append(doc)
+        if payload.get("touch_activity", True):
+            deal["last_activity"] = _today()
 
-    report = validate_deal(deal, config)
-    if not report["valid"]:
-        raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
+        report = validate_deal(deal, config)
+        if not report["valid"]:
+            raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
 
-    save_pipeline(config, data, "link_doc", before, data)
-    return {
-        "success": True,
-        "action_type": "pipeline.deal.link_document",
-        "deal_id": deal_id,
-        "document": doc,
-    }
+        save_pipeline(config, data, "link_doc", before, data)
+        return {
+            "success": True,
+            "action_type": "pipeline.deal.link_document",
+            "deal_id": deal_id,
+            "document": doc,
+        }
 
 
 # ---------------------------------------------------------------------------

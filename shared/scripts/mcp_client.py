@@ -92,7 +92,12 @@ class MCPClient:
 
         # Send initialized notification (required by MCP protocol)
         notif = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
-        requests.post(self.endpoint, headers=self._headers(), json=notif, timeout=10)
+        r = requests.post(self.endpoint, headers=self._headers(), json=notif, timeout=10)
+        if r.status_code != 200:
+            self._initialized = False
+            raise ConnectionError(
+                f"MCP notifications/initialized failed: HTTP {r.status_code} — {r.text[:200]}"
+            )
 
         return result
 
