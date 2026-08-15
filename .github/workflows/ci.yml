@@ -28,24 +28,24 @@ jobs:
           python -m pip install pytest
       - name: Lint (ruff)
         run: |
-          python -m pip install ruff
+          # Pinned: an unpinned ruff picks up new rules on release day and turns
+          # a green branch red without a code change. The rule set itself is
+          # declared in pyproject.toml [tool.ruff.lint].
+          python -m pip install 'ruff==0.16.3'
           ruff check shared/ skills/ hooks.py __init__.py
       - name: Dependency sanity check
         run: |
+          # Reuses the same check `chief_of_staff.py doctor` runs, so CI and the
+          # operator-facing health check can never disagree about what a working
+          # install means.
           python -c "
-          import importlib, sys
-          missing = []
-          for mod in ('yaml', 'docx', 'fitz', 'requests', 'google.auth', 'cryptography', 'msal'):
-              try:
-                  importlib.import_module(mod)
-              except BaseException as exc:
-                  missing.append(f'{mod}: {type(exc).__name__}: {exc}')
-          if missing:
-              print('Declared dependencies are not importable:')
-              for m in missing:
-                  print('  ' + m)
-              sys.exit(1)
-          print('All declared dependencies import cleanly.')
+          import sys
+          sys.path.insert(0, 'shared/scripts')
+          from pathlib import Path
+          from doctor_base import _check_packages
+          result = _check_packages(False, None, Path('.'))
+          print(f'{result.status}: {result.detail}')
+          sys.exit(0 if result.status == 'pass' else 1)
           "
       - name: Run tests
         run: python -m pytest --junitxml=pytest-results.xml -q

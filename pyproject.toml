@@ -18,6 +18,13 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
+# Declared explicitly rather than inherited. Ruff's *default* select changed in
+# 0.16 from the classic pycodestyle/pyflakes set to a much broader one, which
+# turned a clean local run into 859 CI findings overnight. Pinning the version
+# in CI is not enough on its own — the selected rules have to be a decision the
+# project makes, not a default it happens to receive.
+select = ["E4", "E7", "E9", "F"]
+
 # E402 is structural here: every script bootstraps sys.path so that
 # shared/scripts/ is importable before it imports from it. Moving those imports
 # to the top of the file would break the plugin's flat-script layout.
