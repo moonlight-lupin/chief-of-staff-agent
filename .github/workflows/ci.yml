@@ -29,8 +29,24 @@ jobs:
       - name: Lint (ruff)
         run: |
           python -m pip install ruff
-          ruff check shared/scripts/ --select=E9,F63,F7,F82 --ignore=F401,F811
-        continue-on-error: true
+          ruff check shared/ skills/ hooks.py __init__.py
+      - name: Dependency sanity check
+        run: |
+          python -c "
+          import importlib, sys
+          missing = []
+          for mod in ('yaml', 'docx', 'fitz', 'requests', 'google.auth', 'cryptography', 'msal'):
+              try:
+                  importlib.import_module(mod)
+              except BaseException as exc:
+                  missing.append(f'{mod}: {type(exc).__name__}: {exc}')
+          if missing:
+              print('Declared dependencies are not importable:')
+              for m in missing:
+                  print('  ' + m)
+              sys.exit(1)
+          print('All declared dependencies import cleanly.')
+          "
       - name: Run tests
         run: python -m pytest --junitxml=pytest-results.xml -q
       - name: Upload pytest results

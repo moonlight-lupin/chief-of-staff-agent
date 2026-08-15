@@ -411,7 +411,7 @@ def collect_knowledge_stats(config: object) -> dict[str, object]:
             if isinstance(records, dict):
                 stats["total_records"] = len(records)
                 # v0.2.7: lint memory records
-                from datetime import datetime, timezone, timedelta
+                from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
                 seen_names: dict[str, str] = {}
                 for rid, rec in records.items():
@@ -539,14 +539,11 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
             wiki_path_str = str(root / "wiki")
         wiki_path = Path(wiki_path_str)
         if wiki_path.exists():
-            import re as _re
-            wikilink_re = _re.compile(r"\[\[([^\]]+)\]\]")
             for md_file in wiki_path.rglob("*.md"):
                 try:
                     text = md_file.read_text(encoding="utf-8")
                 except Exception:
                     continue
-                rel = md_file.relative_to(wiki_path).as_posix()
                 # Missing frontmatter
                 if not text.startswith("---\n"):
                     stats["wiki_missing_frontmatter"] = stats["wiki_missing_frontmatter"] + 1 if isinstance(stats["wiki_missing_frontmatter"], int) else 1
@@ -631,7 +628,7 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
         except Exception:
             pass
 
-        from datetime import date as _date, datetime as _dt
+        from datetime import date as _date
         today = _date.today()
         oldest_days = 0
 

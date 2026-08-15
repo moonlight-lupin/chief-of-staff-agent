@@ -21,7 +21,6 @@ execute then sets the destructive guardrail envs for that call only.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -302,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     execute = sub.add_parser("execute", help="Execute an approved Gmail send")
     execute.add_argument("--action-id", required=True)
 
-    summary_cmd = sub.add_parser("summary", help="Print pending action summary by state")
+    sub.add_parser("summary", help="Print pending action summary by state")
 
     return parser
 

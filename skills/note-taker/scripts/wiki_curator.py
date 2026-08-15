@@ -1000,7 +1000,6 @@ Auto-regenerated summary of the Chief-of-Staff wiki.
             if not isinstance(changes_list, list):
                 changes_list = []
 
-            from datetime import timezone as _tz
             ts = self.now.isoformat()
             for ch in self.changes:
                 # Skip the "append action log" meta-change

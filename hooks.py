@@ -127,7 +127,7 @@ def company_context_primer(context: dict = None, **kwargs) -> Optional[str]:
     if root and root.exists():
         # Quick deadline check
         try:
-            from date_utils import days_until, categorize_deadline
+            from date_utils import categorize_deadline
             custom = config.get("deadlines", {}).get("custom", [])
             overdue = []
             for d in custom:
@@ -252,7 +252,7 @@ def yaml_integrity_checker(tool_name: str = "", args: dict = None, result: str =
             pass  # File might have been moved/deleted, not our concern
 
     if errors:
-        return f"⚠️ YAML integrity check failed after write:\n" + "\n".join(f"  • {e}" for e in errors)
+        return "⚠️ YAML integrity check failed after write:\n" + "\n".join(f"  • {e}" for e in errors)
     return None
 
 
@@ -334,7 +334,7 @@ def pipeline_stage_validator(tool_name: str = "", args: dict = None, context: di
                 warnings.append(f"'{kw_clean}' is not a configured sales stage. Valid stages: {', '.join(valid_stages)}")
 
     if warnings:
-        return f"⚠️ Pipeline stage validation:\n" + "\n".join(f"  • {w}" for w in warnings)
+        return "⚠️ Pipeline stage validation:\n" + "\n".join(f"  • {w}" for w in warnings)
     return None
 
 

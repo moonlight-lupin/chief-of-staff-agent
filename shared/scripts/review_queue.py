@@ -30,7 +30,7 @@ for _path in (_SCRIPT_DIR, _DOC_PREPARER_SCRIPTS):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from action_risk import ACTION_RISK_MAP, get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
+from action_risk import get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
 from config_loader import get_project_root, load_config  # noqa: E402
 from pending_actions import (  # noqa: E402
     approve_pending_action,

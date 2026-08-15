@@ -399,10 +399,40 @@ class TestRecommendedCommands:
 # ─── Version & Docs ─────────────────────────────────────────
 
 class TestVersionAndDocs:
-    def test_version_is_031(self):
+    def test_version_pins_agree(self):
+        """All four version pins must agree — drift is how --help ended up
+        advertising v0.3.7 while the plugin shipped 0.3.24."""
+        import re as _re
+        import sys as _sys
         import yaml
-        data = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())
-        assert data.get("version") == "0.3.24"
+
+        plugin_version = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())["version"]
+
+        pyproject = (PLUGIN_ROOT / "pyproject.toml").read_text()
+        pyproject_version = _re.search(r'^version = "([^"]+)"', pyproject, _re.M).group(1)
+
+        _sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        import chief_of_staff
+        entrypoint_version = chief_of_staff.VERSION
+
+        readme = (PLUGIN_ROOT / "README.md").read_text()
+        readme_version = _re.search(r"\*\*Status:\*\* v([0-9.]+)", readme).group(1)
+
+        assert plugin_version == pyproject_version == entrypoint_version == readme_version, (
+            f"version pins disagree: plugin.yaml={plugin_version} "
+            f"pyproject={pyproject_version} entrypoint={entrypoint_version} "
+            f"README={readme_version}"
+        )
+
+    def test_help_text_reports_current_version(self):
+        """--help is the first thing a human or agent reads."""
+        import sys as _sys
+        _sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        import chief_of_staff
+        description = chief_of_staff.build_parser().description or ""
+        assert f"v{chief_of_staff.VERSION}" in description, (
+            f"--help description does not name the current version: {description!r}"
+        )
 
     def test_beta_docs_exist(self):
         assert (PLUGIN_ROOT / "docs" / "BETA_DAILY_LOOP.md").exists()

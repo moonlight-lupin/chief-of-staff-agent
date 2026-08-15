@@ -16,10 +16,8 @@ Commands:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
-from typing import Any
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
@@ -178,7 +176,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
 
-    from suggested_actions import render_digest, deliver_cli_digest, deliver_email_digest, mark_notified, list_suggestions
+    from suggested_actions import render_digest, deliver_cli_digest, deliver_email_digest, mark_notified
 
     digest = render_digest(
         cfg, state=args.state,

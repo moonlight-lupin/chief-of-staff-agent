@@ -1,6 +1,6 @@
 [project]
 name = "chief-of-staff-plugin"
-version = "0.3.24"
+version = "0.4.0"
 description = "Hermes Chief-of-Staff plugin foundation layer"
 requires-python = ">=3.11"
 dependencies = [
@@ -12,3 +12,13 @@ dependencies = [
   "cryptography>=38.0",
   "msal>=1.28",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# E402 is structural here: every script bootstraps sys.path so that
+# shared/scripts/ is importable before it imports from it. Moving those imports
+# to the top of the file would break the plugin's flat-script layout.
+ignore = ["E402"]

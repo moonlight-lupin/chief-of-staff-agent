@@ -197,12 +197,12 @@ def _dedupe(locations: list[SignatureLocation]) -> list[SignatureLocation]:
     result: list[SignatureLocation] = []
     for loc in sorted(
         locations,
-        key=lambda l: (
-            l.page or 0,
-            l.paragraph if l.paragraph is not None else -1,
-            l.coordinates[1] if l.coordinates else -1,
-            l.coordinates[0] if l.coordinates else -1,
-            l.location_type,
+        key=lambda loc_: (
+            loc_.page or 0,
+            loc_.paragraph if loc_.paragraph is not None else -1,
+            loc_.coordinates[1] if loc_.coordinates else -1,
+            loc_.coordinates[0] if loc_.coordinates else -1,
+            loc_.location_type,
         ),
     ):
         coord_key = tuple(round(x, 1) for x in loc.coordinates) if loc.coordinates else None

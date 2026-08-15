@@ -16,7 +16,7 @@ import os
 import platform
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -37,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.3.24"
+VERSION = "0.4.0"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -97,7 +97,6 @@ from cos_helpers import (  # noqa: E402
     _resolve_hermes_home,
     _get_action_risk,
     _call_collector,
-    _indent_lines,
     _json_dump,
 )
 
@@ -1261,7 +1260,7 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Readiness report (v0.3.7) — generated go/no-go check
+# Readiness report — generated go/no-go check
 # ---------------------------------------------------------------------------
 
 # Row status vocabulary
@@ -1724,6 +1723,67 @@ _DEMO_CONFIG = {
 }
 
 
+_DEMO_TIMESTAMP_KEYS = ("date", "start", "end", "generated_at")
+
+
+def _reanchor_demo_envelope(envelope: Any) -> Any:
+    """Shift the bundled sample envelope so its anchor day becomes today.
+
+    ``examples/sample-workspace.json`` is a hand-written fixture anchored on a
+    fixed day. Rendered verbatim, the demo prints months-old timestamps under
+    headings like "next 48h", which is the first thing a new user sees. Shift
+    every timestamp by whole days so time-of-day and the relative spacing
+    between records are preserved while "today" is genuinely today.
+
+    Best-effort: an envelope without a parseable ``generated_at``, or an
+    individual value that will not parse, is left untouched.
+    """
+    if not isinstance(envelope, dict):
+        return envelope
+
+    anchor_raw = envelope.get("generated_at")
+    anchor = _parse_demo_ts(anchor_raw)
+    if anchor is None:
+        return envelope
+
+    shift = timedelta(days=(datetime.now(timezone.utc).date() - anchor.date()).days)
+    if not shift:
+        return envelope
+
+    def _shift(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                k: (_shift_ts(v, shift) if k in _DEMO_TIMESTAMP_KEYS else _shift(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_shift(v) for v in value]
+        return value
+
+    return _shift(envelope)
+
+
+def _parse_demo_ts(raw: Any) -> datetime | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _shift_ts(raw: Any, shift: timedelta) -> Any:
+    parsed = _parse_demo_ts(raw)
+    if parsed is None:
+        return raw
+    shifted = parsed + shift
+    # Preserve the fixture's trailing-Z spelling rather than +00:00.
+    if isinstance(raw, str) and raw.endswith("Z"):
+        return shifted.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return shifted.isoformat()
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     """Render the daily briefing from the bundled ``examples/`` sample data.
 
@@ -1778,6 +1838,10 @@ def cmd_demo(args: argparse.Namespace) -> int:
             print(f"demo error: could not load sample workspace envelope: {exc}", file=sys.stderr)
             return 1
 
+        # The fixture is anchored on a fixed day; re-anchor it on today so the
+        # demo never advertises months-old mail under "today's" headings.
+        workspace_input = _reanchor_demo_envelope(workspace_input)
+
         try:
             briefing = daily_briefing_mod.build_briefing(
                 str(cfg_path), workspace_input=workspace_input
@@ -1794,7 +1858,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Logs subcommand group (v0.3.7) — read-only observability + self-diagnosis
+# Logs subcommand group — read-only observability + self-diagnosis
 # ---------------------------------------------------------------------------
 
 import re as _re
@@ -2212,8 +2276,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chief_of_staff.py",
         description=(
-            "Chief-of-Staff v0.3.7 — read-only daily operating loop and subsystem summaries. "
-            "Never approves, executes, or mutates state."
+            f"Chief-of-Staff v{VERSION} — read-only daily operating loop and subsystem "
+            "summaries. Never approves, executes, or mutates state."
         ),
     )
     parser.add_argument(

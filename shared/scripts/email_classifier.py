@@ -26,7 +26,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from email_label_policy import (
     CATEGORY_KEYWORDS, infer_category, _normalize,
-    load_policy, policy_path,
+    load_policy,
 )
 
 
@@ -127,7 +127,6 @@ def classify_email(
     best_reason = "No policy category match"
 
     for cat_name, cat_data in categories.items():
-        preferred_label = cat_data.get("preferred_label", "")
         aliases = cat_data.get("aliases", [])
 
         # Check if email matches this category's keywords
@@ -142,7 +141,6 @@ def classify_email(
                     break
 
         # Also check if sender domain matches label name pattern
-        label_text = _normalize(preferred_label)
         for alias in aliases:
             if _normalize(alias) in text and _normalize(alias) not in _normalize(subject):
                 conf = 0.75
@@ -530,7 +528,7 @@ def prepare_pending_from_suggestion(
         "mode": "pending_created",
         "action_type": action_type,
         "action_id": action["id"] if action else None,
-        "message": f"Pending action created — approve and execute via email_organisation.py",
+        "message": "Pending action created — approve and execute via email_organisation.py",
     }
 
 
@@ -593,8 +591,8 @@ def render_email_org_digest(config: Any) -> dict[str, Any]:
 
     # Build text
     lines = [
-        f"📬 Email Organisation Digest",
-        f"",
+        "📬 Email Organisation Digest",
+        "",
         f"Classified: {total_cls}",
         f"With category: {len(with_cat)}",
         f"Unmapped: {len(unmapped)}",
@@ -607,8 +605,8 @@ def render_email_org_digest(config: Any) -> dict[str, Any]:
             lines.append(f"  {cat}: {count}")
 
     lines.extend([
-        f"",
-        f"Suggestions:",
+        "",
+        "Suggestions:",
         f"  Label: {len(label_sugs)}",
         f"  Archive: {len(archive_sugs)}",
         f"  Create label: {len(create_label_sugs)}",

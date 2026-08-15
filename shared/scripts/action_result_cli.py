@@ -95,7 +95,7 @@ def summarize_result(result: dict[str, Any], label: str | None = None) -> str:
     else:
         # Single action result
         if audited == "yes":
-            lines.append(f"Audited: yes")
+            lines.append("Audited: yes")
         # Extract useful data fields
         for key in ("id", "path", "webViewLink", "htmlLink", "display_url"):
             if key in data:

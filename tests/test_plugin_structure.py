@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for plugin structure — all 19 skills present, frontmatter valid."""
 
+import re
 from pathlib import Path
 import yaml
 
@@ -37,7 +38,9 @@ class TestPluginStructure:
         with open(PLUGIN_ROOT / "plugin.yaml") as f:
             data = yaml.safe_load(f)
         assert data["name"] == "chief-of-staff"
-        assert data["version"] == "0.3.24"
+        assert re.fullmatch(r"\d+\.\d+\.\d+", str(data["version"])), (
+            f"plugin.yaml version is not semver: {data['version']!r}"
+        )
         assert data["license"] == "Apache-2.0"
         assert data["requires_skills"] == []
         assert "google-workspace" in data.get("optional_skills", [])

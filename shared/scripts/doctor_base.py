@@ -32,7 +32,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for doctor.py") from exc
 
-from config_loader import get_project_root, is_default_assistant_name, load_config, load_dotenv_file
+from config_loader import is_default_assistant_name, load_config, load_dotenv_file
 from state_store import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -289,19 +289,18 @@ def _check_google_auth(fix: bool, data: dict[str, Any] | None, config_path: Path
     try:
         sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
         from providers.google_workspace import _find_google_api_script
-        script = _find_google_api_script()
-        details.append(f"google_api_script: found")
+        _find_google_api_script()
+        details.append("google_api_script: found")
     except FileNotFoundError:
         details.append("google_api_script: NOT found")
         all_pass = False
-        script = None
 
     # Check service account file
     sa_path = str(google.get("service_account_path", ""))
     if sa_path:
         sa = Path(sa_path).expanduser()
         if sa.exists():
-            details.append(f"google_service_account_file: found")
+            details.append("google_service_account_file: found")
         else:
             details.append(f"google_service_account_file: NOT found at {sa}")
             all_pass = False
@@ -470,7 +469,7 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
                 if not api_key_verified:
                     return CheckResult("docuseal", "warn", f"{detail}, API key check failed (HTTP {api_resp.status})")
                 else:
-                    detail += f", API key OK"
+                    detail += ", API key OK"
             except urllib.error.HTTPError as api_exc:
                 if api_exc.code in (401, 403):
                     return CheckResult("docuseal", "fail", f"HTTP {resp.status}, API key invalid (HTTP {api_exc.code})")
@@ -962,11 +961,9 @@ def _check_capability_report(fix: bool, data: dict[str, Any] | None, config_path
         return CheckResult("capabilities", "warn", "config not loaded")
     integrations = data.get("integrations", {})
     workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
-    provider = str(workspace.get("provider", "google_api") or "google_api")
     try:
-        from workspace_capabilities import get_capabilities, unsupported_actions, all_actions
+        from workspace_capabilities import unsupported_actions, all_actions
         cap_provider = _capability_provider_for_workspace(workspace)
-        caps = get_capabilities(cap_provider)
         unsupported = unsupported_actions(cap_provider)
         total = len(all_actions())
         supported = total - len(unsupported)

@@ -106,7 +106,6 @@ def ensure_workspace_config(config: Any) -> None:
 
 def _get_workspace_client(config: Any):
     """Get a WorkspaceClient from config. Falls back to google_api if no integrations section."""
-    import os as _os
     _script_dir = PLUGIN_ROOT / "shared" / "scripts"
     if str(_script_dir) not in sys.path:
         sys.path.insert(0, str(_script_dir))
@@ -877,7 +876,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _build_structured_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50,
                                workspace_input: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the structured briefing data shape for v0.2.3."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timezone
 
     config = load_config(config_path)
     operator = "Operator"
