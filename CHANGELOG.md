@@ -1,5 +1,15 @@
 # Changelog
 
+All notable changes to Chief of Staff, newest first.
+
+> **On this file's provenance.** Entries from **v0.3.8 onward were written at
+> release time**. Entries for **v0.1.0–v0.3.7 were reconstructed on 2026-08-15**
+> from the full git history (160 commits, `0f96090..cc78d24`) — `CHANGELOG.md`
+> was not created until v0.3.8, so those releases had never been documented
+> anywhere. Reconstructed entries are marked by the divider below and are
+> necessarily terser: they record what the commits changed, and anything that
+> only ever lived in a reviewer's head is not recoverable.
+
 ## v0.4.0 — Safety hardening complete, agent execution seam, release readiness
 
 The largest release so far, and the first where the safety model is enforceable
@@ -627,3 +637,475 @@ probe showed the path still does not work end-to-end.
 - Freemail domain list expanded (`googlemail.com`, `live.com`, `icloud.com`, `proton.me`, etc.).
 - README note: "Never paste API keys or secrets directly into chat logs."
 - `.gitignore` entry for `skills.local/` overlay.
+---
+
+# Reconstructed history (v0.3.7 and earlier)
+
+Everything below was reconstructed from git history on 2026-08-15. `CHANGELOG.md`
+did not exist until v0.3.8, so these releases were never written up at the time.
+Each entry summarises what its commits actually changed; they are terser than the
+contemporaneous entries above, and detail that never reached a commit message is
+not recoverable.
+
+---
+
+## v0.3.7 — Microsoft 365 via Composio (toolkit families, config-driven slugs)
+
+Composio's managed OAuth — Connect Link, no Entra app, no admin consent — now
+drives Microsoft 365: Outlook mail and calendar plus OneDrive.
+
+- **Toolkit families.** `integrations.workspace.family: google | microsoft`.
+  Google stays the default and its existing behaviour is treated as a
+  byte-for-byte compatibility contract; the provider name `composio:mcp` is
+  unchanged. Microsoft reports as `composio_microsoft:mcp`.
+- **Config-driven tool slugs** rather than hardcoded names, so a slug rename
+  upstream is a config edit.
+- Live Composio M365 verification over two runs corrected the Outlook and
+  OneDrive slugs, argument shapes, and envelope handling; OneDrive connected and
+  `files_read` passed. Documentation was corrected to the live-verified names.
+- Removed `LIVE_VERIFY_RESULTS.md`, a point-in-time test log that did not belong
+  in the repository.
+
+## v0.3.6 — Onboarding friction fixes and assistant naming
+
+Every fix here traces to an observed stumble in a fresh-operator friction audit
+(17 stumbles, 2 blockers) rather than to hypothesis.
+
+- **Config auto-discovery.** `connect_workspace` resolves `company.yaml` through
+  the same chain as `chief_of_staff` (`--config` > `CHIEF_OF_STAFF_CONFIG` >
+  plugin default), and announces which one it used.
+- **Assistant naming.** `bootstrap.py` injects `{assistant_name}` and
+  `{company_name}` into the routing descriptions of five skills after
+  `company.yaml` is written, so "Ask Arthur to check my email" routes to the
+  operator's own Chief of Staff. Injection is idempotent, sandboxed in tests, and
+  scrubs aliases. `doctor` warns when `assistant.name` is unset.
+- **Gmail attachments.** `GmailClient` gains `list_attachments()` and
+  `download_attachment()`, with a backward-compatible `get_attachment()` wrapper.
+- Demo hygiene, the skill count corrected to 18, and `.env` exported properly.
+- README rewritten for prospective adopters, then reordered to lead with the
+  agent-driven install path.
+
+## v0.3.5 — esign-connector v0.2.0 + council code review fixes
+
+- **esign-connector v0.2.0**: dual-token auth, no browser login required.
+- E-sign onboarding folded into `bootstrap` and the setup guide.
+- Addressed a three-reviewer code review: 4 blocking, 8 major, 6 minor findings.
+- 19 new tests for e-sign onboarding and the doctor DocuSeal check; a
+  `User-Agent` header added to the DocuSeal health check.
+- Version bumped across all three sources of truth (`plugin.yaml`,
+  `pyproject.toml`, the entrypoint) plus the README status line, which was then
+  guarded by the version test.
+
+## v0.3.4 — Observability and self-diagnosis
+
+Operational logging kept distinct from — and linked to, never merged with — the
+audit log.
+
+- **Structured runtime logger** (`runtime_log.py`): per-run JSONL events and a
+  summary under `project_root/.runs/<run_id>/`, a stable schema, contextvars run
+  context, cross-process propagation via `CHIEF_OF_STAFF_RUN_ID`, and
+  conventional levels with `--log-level` / `--quiet`.
+- **Deterministic diagnosis** and redacted support bundles, so a failure becomes
+  a finding with a remediation command rather than a stack trace.
+- Follow-up fixes for run-context integrity, transport failure events, and
+  honest counters.
+
+## v0.3.3 — Workspace readiness and onboarding
+
+- **Per-capability verification** (`connect_workspace --verify`):
+  `workspace_verify.py` probes auth, mail read, folder-scoped search, categories,
+  calendar, and files independently, because a single `health_check()` cannot
+  detect partially-granted Entra permissions. Read failures are detected via
+  warning capture.
+- **Honest readiness semantics.** `write_ready` reports `yes` only when writes
+  were requested, at least one representative write actually ran, every test
+  passed, and all cleanup succeeded. `partial` covers not-requested, unsupported,
+  or not-tested; `no` on any tested-write or cleanup failure. No false positives.
+
+## v0.3.2 — Microsoft 365 Tier-1 operational hardening
+
+Graph API resilience behind a new `_send` HTTP seam, leaving the existing
+`_request` / `requests.request` test seams untouched.
+
+- **Throttle retry** on 429/503/504: up to 3 retries honouring `Retry-After`,
+  falling back to 1s/2s/4s exponential backoff, capped at 30s per wait, with an
+  injectable sleep. Exhausted retries fail exactly as a non-2xx does today.
+- **Method-aware retry policy.** 503/504 no longer auto-retry non-idempotent
+  methods. A gateway timeout is ambiguous — `sendMail`, draft, event, move, and
+  category creation may have completed upstream — so these fail once with *"The
+  request may have completed, but confirmation was not received. Do not retry
+  automatically; verify the external system first."*
+- **`@odata.nextLink` pagination** across mail search, calendar list, and file
+  search.
+- Token refresh.
+
+## v0.3.1 — Provider-neutral workspace seam, agent fetch/compute split, M365 provider
+
+The release that made the workspace layer provider-agnostic.
+
+- **Neutral method names.** `WorkspaceClient` methods renamed to `mail_*` /
+  `files_*` / mail tags; legacy `gmail_*` / `drive_*` names kept as deprecated
+  base-class aliases.
+- **`guarded()` decorator** factors confirm → run → audit boilerplate out of the
+  providers into one non-optional wrapper. Legacy action-id strings preserved for
+  already-stored queues.
+- **Registry-based provider factory**: `google_api | composio | m365 | agent`.
+- **The `agent` provider**, introducing the fetch/compute split — the AI agent
+  fetches with its own connectors and feeds compute scripts via `--input`.
+- **Microsoft 365 provider** via Graph.
+- Review follow-ups closed six blockers: every mutating neutral action id is now
+  classified (`mail.archive/unarchive/trash/untrash/tag/create_tag`,
+  `calendar.cancel`, `files.trash` as SAFE_WRITE; `mail.send` stays DESTRUCTIVE);
+  inbox and system-folder translation maps Gmail scopes to Graph well-known
+  folders (`INBOX→inbox`, `SENT→sentitems`, `DRAFT→drafts`, `TRASH→deleteditems`,
+  `SPAM→junkemail`), with `label:UNREAD` setting the unread flag and only
+  non-system labels becoming Outlook categories; plus delete-action state
+  integrity and CI.
+
+## v0.3.0 — Daily operating loop beta
+
+One-command front door to every Chief-of-Staff subsystem. Read-only
+orchestration: observe, summarise, prioritise, recommend next commands. No
+approvals, no executions, no provider writes, no mutations.
+
+```bash
+python shared/scripts/chief_of_staff.py daily --summary
+python shared/scripts/chief_of_staff.py daily --json
+```
+
+- Smoke-test write detection expanded to watch mtime on `pipeline.yaml`,
+  `invoices.yaml`, `expenses.yaml`, and `wiki/*.md` in addition to hidden
+  dotfiles — so a claimed read-only run is actually verified as one.
+- **Relicensed from MIT to Apache 2.0**, including all 17 `SKILL.md` frontmatters
+  and the structure test, which the initial relicense commit had missed.
+- User-focused project README added.
+- Tests: 1,071 passing.
+
+## v0.2.8 — CRM / Pipeline Manager hardening
+
+A lightweight CRM layer: deals tracked in `pipeline.yaml`, stale opportunities
+visible, notes, documents, and invoices linking back to deals, CRM updates
+auditable, and autonomous flows able to suggest but never mutate.
+
+- New `pipeline_actions.py` execution module: load, save, find by id or name,
+  validate.
+- Invoice linkage made canonical via `invoices.yaml` `deal_id` rather than a
+  document-type heuristic — "Contract Signed without invoice" now checks whether
+  the deal id appears in `invoices.yaml`, and "invoiced but not paid" checks the
+  linked invoice's status, so deals with paid invoices stop being flagged.
+
+## v0.2.7 — Note-taking and memory hardening, rollback, lint
+
+Reliability hardening for autonomous memory and wiki maintenance: the agent can
+maintain notes automatically, but every change is linted, logged, reversible, and
+visible in the daily briefing.
+
+- `wiki_curator.py lint` and `memory.py lint`, both with `--summary`.
+- Rollback for knowledge changes.
+
+## v0.2.6 — Bookkeeper invoice ingestion hardening
+
+- Detect invoice-like material from local events, extract structured candidates,
+  validate, duplicate-check, route through the review queue, and write to
+  `invoices.yaml` only after explicit approval.
+- `review_queue.py` switched to the canonical `action_risk.get_action_risk()`
+  instead of a local duplicate.
+- Fixed approved `bookkeeper.invoice.record` actions being rejected:
+  `require_capability()` only knows Gmail/Calendar/Drive actions, and the
+  bookkeeper branch sat inside the workspace try/except after the capability
+  check, so it was never reached for real executions.
+
+## v0.2.5 — Review queue / operator UX
+
+A unified operator review queue: one CLI for listing, previewing, approving,
+dismissing, executing, and auditing pending actions and suggestions, replacing a
+scatter of separate scripts.
+
+## v0.2.4 — Autonomous memory maintenance and wiki curation
+
+Chief of Staff can keep the private second brain tidy, current, linked, and
+source-backed; report meaningful knowledge changes; and reserve approval for
+destructive, external, or high-impact knowledge decisions.
+
+- New `memory.py` structured memory system.
+- `memory.py` gained `_preferred_text()` to extract human-facing fields
+  (summary, subject, title, body) before falling back to raw JSON, improving
+  extraction quality.
+- Knowledge reporting corrected: the briefing had been conflating memory records
+  with wiki pages under `pages_created` / `pages_updated`; wiki and memory are
+  now counted separately, with `wiki_curator.py` logging its own changes.
+- Company-specific names, projects, and addresses scrubbed from test data.
+- Tests: 947 passing.
+
+## v0.2.3 — Daily workflow polish
+
+Turned the daily briefing into the operator's primary surface, with structured
+sections, priority buckets, risk grouping, and a one-command run.
+
+- `action_risk.py`: deterministic high/medium/low classification per action type,
+  shared by the briefing and the review queue.
+- `briefing_sources.py`: read-only data collectors.
+
+## v0.2.2 — Live beta hardening
+
+- `doctor --summary` one-line readiness report (READY / WARNINGS / NOT READY).
+- New checks: webhook config (OIDC/HMAC/channel token), state-file JSON
+  integrity, and orphaned `executing` actions.
+- **Age-gated the orphan reset.** Both `doctor --fix` and `state_tools repair`
+  had been resetting *all* executing actions unconditionally, risking duplicate
+  sends, labels, uploads, and calendar changes if an action was genuinely
+  executing when repair ran. Now a 15-minute minimum age applies.
+- End-to-end tests and a smoke test.
+
+## v0.2.1 — De-hardcode paths, register email-organisation
+
+- `config_loader.get_hermes_home()` resolves `CHIEF_OF_STAFF_HERMES_HOME` →
+  `HERMES_HOME` → `~/.hermes`, with `get_default_project_root(slug)` for path
+  construction. Every `~/.hermes` literal in `bootstrap.py` and `onboard.py`
+  replaced — the change that made adoption outside Hermes possible.
+- Fixed the fallback project root: `email_label_policy`, `event_store`,
+  `pending_actions`, and `suggested_actions` were returning the Hermes home
+  directory instead of `projects/default`, so state files would have been written
+  loose under `~/.hermes/`.
+- `email-organisation` registered; Composio backends collapsed; dependencies fixed.
+
+## v0.2.0.2 — Cryptographic JWT verification
+
+**Critical.** Pub/Sub JWTs are now cryptographically verified.
+`_decode_jwt_unverified()` was replaced with the `google-auth` library —
+`id_token.verify_oauth2_token(token, Request(), audience=aud,
+clock_skew_in_seconds=30)`. The dead unverified helper was removed, `google-auth`
+was added to `requirements.txt` (it had only been in `pyproject.toml`), and Gmail
+endpoint status now reports `native (OIDC)` when a Pub/Sub audience and service
+account are configured versus `HMAC (dev/proxy)` when only an HMAC secret is set.
+
+## v0.2.0.1 — Internal beta execution and authentication hotfix
+
+Pub/Sub OIDC JWT validation: `verify_pubsub_oidc()` checks the issuer
+(`accounts.google.com`), `email_verified`, the audience, and the service-account
+email, failing closed unless `CHIEF_OF_STAFF_PUBSUB_AUDIENCE` is configured.
+
+## v0.2.0 — Internal beta: provider-native webhooks
+
+- **Gmail Pub/Sub envelope decoding**: `adapt_gmail_pubsub()` base64url-decodes
+  `message.data` and extracts `emailAddress` and `historyId` from inside the
+  envelope, using the Pub/Sub `messageId` as the dedup delivery id, and handling
+  malformed data gracefully.
+- Calendar and Drive `X-Goog-*` header parsing.
+- Operational hardening throughout.
+
+## v0.1.29 — Webhook receiver and event replay safety
+
+- `webhook_security.py`: HMAC-SHA256 signature verification via
+  `X-Webhook-Signature`, constant-time comparison (`hmac.compare_digest`) against
+  timing attacks, and replay protection tracking seen signatures with a 24h TTL.
+- `validate_secret_config()` and `sign_payload()` for configuration checks and
+  testing.
+- `webhook_adapters.py` for provider-specific payload shapes.
+
+## v0.1.28 — Email organisation digest and briefing integration
+
+`render_email_org_digest()` produces a structured digest — totals, category
+breakdown, label/archive/create-label suggestion counts, pending actions — and
+`email_org_status_for_briefing()` returns a compact counts-only summary for the
+daily briefing.
+
+## v0.1.27 — Email classification and approval-gated organisation
+
+- New capabilities `gmail.label` (apply an existing label) and
+  `gmail.create_label`, both `True` for `google_api` and `False` for Composio.
+- Classification with label suggestions, all routed through approval.
+
+## v0.1.26 — Email organisation onboarding and label policy
+
+New `email-organisation` sub-skill, `gmail_list_labels()` read-only listing on
+`WorkspaceClient`, and `email_label_policy.py` with a `SYSTEM_LABELS` frozenset.
+
+## v0.1.25 — Act-on-suggestion bridge
+
+Split suggestion handling by consequence: `SAFE_READ_ACTIONS`
+(`calendar.list`, `drive.search`, `gmail.search`) execute directly with no
+mutation and no approval; `WRITE_ACTIONS` (`gmail.send`, `gmail.draft`,
+`gmail.archive`, `gmail.trash`, …) require the approval path.
+
+## v0.1.24 — Operator notification and suggestion digest
+
+Introduced the distinction between **suggestion risk** (how risky it is to ignore
+a suggestion) and **execution risk** (how risky the underlying action is), keeping
+`risk` as a backward-compatible alias for the former.
+
+## v0.1.23 — Suggested action generation
+
+`suggested_actions.py`: suggestions carrying id, event id and key, action type,
+title, reason, and risk. `poll_events.py` gained Drive polling, and its `--max`
+flag was renamed `--limit` now that it covers both Gmail and Drive.
+
+## v0.1.22 — Event state fix and polling connectors
+
+`ingest_event()` now creates events in `classified` state rather than `received`,
+since classification happens during ingest. `mark_surfaced()` works immediately
+after ingest, which had been broken. Four new tests prove the full
+classified → surfaced → processed lifecycle.
+
+## v0.1.21 — Event ingestion foundation and idempotency
+
+`event_store.py`: an event carries id, key, source, source id, type, payload,
+summary, state, classification, and timestamps. The `source` + `source_id` pair
+uniquely identifies an event, which is the idempotency key.
+
+## v0.1.20 — Soft-delete live tests, restore completeness, operator docs
+
+`docs/APPROVAL_RUNBOOK.md` — state machine diagram, timeout table, every command
+for both `send_email` and `delete_actions`, the restore capability table,
+failed-action retry instructions, risk classification, audit trail reference, and
+the provider capability matrix — plus `docs/SOFT_DELETE_TEST_CHECKLIST.md`.
+
+## v0.1.19 — Execution-state hardening and restore workflows
+
+**The critical race fix.** `mark_executing()` transitions approved → executing
+*before* any provider call and checks whether approval has lapsed first. If it
+has, the action is marked expired and the provider is never called.
+`mark_executed()` now requires `executing` state rather than `approved`. The
+state machine becomes approved → executing → executed | failed.
+
+## v0.1.18 — Soft-delete and archive architecture
+
+Approved actions expire too: `APPROVED_EXPIRY_HOURS = 24`, with
+`_is_approval_lapsed()` checking whether an approved action has gone stale. CC
+wiring fixed end to end — `gmail_send()` accepts and forwards `cc`.
+
+## v0.1.17 — Approval delivery, concurrency safety, pending-action UX
+
+- **Optimistic versioning** on `.pending_actions.json`: `_save()` takes an
+  `expected_version`, raising `ConcurrencyError` if the on-disk version changed,
+  preventing lost updates from concurrent channels.
+- **Approval expiry**: requested actions older than 72 hours are stale.
+
+## v0.1.16 — Approval queue and gated Gmail send
+
+The release that established the core rule: **no user-facing workflow calls
+`gmail_send()` directly.** Everything goes through
+prepare → preview → pending → approve → execute.
+
+`pending_actions.py` stores actions as JSON under
+`project_root/.pending_actions.json` with atomic tmp-and-replace writes and a
+requested → approved → executed | cancelled state machine.
+
+## v0.1.15 — Workflow preflight checks and safer execution plans
+
+`--dry-run` on calendar create/update and Drive upload/download shows the plan
+without calling the provider. Partial completion is now detected by inspecting
+step results rather than by matching error text.
+
+## v0.1.14 — Provider-aware CLI UX and workflow summaries
+
+`action_result_cli.py` centralises result printing — JSON or human-readable,
+single actions or multi-step workflows — extracting the reason from errors and
+surfacing the provider recommendation.
+
+## v0.1.13 — Provider capability truthfulness
+
+Corrected the capability matrix: `google_api` `gmail.draft` was advertised as
+`True` but `google_api.py` has no draft subcommand, so it became `False`. Added
+`require_capability()` and `recommend_provider_for()` so an unsupported action
+returns a clear error naming the provider that can do it.
+
+## v0.1.12 — Google service-account hardening
+
+`doctor` became provider-aware: the Google auth check skips with a clear message
+when `provider=composio`, and under `google_api` checks the script, the service
+account file, `account_alias`, `delegate_email`, and runs a delegated health
+check.
+
+## v0.1.11 — Workspace action adoption across core skills
+
+Five skills moved off direct `google_api.py` calls onto `WorkspaceClient`:
+calendar-manager, drive-filer, and three others, each returning `ActionResult`
+under guardrails. Live testing also revealed that `COMPOSIO_MULTI_EXECUTE_TOOL`
+expects tool input under `arguments`, not `input` — Gmail tools accepted both,
+but Calendar Create rejected it.
+
+## v0.1.10 — MCP-only polish, docs cleanup, safe action guardrails
+
+## v0.1.9 — Remove the legacy Composio SDK backend
+
+## v0.1.8 — MCP hardening and live execution polish
+
+## v0.1.7 — Composio MCP execution adapter
+
+## v0.1.6 — Composio workspace actions: Drive, drafts, calendar writes
+
+## v0.1.5 — Composio workspace provider
+
+`ComposioWorkspaceClient` implementing `gmail_search` (`GMAIL_FETCH_EMAILS`) and
+`calendar_list` (`GOOGLECALENDAR_FIND_EVENT`), with `health_check` via
+`session.toolkits(is_connected=True)`. Sessions are created from the configured
+toolkits and allowlist, read-only by default, with metadata saved under
+`project_root/.integrations/composio/session.json`. The factory now routes
+`composio` here instead of raising. v0.1.5.1 added provider-gated config checks
+and connection-status refresh.
+
+## v0.1.4 — Workspace provider abstraction
+
+The abstraction that everything since rests on.
+
+- `workspace_client.py`: the `WorkspaceClient` ABC and `get_workspace_client()`
+  factory, reading `integrations.workspace.provider` from config.
+- `providers/google_workspace.py` wrapping `google_api.py` behind the neutral
+  interface.
+- Daily Briefing wired to `WorkspaceClient` for both Gmail and Calendar, so it
+  would auto-switch to Composio the moment that provider landed.
+- `doctor` uses `WorkspaceClient.health_check()` rather than a raw subprocess.
+- Repository genericised: company-specific names removed from `plugin.yaml`, 14
+  `SKILL.md` files, and `pyproject.toml`; the `phronesis` profile renamed
+  `enterprise`; hardcoded account aliases replaced by config.
+- Workspace tests monkeypatched so no real `google_api.py` is needed, making them
+  CI-safe.
+- Tests: 288 passing.
+
+## v0.1.3 — Compatibility fixes
+
+Skill profiles (`default` + `enterprise`) driven from `plugin.yaml` rather than
+hardcoded in `__init__.py`; `queries.yaml` accepted in both list and mapping
+form; `install_cron.py` accepting either delivery config shape; and
+`CHIEF_OF_STAFF_AUDIT_STRICT` to make audit failures fatal per store, best-effort
+by default.
+
+## v0.1.2 — Hardening: atomic state, script-backed mutations, doctor, CI
+
+The release that made mutations safe.
+
+- `state_store.py` (atomic YAML writes, file locking, backup-before-write),
+  `file_lock.py` (cross-process fcntl advisory locking), `audit_log.py`
+  (append-only JSONL), `run_log.py` (idempotency records), `schemas.py`
+  (validation for deals, invoices, expenses, todos).
+- `deadlines.py` unifying statutory and custom deadlines, replacing duplicated
+  logic.
+- `doctor.py` with an 18-check health report and `--fix`; `bootstrap.py` for
+  deterministic clone-to-setup; `install_cron.py` with `--dry-run`.
+- Skill mutations became **script-backed rather than instruction-backed**:
+  `pipeline.py`, `todo.py`, `invoices.py`, `sign_pdf.py`, `drive_map.py`,
+  `daily_briefing.py`, `calendar_scan.py`.
+- Packaging: `requirements.txt`, `pyproject.toml`, CI on push and PR, and
+  `examples/` fixtures.
+- Tests: 265 passing.
+
+## v0.1.1 — Seven quality hooks
+
+All opt-in, wired in `__init__.py`: company context primer, YAML integrity
+checker, stale briefing detector, pipeline stage validator, format enforcer,
+self-sign multi-block guard, and deadline urgency injection. 43 hook tests; 224
+passing overall.
+
+## v0.1.0 — Initial release
+
+Sixteen skills: daily-briefing, deadline-tracker, note-taker, todo-list,
+calendar-manager, drive-filer, meeting-prep, weekly-review, document-preparer,
+pipeline-manager, bookkeeper, deep-research, entity-research, travel-itinerary,
+backup, self-sign.
+
+Infrastructure: `config_loader`, `date_utils`, the onboarding wizard, four
+jurisdiction packs (SG/HK/US/UK), drive-map, Gmail query templates, a
+YAML→SQLite migration guide, and five quality hooks (documented, opt-in).
+
+Tests: 179 passing, 2 skipped. Licensed MIT — relicensed to Apache 2.0 at v0.3.0.
