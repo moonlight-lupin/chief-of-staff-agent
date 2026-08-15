@@ -1,5 +1,150 @@
 # Changelog
 
+## v0.4.0 — Safety hardening complete, agent execution seam, release readiness
+
+The largest release so far, and the first where the safety model is enforceable
+rather than merely designed. It closes every blocking and major issue from the
+v0.3.24 production review except the Microsoft 365 tier, which is deferred
+pending a real Entra tenant.
+
+**Release posture:** production-ready for `google_api` and `composio` (Google
+and Microsoft). Native `m365` is code-complete but has never been live-verified;
+`capabilities` and `readiness` now say so out loud.
+
+### Safety model — enforceable, not just documented
+
+- **Guardrail is default-deny (B1).** `confirm_action` previously let unknown
+  action IDs through, and legacy `gmail.*` / `drive.*` mutation IDs were
+  excluded from `WRITE_ACTIONS` entirely — any skill holding a client reference
+  could call them ungated. Legacy IDs are now canonicalized to neutral `mail.*`
+  / `files.*` before classification, and anything in neither `READ_ACTIONS` nor
+  `WRITE_ACTIONS` is blocked. `requires_confirmation` fails closed for unknowns.
+- **Per-action approval grants.** `CHIEF_OF_STAFF_AUTO_APPROVE` and
+  `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` no longer act as ambient process-wide
+  approval. Execution validates against the pending-action store at call time.
+- **Concurrency safety on all state (B2).** `pending_actions`, `event_store`,
+  `state_store`, and `webhook_security` wrap load→check→mutate→write in an
+  exclusive file lock with unique temp filenames and `fsync` before `replace`.
+  Two processes can no longer both win the `approved→executing` transition and
+  both send the same email.
+- **Transactional `state_store`** with `with_store_lock`, version monotonicity,
+  and `ConcurrencyError` retry.
+- **Fail-closed on corrupt state.** A corrupt JSON store raises
+  `StateCorruptionError` and preserves the bad file instead of silently
+  becoming an empty store — which was both data loss and a replay bypass.
+- **Audit completeness.** Blocked attempts are now durably audited; the
+  success-path audit moved inside the try/except so an audit failure returns a
+  successful result with `audited=False` rather than escaping as an exception
+  and inviting a duplicate send.
+- **Audit hash chain** with restart markers and corrupt-tail detection, so the
+  record cannot be silently edited.
+- **Recipient domain classification fixed.** Substring matching classified
+  `acme.com.attacker.io` as internal; now exact match or dot-boundary suffix.
+- **Retry cap.** `mark_failed` capped at 3 retries then terminal `failed`,
+  instead of re-arming approval forever on an ambiguous 504.
+- **Stuck-action reconciliation** — `executing` timeout detection and recovery,
+  surfaced in doctor and readiness.
+- **HMAC webhook signatures bind a timestamp**, with a 300s skew bound and a
+  replay lease with fencing.
+- **`store_name` path-escape guard**, backup retention, and fail-loud on a
+  missing project root.
+
+### Agent execution seam (new)
+
+Under the `agent` provider the AI agent performs mutations with its own
+connector tools, so there is no `@guarded` call site to run the state machine.
+Every agent-driven write previously dead-ended: the provider raises
+`NotImplementedError`, and `mark_executed()` was unreachable from the CLI.
+
+- **`review_queue.py claim`** transitions approved→executing and returns the
+  action envelope. It must run *before* the side effect — that is where a
+  lapsed approval is caught — and it makes the claim exclusive.
+- **`review_queue.py record-execution`** transitions executing→executed/failed.
+  A recording verb only: it cannot approve, cannot skip the claim, and cannot
+  revive a terminal action. Results carry `executed_externally` so the audit
+  never implies more provenance than it has.
+
+### Operability
+
+- **`chief_of_staff.py capabilities`** — one machine-readable call for the
+  active provider, supported and refused actions *with reasons*, whether the
+  provider was ever live-verified, project root, and state durability.
+- **Real dependency preflight.** `doctor` imported 3 of 7 declared packages via
+  `find_spec`, which reports an installed-but-broken package as present. It now
+  imports all 7, catches `BaseException` (a pyo3 panic from a broken
+  `cryptography` is not an `Exception`), suppresses import-time stdout chatter
+  that was corrupting `doctor --json`, and names a remedy. CI gained a matching
+  dependency-sanity step.
+- **Hosted cloud session guardrails.** When `CLAUDE_CODE_REMOTE_SESSION_ID` is
+  set, the credential-holding providers are refused: cloud environment
+  variables are plain text and readable by anyone using the environment. The
+  `agent` provider stays available, and the capability report warns that state
+  there is ephemeral.
+- **MCP session recovery** — 202/204 accepted, 404 recovery, bounded retry.
+
+### Knowledge
+
+- **OKF 0.2** — sequence numbers, aliases, relations, numeric confidence.
+- **Wiki search** subcommand with keyword, alias and tag retrieval, stop-word
+  filtering and token-boundary matching.
+- **Two new hooks** — `note_capture_reminder` (post_llm_call) and
+  `wiki_context_injection` (pre_llm_call), bringing the total to nine.
+
+### Skills
+
+- **`news-monitoring` vendored in** — nineteen skills, eighteen registered on a
+  default install (`esign-connector` appears once DocuSeal is configured).
+- **`deep-research` v1.6.0** — adaptive depth, clarification phase, token
+  budget, numbered citations.
+- Writing-for-agents pass across five skills: workspace-access extracted to
+  `shared/docs/`, routing tails removed, descriptions rewritten, completion
+  criteria added.
+
+### Claude Desktop / Cowork compatibility (additive)
+
+Hermes remains the runtime of record. These files are additive and are not read
+by it:
+
+- **`CLAUDE.md`** — the operating contract an agent reads on arrival: the
+  invariant, the command index, the fetch/compute split, both execution paths,
+  and the prohibitions.
+- **`.claude-plugin/plugin.json` + `marketplace.json`** — makes
+  `/plugin marketplace add moonlight-lupin/chief-of-staff-agent` work so the
+  skills load natively in Claude Desktop and Cowork without conversion.
+- **`docs/SETUP.md`** gained a hosted-cloud-session section covering the
+  missing secrets store, the Trusted domain allowlist (which excludes every
+  workspace endpoint), polling instead of webhooks, and ephemeral state.
+
+### Release hygiene
+
+- Version pins unified at 0.4.0 across `plugin.yaml`, `pyproject.toml`, the
+  entrypoint, and the README, with a test asserting they agree. `--help` had
+  been advertising v0.3.7 while the plugin shipped 0.3.24.
+- **Demo data re-anchored on today.** `examples/sample-workspace.json` is
+  pinned to a fixed day, so `demo` printed month-old mail and past meetings
+  under "next 48h". Timestamps now shift by whole days at load.
+- **`NOTICE`** recording the vendored MIT `deep-research` skill inside this
+  Apache-2.0 work.
+- **`SECURITY.md`** with a private disclosure route and an explicit in-scope
+  list, and **`CONTRIBUTING.md`** covering the invariants a change may not break.
+- **Lint enforced.** 113 ruff findings → 0, and CI runs ruff over `shared/`,
+  `skills/`, `hooks.py` and `__init__.py` without `continue-on-error`.
+- CI matrix on Python 3.11 and 3.12.
+
+### Tests
+
+1,802 → **2,002 passing**. New coverage for guardrail default-deny, legacy ID
+canonicalization, multiprocessing races on every state store, blocked-path
+auditing, retry caps, the claim/record-execution refusal paths, dependency
+preflight, capability reporting, and hosted-session refusal.
+
+### Deferred
+
+Native Microsoft 365 Graph (tenant-wide authority constraint, token cache and
+proactive refresh, real `mail.move` reversibility, timezone and upload
+hardening) remains open pending a dedicated Entra tenant. See the M365 section
+of `docs/PRODUCTION_ROADMAP.md`.
+
 ## v0.3.24 — Vendor deep-research v1.4.0 (structured evidence + evidence-basis discipline)
 
 ### Skills

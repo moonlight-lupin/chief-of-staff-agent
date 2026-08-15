@@ -1,12 +1,33 @@
-# Chief of Staff v0.3.24 — Production Readiness Brief & Build Plan
+# Chief of Staff — Production Readiness Status
 
-**Reviewers:** Claude Code Opus (architecture/security) + Codex GPT-5.6 (correctness/edge cases)
-**Date:** 2026-08-14
-**Verdict:** REQUEST CHANGES — 3 blocking issues, 12 major issues, 3 tiers of remediation
+**Original review:** Claude Code Opus (architecture/security) + Codex GPT-5.6 (correctness/edge cases), against v0.3.24
+**Status as of:** v0.4.0
+
+> ## Current status
+>
+> | Tier | Scope | State |
+> |---|---|---|
+> | **Phase 1** | Safety gate — B1, B2, audit paths, recipient classification, retry cap | ✅ **Shipped in v0.4.0** |
+> | **Phase 2** | Hardening — transactional state, fail-closed corruption, HMAC timestamp, path guard, retention, MCP recovery, E2E, CI | ✅ **Shipped in v0.4.0** |
+> | **Phase 3** | Polish — stuck-action reconciliation, audit hash chain, race suite, config model, partial decomposition | ✅ **Shipped in v0.4.0** |
+> | **Phase 4** | M365 live canary | ⏸ **Open — blocked on a dedicated Entra tenant** |
+> | **Phase 5** | Nice-to-have | Ongoing |
+>
+> **The original verdict below (REQUEST CHANGES — 3 blocking, 12 major) applied
+> to v0.3.24 and is retained for the record.** All three blocking issues and all
+> non-M365 major issues are closed; see `CHANGELOG.md` v0.4.0 for what shipped
+> and the ✅/⏸ markers on each task in section 2.
+>
+> **Release posture:** production-ready for `google_api` and `composio` (Google
+> and Microsoft). Native `m365` is code-complete but has **never been
+> live-verified** — `chief_of_staff.py capabilities` reports
+> `provider_verified: false` for it, and the capability flags are deliberately
+> conservative. Do not point app-only `.default`-scoped credentials at a
+> production tenant until Phase 4 completes.
 
 ---
 
-## 1. Observations
+## 1. Observations *(as reviewed at v0.3.24)*
 
 ### 1.1 What Works (keep)
 
@@ -66,7 +87,7 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 
 ## 2. Phased Build Plan
 
-### Phase 1 — Safety Gate (blocking, must complete before prod)
+### Phase 1 — Safety Gate ✅ SHIPPED (v0.4.0)
 
 **Goal:** Close the three blocking holes. Make the safety model enforceable.
 
@@ -83,9 +104,9 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 | 1.9 | **Fix deep-research license test.** Either relicense to Apache-2.0 (if legally sound) or update test to allow vendored MIT skills with attribution. | `test_plugin_structure.py:137-146` | Update existing test | 0.5 day |
 | 1.10 | **Run full test suite in clean env.** Install all deps (google-auth, pymupdf, etc.) and verify 1,801+ pass. Add dependency sanity check to CI. | CI | Verify: all green | 0.5 day |
 
-**Phase 1 estimate: 4-5 days (M365 authority constraint deferred to Phase 4). Gate: all tests green, no blocking issue remains.**
+**Outcome: shipped in v0.4.0. All three blocking issues closed; suite green at 2,002 tests.**
 
-### Phase 2 — Hardening (month 1)
+### Phase 2 — Hardening ✅ SHIPPED (v0.4.0)
 
 **Goal:** Close all major issues. Prepare M365 for live canary.
 
@@ -105,9 +126,9 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 | 2.12 | **End-to-end integration test.** Exercise prepare→approve→execute against Graph mock, including lapsed-approval and concurrent-execute paths. | New test file | 1 day |
 | 2.13 | **CI upgrade.** Python 3.11 + 3.12 matrix, add ruff lint, add mypy type checking. | `.github/workflows/ci.yml` | 0.5 day |
 
-**Phase 2 estimate: 5-6 days (M365-specific tasks deferred to Phase 4). Gate: all non-M365 major issues closed, all tests green.**
+**Outcome: shipped in v0.4.0. All non-M365 major issues closed.**
 
-### Phase 3 — Polish + Scale (month 2)
+### Phase 3 — Polish + Scale ✅ SHIPPED (v0.4.0)
 
 **Goal:** Close remaining non-M365 gaps. Production-ready for Google SA + Composio. No M365 dependency.
 
@@ -120,9 +141,9 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 | 3.5 | **Centralize config.** Consolidate 91 scattered `os.getenv` calls into a Pydantic Settings model. | New `config.py`, all files with os.getenv | 1.5 days |
 | 3.6 | **Decompose god files.** Split `chief_of_staff.py` (2500 lines) and `composio_mcp_workspace_base.py` (1980 lines) into focused modules. | `chief_of_staff.py`, `composio_mcp_workspace_base.py` | 2 days |
 
-**Phase 3 estimate: 5-6 days. Gate: all non-M365 issues closed, all tests green.**
+**Outcome: shipped in v0.4.0. Task 3.6 (god-file decomposition) partially done — `cos_helpers.py` and `capability_report.py` extracted; `chief_of_staff.py` is held under a 2,500-line budget by test, and `composio_mcp_workspace_base.py` remains large.**
 
-### Phase 4 — M365 Live Canary (deferred, requires real Entra tenant)
+### Phase 4 — M365 Live Canary ⏸ OPEN (requires a real Entra tenant)
 
 **Goal:** First real M365 connection against a live tenant. Cannot start until a dedicated test tenant is available.
 
@@ -135,7 +156,7 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 | 4.5 | **M365 live canary (reads only).** Against dedicated test tenant with single mailbox. Exercise: expired secret/consent errors, token refresh, 429 with both Retry-After forms, 503/504 ambiguity, multi-page reads, immutable IDs across archive/trash/restore. | Manual + test fixtures | 1 day |
 | 4.6 | **M365 canary (limited writes).** Archive→unarchive round-trip. Trash→untrash round-trip. Files just below/above 4MB. Audit/state-write failure after successful mutation. | Manual + test fixtures | 1 day |
 
-**Phase 4 estimate: 5-6 days. Gate: M365 canary passes, all tests green. Blocked on real Entra tenant access.**
+**Status: OPEN. Estimate 5-6 days once a dedicated Entra tenant is available. Until then `capabilities` reports the provider as never live-verified.**
 
 ### Phase 5 — Nice to Have (ongoing)
 
@@ -150,7 +171,7 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 
 ## 3. Release Decision Matrix
 
-| Provider | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
+| Provider | Phase 1 ✅ | Phase 2 ✅ | Phase 3 ✅ | Phase 4 ⏸ |
 |---|---|---|---|---|
 | Google SA | ✅ Prod-ready | ✅ Hardened | ✅ Full | — |
 | Composio (Google) | ✅ Prod-ready | ✅ Hardened | ✅ Full | — |
@@ -159,4 +180,4 @@ The codebase has strong fundamentals. Both reviewers independently confirmed:
 
 *Composio Microsoft writes through Composio's managed OAuth, which scopes per-user, not tenant-wide. The B3 concern applies only to native M365 Graph with client_credentials.
 
-**Recommended release:** Ship Phase 1 → run Google SA + Composio in production → complete Phase 2-3 hardening → treat M365 native as deferred until Phase 4 (requires real Entra tenant).
+**Release taken:** v0.4.0 ships Phases 1-3 for Google SA + Composio (Google and Microsoft). Native M365 remains deferred to Phase 4.
