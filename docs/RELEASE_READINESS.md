@@ -2,6 +2,40 @@
 
 **Assessed:** 2026-08-14 · **Branch:** `claude/production-release-readiness-miecj7` · **Scope:** everything except the native M365 Graph path (no Entra tenant available to verify).
 
+> ## Remediation status
+>
+> Everything in Part A and Tiers 0–1 of Part B has been implemented on this
+> branch and ships as **v0.4.0**. The findings below are kept as written so the
+> reasoning survives; this box records what happened to each.
+>
+> | ID | Finding | Status |
+> |---|---|---|
+> | R1 | CHANGELOG 36 commits stale | ✅ v0.4.0 entry added |
+> | R2 | Roadmap headlines "REQUEST CHANGES" | ✅ restructured as a status document |
+> | R3 | No tags, no releases | ⏸ **the one open item** — tag after merge, see below |
+> | R4 | No dependency preflight | ✅ `doctor` imports all 7 declared packages; CI step added |
+> | S1 | Demo data expired | ✅ envelope re-anchored on today |
+> | S2 | `--help` reports v0.3.7 | ✅ derives from `VERSION`, with a test |
+> | S3 | Skill count wrong | ✅ README corrected (19 shipped / 18 default) |
+> | S4 | No NOTICE for vendored MIT skill | ✅ `NOTICE` added |
+> | S5 | No governance files | ✅ `SECURITY.md`, `CONTRIBUTING.md` added |
+> | S6 | Lint decorative | ✅ 113 findings → 0; CI enforces without `continue-on-error` |
+> | T0.1 | No agent orientation file | ✅ `CLAUDE.md` |
+> | T0.2 | No Claude plugin manifest | ✅ `.claude-plugin/plugin.json` + `marketplace.json` |
+> | T1.1 | Agent writes dead-end | ✅ `review_queue.py claim` + `record-execution` |
+> | T1.2 | Dependency preflight | ✅ (same as R4) |
+> | T1.3 | No machine-readable capabilities | ✅ `chief_of_staff.py capabilities` |
+> | T1.4 | No hosted-session guardrails | ✅ credential providers refused in cloud sessions |
+> | T1.5 | Cloud environment undocumented | ✅ `docs/SETUP.md` hosted-session section |
+> | Tier 2 | Git-backed state for remote | ⏸ deferred by design — see Part B |
+>
+> **Suite: 1,951 → 2,002 passing. ruff: 113 findings → 0.**
+>
+> **R3 is deliberately not done on this branch.** A tag should point at a commit
+> on the default branch, not at a feature branch. After merge:
+> `git tag -a v0.4.0 -m "..." && git push origin v0.4.0`, then publish a GitHub
+> release using the v0.4.0 CHANGELOG entry as the notes.
+
 ---
 
 ## Part A — Release maturity
