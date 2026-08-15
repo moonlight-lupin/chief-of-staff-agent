@@ -588,6 +588,99 @@ DocuSeal coordinates and uploads.
 
 To switch from Google to Composio (or vice versa), just change `integrations.workspace.provider` in `company.yaml`. The Daily Briefing and all skills that use `WorkspaceClient` will automatically use the new provider.
 
+## Running in a hosted cloud session
+
+If you run Chief of Staff inside a hosted agent session — Claude Code on the
+web, a Cowork remote session, or any Anthropic-hosted cloud environment — three
+constraints apply that do not exist on a local machine. `chief_of_staff.py
+capabilities` reports all three at runtime.
+
+### 1. Do not put credentials in the environment
+
+Cloud environments have **no secrets store**. Environment variables are stored
+in plain text in the environment's configuration and are readable by anyone who
+uses that environment — for a shared or organization environment, that is
+everyone on the team. Do not put `M365_CLIENT_SECRET`, a Google service-account
+JSON, `COMPOSIO_MCP_KEY`, or `DOCUSEAL_API_KEY` there.
+
+Chief of Staff refuses the credential-holding providers (`google_api`, `m365`,
+`composio`) when it detects a hosted session via `CLAUDE_CODE_REMOTE_SESSION_ID`.
+
+Use `provider: agent` instead. It holds no credentials at all: the agent fetches
+with its own connectors and closes the write loop through the review queue —
+see [the agent execution seam](#agent-executed-writes) below. To use a
+credential provider, run on a local machine or a Remote Control session, which
+uses your own machine's files and network.
+
+### 2. Allow the domains you need
+
+Hosted environments default to a **Trusted** network allowlist covering package
+registries and GitHub. The workspace endpoints are **not** on it. If you use a
+provider other than `agent`, set the environment's network access to **Custom**
+and add whichever of these apply:
+
+```
+graph.microsoft.com
+login.microsoftonline.com
+*.composio.dev
+www.googleapis.com
+oauth2.googleapis.com
+accounts.google.com
+```
+
+Plus your DocuSeal host if e-sign is configured. Check **"Also include default
+list of common package managers"** so `pip install` still works.
+
+MCP connector traffic does not go through this allowlist, which is another
+reason the `agent` provider is the path of least friction there.
+
+### 3. Polling only — no inbound webhooks
+
+Hosted sessions have no inbound ports, so `webhook_receiver.py` and the Gmail
+Pub/Sub push path cannot be reached. Use the polling path
+(`skills/document-preparer/scripts/poll_events.py`), which is the supported
+default at this scale anyway. Webhooks remain available for a local or
+self-hosted deployment.
+
+### State is ephemeral
+
+A hosted session runs on a fresh VM and is torn down afterwards. Everything
+under `paths.project_root` — `pipeline.yaml`, `invoices.yaml`, `todos.yaml`,
+`wiki/`, the audit log — is lost when the session ends unless you commit and
+push it. Treat hosted sessions as read-and-recommend until you have a durable
+state location.
+
+## Agent-executed writes
+
+Under `provider: agent` there is no Python client, so an approved action has to
+be performed by the agent's own connector tools. The review queue provides a
+recording seam so those executions still pass through the same state machine and
+audit trail:
+
+```bash
+# 1. Approve as usual
+python shared/scripts/review_queue.py approve --action-id <id> \
+    --approver "MH" --reason "Reviewed"
+
+# 2. Claim it — this is what validates the approval, so it must happen BEFORE
+#    the action, not after. Returns the type, target and payload to execute.
+python shared/scripts/review_queue.py claim --action-id <id>
+
+# 3. The agent performs exactly that action with its own tool.
+
+# 4. Record the outcome
+python shared/scripts/review_queue.py record-execution --action-id <id> \
+    --status success --result-json '{"message_id":"..."}' --executor "claude"
+
+# ...or, if it failed
+python shared/scripts/review_queue.py record-execution --action-id <id> \
+    --status failure --error "connector returned 503"
+```
+
+`record-execution` is a recording verb only: it cannot approve, cannot skip the
+claim, and cannot revive a terminal action. An action left in `executing` is
+reported as stuck by `chief_of_staff.py doctor`.
+
 ## Hermes Composio MCP as a read front-end
 
 If Hermes (or another host) **already** has Composio MCP connected and
