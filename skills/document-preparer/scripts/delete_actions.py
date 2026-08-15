@@ -28,7 +28,6 @@ Core rules:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -490,7 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
     execute = sub.add_parser("execute", help="Execute an approved soft-delete action")
     execute.add_argument("--action-id", required=True)
 
-    summary_cmd = sub.add_parser("summary", help="Print summary by state")
+    sub.add_parser("summary", help="Print summary by state")
 
     restore = sub.add_parser("restore", help="Restore a previously executed soft-delete action")
     restore.add_argument("--action-id", required=True)

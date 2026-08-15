@@ -12,7 +12,6 @@ Adapters NEVER execute, approve, or mutate anything.
 """
 from __future__ import annotations
 
-import base64
 import json
 import hashlib
 from typing import Any

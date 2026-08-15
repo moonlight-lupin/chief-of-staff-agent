@@ -18,7 +18,6 @@ The receiver NEVER executes, approves, or mutates external systems.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -262,13 +261,13 @@ def start_server(
 
     endpoints = check.get("endpoints", {})
     print(f"🌐 Webhook receiver listening on {host}:{port}")
-    print(f"   Endpoints:")
+    print("   Endpoints:")
     for ep, status in endpoints.items():
         icon = "✅" if status == "enabled" else "❌"
         print(f"     {icon} POST /webhooks/{ep} — {status}")
-    print(f"     GET  /health — health check")
-    print(f"   Auth: OIDC JWT (gmail), Channel Token (calendar/drive), HMAC (generic)")
-    print(f"   Replay: delivery-ID-based, 24h TTL, atomic writes")
+    print("     GET  /health — health check")
+    print("   Auth: OIDC JWT (gmail), Channel Token (calendar/drive), HMAC (generic)")
+    print("   Replay: delivery-ID-based, 24h TTL, atomic writes")
     print(f"   Max body: {MAX_BODY_BYTES:,} bytes")
     print(f"   Suggestions: {'enabled' if generate_suggestions else 'disabled'}")
     print()

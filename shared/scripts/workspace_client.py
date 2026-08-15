@@ -300,7 +300,8 @@ def get_workspace_client(config: Any) -> WorkspaceClient:
 
 
 def _main() -> int:
-    import argparse, json
+    import argparse
+    import json
     parser = argparse.ArgumentParser(description="Workspace client factory")
     parser.add_argument("--config", help="Path to company.yaml")
     parser.add_argument("--status", action="store_true", help="Print provider status")

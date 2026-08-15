@@ -12,7 +12,6 @@ a string. It never mutates, calls providers, or performs I/O.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from typing import Any
 
 
@@ -107,7 +106,7 @@ def render_text(briefing: dict[str, Any]) -> str:
     # Recent events
     re = sections.get("recent_events", [])
     if re:
-        lines.append(f"Recent activity (last 24h):")
+        lines.append("Recent activity (last 24h):")
         type_counts: dict[str, int] = {}
         for e in re:
             et = e.get("event_type", "unknown")

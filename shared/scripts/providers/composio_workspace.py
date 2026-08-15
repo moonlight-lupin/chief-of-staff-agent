@@ -22,11 +22,7 @@ from workspace_client import WorkspaceClient
 
 # Re-export from the real backend
 from providers.composio_mcp_workspace import (
-    load_session_meta,
-    save_session_meta,
-    get_enabled_tools,
     get_composio_client,
-    ComposioMCPWorkspaceClient,
 )
 
 

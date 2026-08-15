@@ -24,11 +24,9 @@ No command executes without explicit approval.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
@@ -121,7 +119,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
         print(f"DRY-RUN: Would generate suggestions for event {ev['id']}")
         print(f"  Source: {ev.get('source')}")
         print(f"  Type: {ev.get('event_type', ev.get('type', '?'))}")
-        print(f"  No suggestions would be executed")
+        print("  No suggestions would be executed")
         return 0
 
     from suggested_actions import generate_for_events
@@ -178,12 +176,11 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if args.summary:
         if result:
             action_type = action.get("type", "?")
-            cli = ACTION_APPROVAL_CLI.get(action_type, "pending_actions.py")
             print(f"✅ Approved: {action_type} ({args.action_id})")
             print(f"   Approver: {args.approver}")
             print(f"   Execute with: webhook_events.py execute --action-id {args.action_id}")
         else:
-            print(f"❌ Approval failed")
+            print("❌ Approval failed")
     else:
         print_json({"approved": bool(result), "action_id": args.action_id})
     return 0 if result else 1
@@ -210,7 +207,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     # Reject unsupported action types BEFORE mark_executing
     if action_type == "gmail.draft":
-        print(f"❌ gmail.draft execution not supported via generic executor. Use send_email.py or Composio MCP.", file=sys.stderr)
+        print("❌ gmail.draft execution not supported via generic executor. Use send_email.py or Composio MCP.", file=sys.stderr)
         return 1
 
     # ─── Internal (non-workspace) actions ─────────────────────────
@@ -390,7 +387,6 @@ def cmd_pending(args: argparse.Namespace) -> int:
             for a in actions:
                 icon = {"requested": "📨", "approved": "✅", "executed": "✅",
                         "cancelled": "❌", "expired": "⏰", "executing": "⏳"}.get(a.get("state"), "?")
-                cli = ACTION_APPROVAL_CLI.get(a.get("type", ""), "?")
                 print(f"{icon} {a['id']}  {a.get('type', '?')}  [{a.get('state', '?')}]")
                 print(f"   {a.get('summary', '')}")
                 if a.get("state") == "requested":
@@ -431,7 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
     execute = sub.add_parser("execute", help="Execute an approved pending action")
     execute.add_argument("--action-id", required=True)
 
-    pending = sub.add_parser("pending", help="List all pending actions")
+    sub.add_parser("pending", help="List all pending actions")
 
     return parser
 

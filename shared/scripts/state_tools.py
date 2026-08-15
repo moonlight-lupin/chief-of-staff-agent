@@ -561,11 +561,11 @@ def _print_repair_human(result: dict[str, object], min_executing_minutes: int = 
             for item in stale_items:
                 print(f"  - {item['id']} {item['type']} {item['target']} [{item.get('executing_at', '')}]")
         if fresh_items:
-            print(f"Fresh executing actions (still running, skipped):")
+            print("Fresh executing actions (still running, skipped):")
             for item in fresh_items:
                 print(f"  - {item['id']} {item['type']} {item['target']} [{item.get('executing_at', '')}]")
         if no_ts_items:
-            print(f"Executing actions with missing/invalid executing_at (reported, not auto-reset):")
+            print("Executing actions with missing/invalid executing_at (reported, not auto-reset):")
             for item in no_ts_items:
                 print(f"  - {item['id']} {item['type']} {item['target']}")
             print("  Use --force-reset-executing to reset these (risk: may still be running)")

@@ -26,7 +26,6 @@ import json
 import os
 import re
 import sys
-import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path

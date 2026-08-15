@@ -116,7 +116,7 @@ def cmd_inspect_labels(args: argparse.Namespace) -> int:
                 print(f"  {label['name']} → {cat}{conf_str}")
             print()
 
-        unmapped = [l for l in parsed["user_labels"] if not l.get("inferred_category")]
+        unmapped = [lbl for lbl in parsed["user_labels"] if not lbl.get("inferred_category")]
         if unmapped:
             print(f"Unmapped {nouns}:")
             for label in unmapped:
@@ -594,7 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare = sub.add_parser("prepare", help="Prepare a pending action from a suggestion")
     prepare.add_argument("--suggestion-id", required=True)
 
-    pending = sub.add_parser("pending", help="List pending email organisation actions")
+    sub.add_parser("pending", help="List pending email organisation actions")
 
     dismiss_sug = sub.add_parser("dismiss", help="Dismiss a suggestion")
     dismiss_sug.add_argument("--suggestion-id", required=True)

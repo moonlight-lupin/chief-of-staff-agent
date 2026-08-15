@@ -533,7 +533,6 @@ def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, 
 
     with with_store_lock("pipeline", config=config):
         data = load_pipeline(config)
-        before = copy.deepcopy(data)
         deal = find_deal_by_id(data, deal_id)
         if deal is None:
             raise ValueError(f"Deal not found: {deal_id}")

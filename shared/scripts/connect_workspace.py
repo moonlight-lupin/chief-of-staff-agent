@@ -289,7 +289,7 @@ def cmd_provider_m365(config: dict[str, Any], connect: bool) -> int:
     if not ok:
         print("\nNext steps:")
         print("  1. Register an app in Entra ID (Azure AD) — see docs/SETUP.md Option 3")
-        print(f"  2. Set tenant_id/client_id/user_principal under m365: in company.yaml")
+        print("  2. Set tenant_id/client_id/user_principal under m365: in company.yaml")
         print(f"  3. Set {secret_env} in .env (client_credentials)")
         print("  4. pip install msal")
         print("  5. python connect_workspace.py --provider m365 --status")
@@ -322,7 +322,7 @@ def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
 
     if not os.getenv(key_env):
         print(f"❌ {key_env} not set")
-        print(f"   Get a Composio MCP key and set it in your .env file")
+        print("   Get a Composio MCP key and set it in your .env file")
         return 1
 
     try:
@@ -342,14 +342,14 @@ def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
         accounts = tk_info.get("accounts", [])
 
         if redirect_url:
-            print(f"\n👉 Connect Link:")
+            print("\n👉 Connect Link:")
             print(f"   {redirect_url}")
             print(f"\nOpen this URL in your browser to connect {toolkit}.")
         else:
-            print(f"\n⚠️  No redirect URL returned")
+            print("\n⚠️  No redirect URL returned")
 
         if accounts:
-            print(f"\nExisting accounts:")
+            print("\nExisting accounts:")
             for acc in accounts:
                 status = acc.get("status", "unknown")
                 icon = "✅" if status == "active" else "⏳"
@@ -399,7 +399,6 @@ def cmd_composio_connections(config: dict[str, Any]) -> int:
 def cmd_composio_test(config: dict[str, Any], toolkit: str) -> int:
     """Run a live test against a toolkit."""
     print(f"=== Composio Test: {toolkit} ===\n")
-    mode = config.get("integrations", {}).get("workspace", {}).get("mode", "mcp")
 
     try:
         from workspace_client import get_workspace_client
@@ -491,7 +490,7 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
     endpoint = mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp")
     key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
 
-    print(f"✅ Mode: mcp")
+    print("✅ Mode: mcp")
     print(f"✅ Endpoint: {endpoint}")
     if os.getenv(key_env):
         print(f"✅ {key_env}: set")
@@ -605,12 +604,12 @@ def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, too
         print(f"MCP init: {'✅' if result['mcp_initialized'] else '❌'}")
         if available_meta_tools:
             print(f"Meta tools: {', '.join(available_meta_tools)}")
-        print(f"\nEnabled tools:")
+        print("\nEnabled tools:")
         for tk, tools in all_tools.items():
             print(f"  {tk}: {', '.join(tools) if tools else '(none)'}")
         connections = result.get("connections", {})
         if connections:
-            print(f"\nConnections:")
+            print("\nConnections:")
             for tk, info in connections.items():
                 status = info.get("status", "unknown")
                 icon = "✅" if status == "connected" else "⚠️"
