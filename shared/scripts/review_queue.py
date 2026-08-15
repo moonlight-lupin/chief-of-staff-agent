@@ -8,11 +8,31 @@ Commands:
     python shared/scripts/review_queue.py approve --all --risk low --type gmail.label --reason "..." --confirm-low-risk-bulk
     python shared/scripts/review_queue.py dismiss --action-id <id> --reason "Not needed"
     python shared/scripts/review_queue.py execute --action-id <id>
+    python shared/scripts/review_queue.py claim --action-id <id>
+    python shared/scripts/review_queue.py record-execution --action-id <id> --status success
     python shared/scripts/review_queue.py summary
     python shared/scripts/review_queue.py audit --limit 20
 
 This CLI does not bypass provider guardrails. Execution is delegated to the
 same approved-action execution path used by webhook_events.py.
+
+Two execution paths, one state machine
+--------------------------------------
+
+``execute`` is the Python path: the guarded workspace client performs the
+mutation, and the approved→executing→executed transitions happen inside it.
+
+``claim`` + ``record-execution`` is the agent path, for the ``agent`` provider
+where the AI agent performs the mutation with its own connector tools and there
+is no Python call site to run those transitions:
+
+    approve → claim → (agent performs the action) → record-execution
+
+``claim`` must come before the side effect — it is where a lapsed approval is
+caught and where the claim is made exclusive. ``record-execution`` only records
+an outcome; it cannot approve, cannot skip the claim, and cannot revive a
+terminal action. Both paths write the same audit records, with externally
+executed results flagged ``executed_externally``.
 """
 from __future__ import annotations
 
@@ -37,6 +57,9 @@ from pending_actions import (  # noqa: E402
     dismiss_pending_action,
     get_pending_action,
     list_pending_actions,
+    mark_executed,
+    mark_executing,
+    mark_failed,
     preview_pending_action,
 )
 from suggested_actions import dismiss_suggestion, get_suggestion, list_suggestions  # noqa: E402
@@ -463,6 +486,176 @@ def cmd_execute(args: argparse.Namespace) -> int:
     return int(webhook_cmd_execute(delegated_args))
 
 
+def cmd_claim(args: argparse.Namespace) -> int:
+    """Claim an approved action for execution outside the Python client.
+
+    This is step 2 of the agent execution seam (approve → **claim** → agent
+    executes → record-execution). It exists because under the ``agent``
+    provider the AI agent performs the mutation with its own connector tools,
+    so there is no ``@guarded`` call site to run the approved→executing
+    transition.
+
+    Claiming must happen BEFORE the side effect, not after: ``mark_executing``
+    is where a lapsed approval is caught, and catching it after the mail has
+    already gone out is worthless. It also makes the claim exclusive, so two
+    agents cannot both believe they own the execution.
+    """
+    config = _load_config_or_exit(args.config)
+    if config is None:
+        return 1
+
+    action = get_pending_action(config, args.action_id)
+    if not action:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+
+    state = str(action.get("state") or "")
+    if state != "approved":
+        print(
+            f"Refusing to claim {args.action_id}: action is not approved (state={state}). "
+            f"Approve it first with: review_queue.py approve --action-id {args.action_id} "
+            f'--approver "<you>" --reason "<why>"',
+            file=sys.stderr,
+        )
+        return 1
+
+    claimed = mark_executing(config, args.action_id)
+    if claimed is None:
+        # mark_executing returns None for a lapsed approval, a concurrent
+        # claim, or a state that moved under us — all of which mean "do not act".
+        current = get_pending_action(config, args.action_id) or {}
+        print(
+            f"Could not claim {args.action_id}: approval has lapsed, or another "
+            f"process claimed it first (state={current.get('state', 'unknown')}). "
+            f"Do NOT perform the action.",
+            file=sys.stderr,
+        )
+        return 1
+
+    envelope = {
+        "action_id": args.action_id,
+        "state": claimed.get("state"),
+        "type": claimed.get("type"),
+        "provider": claimed.get("provider"),
+        "target": claimed.get("target"),
+        "payload": claimed.get("payload") or {},
+        "summary": claimed.get("summary") or "",
+        "risk": get_action_risk(str(claimed.get("type") or "")),
+        "approver": claimed.get("approver") or "",
+        "approved_at": claimed.get("approved_at") or "",
+        "claimed_at": claimed.get("executing_at") or "",
+        "next_step": (
+            "Perform exactly this action with your own connector tools, then close "
+            f"the loop with: review_queue.py record-execution --action-id {args.action_id} "
+            "--status success|failure [--result-json '{...}'] [--error '...']. "
+            "The action stays in 'executing' until you do, and a stuck 'executing' "
+            "action is reported by chief_of_staff.py doctor."
+        ),
+    }
+    print(json.dumps(envelope, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_record_execution(args: argparse.Namespace) -> int:
+    """Record the outcome of an action executed outside the Python client.
+
+    Step 4 of the agent execution seam. This is deliberately a *recording*
+    verb and not a second execution path: it only moves ``executing`` →
+    ``executed``/``failed``. It cannot approve, cannot skip the claim, and
+    cannot resurrect a terminal action — ``mark_executed`` and ``mark_failed``
+    both require ``executing`` state, and the pre-check below turns that into
+    an actionable message instead of a bare failure.
+    """
+    config = _load_config_or_exit(args.config)
+    if config is None:
+        return 1
+
+    action = get_pending_action(config, args.action_id)
+    if not action:
+        print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+
+    state = str(action.get("state") or "")
+    if state != "executing":
+        print(
+            f"Refusing to record {args.action_id}: action is not executing (state={state}). "
+            f"An action must be claimed before it is performed — run "
+            f"review_queue.py claim --action-id {args.action_id} first, then perform "
+            f"the action, then record it. Recording without claiming would let an "
+            f"unapproved action be marked executed.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.status == "failure":
+        error = str(getattr(args, "error", "") or "").strip()
+        if not error:
+            print("--error is required when --status failure", file=sys.stderr)
+            return 1
+        failed = mark_failed(config, args.action_id, error)
+        if failed is None:
+            print(f"Could not record failure for {args.action_id}", file=sys.stderr)
+            return 1
+        print(json.dumps({
+            "action_id": args.action_id,
+            "state": failed.get("state"),
+            "retry_count": failed.get("retry_count", 0),
+            "last_error": failed.get("last_error", ""),
+        }, indent=2, ensure_ascii=False, default=str))
+        return 0
+
+    data = _parse_result_json(getattr(args, "result_json", None))
+    if data is None:
+        return 1
+
+    result = {
+        "success": True,
+        "action": action.get("type"),
+        "provider": action.get("provider"),
+        "target": action.get("target"),
+        "data": data,
+        # Distinguishes an agent-connector execution from a guarded client one
+        # so the audit trail never implies more provenance than it has.
+        "executed_externally": True,
+        "executor": str(getattr(args, "executor", "") or "agent"),
+        "audited": True,
+    }
+
+    executed = mark_executed(config, args.action_id, result)
+    if executed is None:
+        print(f"Could not record execution for {args.action_id}", file=sys.stderr)
+        return 1
+
+    print(json.dumps({
+        "action_id": args.action_id,
+        "state": executed.get("state"),
+        "executed_at": executed.get("executed_at", ""),
+        "result": executed.get("result", {}),
+    }, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def _parse_result_json(raw: str | None) -> dict[str, Any] | None:
+    """Parse --result-json into a dict, or print why it is unusable.
+
+    Returns None on any problem so the caller can bail before touching state.
+    """
+    if raw is None or str(raw).strip() == "":
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        print(f"--result-json is not valid JSON: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(parsed, dict):
+        print(
+            f"--result-json must be a JSON object, got {type(parsed).__name__}",
+            file=sys.stderr,
+        )
+        return None
+    return parsed
+
+
 def cmd_summary(args: argparse.Namespace) -> int:
     config = _load_config_or_exit(args.config)
     if config is None:
@@ -601,6 +794,36 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_config_arg(execute_parser)
     execute_parser.add_argument("--action-id", required=True)
 
+    claim_parser = sub.add_parser(
+        "claim",
+        help="Claim an approved action for execution with your own tools (agent provider)",
+    )
+    _add_common_config_arg(claim_parser)
+    claim_parser.add_argument("--action-id", required=True)
+
+    record_parser = sub.add_parser(
+        "record-execution",
+        help="Record the outcome of a claimed action you executed yourself",
+    )
+    _add_common_config_arg(record_parser)
+    record_parser.add_argument("--action-id", required=True)
+    record_parser.add_argument(
+        "--status", required=True, choices=["success", "failure"],
+        help="Whether the action you performed succeeded",
+    )
+    record_parser.add_argument(
+        "--result-json", default=None,
+        help="JSON object of provider result data (e.g. '{\"message_id\": \"abc\"}')",
+    )
+    record_parser.add_argument(
+        "--error", default=None,
+        help="Error text; required when --status failure",
+    )
+    record_parser.add_argument(
+        "--executor", default=None,
+        help="Who executed it (e.g. 'claude-cowork'); recorded in the audit trail",
+    )
+
     summary_parser = sub.add_parser("summary", help="Show grouped queue counts and recommended next step")
     _add_common_config_arg(summary_parser)
 
@@ -627,6 +850,10 @@ def _main(argv: list[str] | None = None) -> int:
         return cmd_dismiss(args)
     if args.command == "execute":
         return cmd_execute(args)
+    if args.command == "claim":
+        return cmd_claim(args)
+    if args.command == "record-execution":
+        return cmd_record_execution(args)
     if args.command == "summary":
         return cmd_summary(args)
     if args.command == "audit":

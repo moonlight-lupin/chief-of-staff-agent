@@ -16,7 +16,7 @@ import os
 import platform
 import sys
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -85,6 +85,8 @@ workspace_capabilities = _try_import(
 )
 
 
+from capability_report import build_capability_report  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Helpers (extracted to cos_helpers.py)
 # ---------------------------------------------------------------------------
@@ -98,6 +100,7 @@ from cos_helpers import (  # noqa: E402
     _get_action_risk,
     _call_collector,
     _json_dump,
+    _reanchor_demo_envelope,
 )
 
 
@@ -1723,65 +1726,35 @@ _DEMO_CONFIG = {
 }
 
 
-_DEMO_TIMESTAMP_KEYS = ("date", "start", "end", "generated_at")
+def cmd_capabilities(args: argparse.Namespace) -> int:
+    """Print the capability report (JSON by default)."""
+    config = load_config(getattr(args, "config", None))
+    if config is None:
+        config = {}
+    report = build_capability_report(config, VERSION)
 
+    # JSON is the default; --summary opts into the human-readable table.
+    if getattr(args, "summary", False):
+        print("Chief of Staff Capabilities")
+        print(f"  Provider                  {report['provider']}")
+        print(f"  Live-verified             {'YES' if report['provider_verified'] else 'NO'}")
+        if report["provider_verification_note"]:
+            print(f"    ! {report['provider_verification_note']}")
+        print(f"  Supported actions         {len(report['supported'])}")
+        print(f"  Unsupported actions       {len(report['unsupported'])}")
+        for action, reason in sorted(report["unsupported_reasons"].items()):
+            print(f"    - {action}: {reason}")
+        print(f"  Project root              {report['project_root'] or '(unset)'}")
+        print(f"  Hosted session            {'YES' if report['hosted_session'] else 'no'}")
+        if report["hosted_session_refusal"]:
+            print(f"    ! {report['hosted_session_refusal']}")
+        print(f"  State persists            {'yes' if report['state_persistent'] else 'NO'}")
+        if not report["state_persistent"]:
+            print(f"    ! {report['state_note']}")
+        return 0
 
-def _reanchor_demo_envelope(envelope: Any) -> Any:
-    """Shift the bundled sample envelope so its anchor day becomes today.
-
-    ``examples/sample-workspace.json`` is a hand-written fixture anchored on a
-    fixed day. Rendered verbatim, the demo prints months-old timestamps under
-    headings like "next 48h", which is the first thing a new user sees. Shift
-    every timestamp by whole days so time-of-day and the relative spacing
-    between records are preserved while "today" is genuinely today.
-
-    Best-effort: an envelope without a parseable ``generated_at``, or an
-    individual value that will not parse, is left untouched.
-    """
-    if not isinstance(envelope, dict):
-        return envelope
-
-    anchor_raw = envelope.get("generated_at")
-    anchor = _parse_demo_ts(anchor_raw)
-    if anchor is None:
-        return envelope
-
-    shift = timedelta(days=(datetime.now(timezone.utc).date() - anchor.date()).days)
-    if not shift:
-        return envelope
-
-    def _shift(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                k: (_shift_ts(v, shift) if k in _DEMO_TIMESTAMP_KEYS else _shift(v))
-                for k, v in value.items()
-            }
-        if isinstance(value, list):
-            return [_shift(v) for v in value]
-        return value
-
-    return _shift(envelope)
-
-
-def _parse_demo_ts(raw: Any) -> datetime | None:
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _shift_ts(raw: Any, shift: timedelta) -> Any:
-    parsed = _parse_demo_ts(raw)
-    if parsed is None:
-        return raw
-    shifted = parsed + shift
-    # Preserve the fixture's trailing-Z spelling rather than +00:00.
-    if isinstance(raw, str) and raw.endswith("Z"):
-        return shifted.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return shifted.isoformat()
+    print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+    return 0
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -2337,6 +2310,15 @@ def build_parser() -> argparse.ArgumentParser:
     r_out.add_argument("--json", action="store_true", help="Structured JSON (rows + verdicts + verification)")
     r_out.add_argument("--markdown", action="store_true", help="Markdown formatted")
     readiness.set_defaults(func=cmd_readiness)
+
+    capabilities = sub.add_parser(
+        "capabilities",
+        help="What this installation may do: provider, supported/refused actions, state durability",
+    )
+    c_out = capabilities.add_mutually_exclusive_group()
+    c_out.add_argument("--json", action="store_true", help="Structured JSON (default)")
+    c_out.add_argument("--summary", action="store_true", help="Human-readable table")
+    capabilities.set_defaults(func=cmd_capabilities)
 
     demo = sub.add_parser(
         "demo",

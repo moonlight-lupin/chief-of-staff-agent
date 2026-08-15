@@ -144,6 +144,49 @@ def is_read_action(action: str) -> bool:
     return action in READ_ACTIONS
 
 
+# Providers that hold long-lived credentials of their own. In a hosted cloud
+# session these must not be used: environment variables there are stored in
+# plain text and are readable by anyone who uses the environment, and no
+# dedicated secrets store exists. The 'agent' provider is the safe one — it
+# holds no credentials at all, because the AI agent's own connectors do the I/O.
+CREDENTIAL_PROVIDERS: frozenset[str] = frozenset({
+    "google_api",
+    "m365",
+    "composio",
+    "composio_microsoft",
+    "composio_google",
+})
+
+# Set by Claude Code / Cowork in an Anthropic-hosted cloud session.
+_HOSTED_SESSION_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
+
+
+def in_hosted_session() -> bool:
+    """True when running inside a hosted cloud session (ephemeral VM)."""
+    return bool(os.getenv(_HOSTED_SESSION_ENV, "").strip())
+
+
+def hosted_session_refusal(provider: str) -> str | None:
+    """Return a refusal message if ``provider`` must not be used here.
+
+    Returns None when the provider is safe, or when this is not a hosted
+    session (a local machine has a real keychain and a persistent disk).
+    """
+    if not in_hosted_session():
+        return None
+    if str(provider or "").strip().lower() not in CREDENTIAL_PROVIDERS:
+        return None
+    return (
+        f"Workspace provider '{provider}' holds long-lived credentials and must not "
+        "be used in a hosted cloud session: environment variables there are stored "
+        "in plain text and are readable by anyone who uses the environment, and "
+        "there is no secrets store. Use the 'agent' provider instead — it holds no "
+        "credentials, because your own connector tools perform the reads and you "
+        "close the loop with review_queue.py claim / record-execution. To use "
+        f"'{provider}', run Chief of Staff on a local machine or Remote Control session."
+    )
+
+
 def is_write_action(action: str) -> bool:
     """Check if an action modifies external state.
 
