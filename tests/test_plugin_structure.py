@@ -278,3 +278,32 @@ class TestAgentOperatingContract:
     def test_governance_files_exist(self):
         for name in ("SECURITY.md", "CONTRIBUTING.md", "NOTICE"):
             assert (PLUGIN_ROOT / name).exists(), f"{name} missing"
+
+
+class TestLintConfigIsDeterministic:
+    """Ruff 0.16 broadened its *default* rule set, which turned a clean local
+    run into 859 CI findings with no code change. Both halves of the fix —
+    an explicit select and a pinned CI version — are asserted here so neither
+    can be dropped later without a failing test."""
+
+    def test_ruff_rule_set_is_explicit(self):
+        import tomllib
+
+        with open(PLUGIN_ROOT / "pyproject.toml", "rb") as f:
+            lint = tomllib.load(f).get("tool", {}).get("ruff", {}).get("lint", {})
+        assert lint.get("select"), (
+            "pyproject.toml must declare [tool.ruff.lint] select explicitly — "
+            "inheriting ruff's default means a ruff release can change what CI enforces"
+        )
+
+    def test_ci_pins_ruff(self):
+        ci = (PLUGIN_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        assert re.search(r"ruff==\d+\.\d+\.\d+", ci), (
+            "CI must install a pinned ruff version, not bare `pip install ruff`"
+        )
+
+    def test_ci_lint_is_blocking(self):
+        """The lint step must not carry continue-on-error, or it is decorative."""
+        ci = (PLUGIN_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        lint_step = ci.split("- name: Lint (ruff)", 1)[1].split("- name:", 1)[0]
+        assert "continue-on-error" not in lint_step
