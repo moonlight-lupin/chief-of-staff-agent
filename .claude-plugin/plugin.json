@@ -1,0 +1,24 @@
+{
+  "name": "chief-of-staff",
+  "displayName": "Chief of Staff",
+  "version": "0.4.0",
+  "description": "A private, approval-gated AI Chief of Staff for founders and small teams: briefings, deadlines, pipeline, documents, calendar, knowledge base, research, travel, bookkeeping, and signing — every consequential action reviewed before it runs.",
+  "author": {
+    "name": "moonlight-lupin"
+  },
+  "homepage": "https://github.com/moonlight-lupin/chief-of-staff-agent",
+  "repository": "https://github.com/moonlight-lupin/chief-of-staff-agent",
+  "license": "Apache-2.0",
+  "keywords": [
+    "chief-of-staff",
+    "briefing",
+    "email",
+    "calendar",
+    "crm",
+    "bookkeeping",
+    "deadlines",
+    "knowledge-base",
+    "research",
+    "approval-gated"
+  ]
+}

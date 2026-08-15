@@ -219,3 +219,62 @@ class TestScriptsCompile:
             py_compile.compile(str(path), doraise=True)
         else:
             pytest.skip(f"{script_rel} not yet built")
+
+class TestClaudePluginManifests:
+    """The .claude-plugin/ manifests are additive — Hermes never reads them —
+    but they must stay valid and in step with plugin.yaml."""
+
+    def _plugin_json(self):
+        import json
+        return json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
+
+    def _marketplace_json(self):
+        import json
+        return json.loads((PLUGIN_ROOT / ".claude-plugin" / "marketplace.json").read_text())
+
+    def test_manifests_exist_and_parse(self):
+        assert self._plugin_json()["name"] == "chief-of-staff"
+        assert self._marketplace_json()["plugins"]
+
+    def test_component_dirs_are_not_inside_claude_plugin(self):
+        """Only plugin.json/marketplace.json belong in .claude-plugin/."""
+        for name in ("skills", "commands", "agents", "hooks"):
+            assert not (PLUGIN_ROOT / ".claude-plugin" / name).exists(), (
+                f".claude-plugin/{name}/ must live at the plugin root instead"
+            )
+
+    def test_versions_track_plugin_yaml(self):
+        expected = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())["version"]
+        assert self._plugin_json()["version"] == expected
+        entry = self._marketplace_json()["plugins"][0]
+        assert entry["version"] == expected
+
+    def test_licenses_agree(self):
+        assert self._plugin_json()["license"] == "Apache-2.0"
+
+    def test_marketplace_source_resolves(self):
+        source = self._marketplace_json()["plugins"][0]["source"]
+        assert (PLUGIN_ROOT / source / ".claude-plugin" / "plugin.json").exists()
+
+
+class TestAgentOperatingContract:
+    """CLAUDE.md is what a Claude agent reads on arrival; Hermes ignores it."""
+
+    def test_claude_md_exists(self):
+        assert (PLUGIN_ROOT / "CLAUDE.md").exists()
+
+    def test_states_the_prohibitions(self):
+        text = (PLUGIN_ROOT / "CLAUDE.md").read_text()
+        for required in (
+            "CHIEF_OF_STAFF_AUTO_APPROVE",
+            "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE",
+            "capabilities",
+            "claim",
+            "record-execution",
+            "CLAUDE_CODE_REMOTE_SESSION_ID",
+        ):
+            assert required in text, f"CLAUDE.md never mentions {required}"
+
+    def test_governance_files_exist(self):
+        for name in ("SECURITY.md", "CONTRIBUTING.md", "NOTICE"):
+            assert (PLUGIN_ROOT / name).exists(), f"{name} missing"
