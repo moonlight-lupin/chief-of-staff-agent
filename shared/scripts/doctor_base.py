@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -601,12 +602,52 @@ def _check_compile(fix: bool, data: dict[str, Any] | None, config_path: Path) ->
     return CheckResult("python_compile", "pass" if not failures else "fail", "all scripts compile" if not failures else "; ".join(failures[:5]))
 
 
+# (import name, distribution name) for every package in requirements.txt.
+# pymupdf is imported under its modern name — importing the legacy `fitz` alias
+# prints a deprecation warning straight to stdout, which corrupts --json output.
+REQUIRED_PACKAGES: tuple[tuple[str, str], ...] = (
+    ("yaml", "PyYAML"),
+    ("docx", "python-docx"),
+    ("pymupdf", "pymupdf"),
+    ("requests", "requests"),
+    ("google.auth", "google-auth"),
+    ("cryptography", "cryptography"),
+    ("msal", "msal"),
+)
+
+
 def _check_packages(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    missing = []
-    for module, label in (("yaml", "PyYAML"), ("docx", "python-docx"), ("fitz", "pymupdf")):
-        if importlib.util.find_spec(module) is None:
-            missing.append(label)
-    return CheckResult("python_packages", "pass" if not missing else "fail", "installed" if not missing else f"missing: {missing}")
+    """Import every declared dependency, rather than only looking for it.
+
+    ``importlib.util.find_spec`` reports an installed-but-broken package as
+    present. The common real-world case is a distro-managed ``cryptography``
+    whose ``_cffi_backend`` is missing: the spec resolves, and then importing
+    it raises ``pyo3_runtime.PanicException`` — which is a ``BaseException``,
+    not an ``Exception``, so a naive ``except Exception`` would let it escape
+    as an unreadable Rust backtrace. Catch broadly and report a sentence.
+
+    Imports run with stdout redirected: a package that chatters on import
+    (PyMuPDF's legacy alias does) would otherwise corrupt ``doctor --json``.
+    """
+    broken: list[str] = []
+    for module, label in REQUIRED_PACKAGES:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                importlib.import_module(module)
+        except BaseException as exc:  # noqa: BLE001 - pyo3 panics are BaseExceptions
+            broken.append(f"{label} ({type(exc).__name__}: {exc})")
+
+    if not broken:
+        return CheckResult(
+            "python_packages", "pass",
+            f"all {len(REQUIRED_PACKAGES)} declared dependencies import cleanly",
+        )
+    return CheckResult(
+        "python_packages", "fail",
+        "not importable: " + "; ".join(broken)
+        + " — reinstall with: pip install --force-reinstall -r requirements.txt "
+          "(a distro-managed package may be shadowing the pip one)",
+    )
 
 
 def _check_audit_runs(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
