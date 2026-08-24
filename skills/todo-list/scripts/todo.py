@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutate and query Chief-of-Staff todos.yaml."""
+"""Mutate and query Chief-of-Staff todos store (SQLite KV)."""
 from __future__ import annotations
 
 import argparse

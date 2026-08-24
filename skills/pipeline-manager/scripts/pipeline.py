@@ -17,12 +17,10 @@ if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
 try:
-    import yaml  # type: ignore
     from config_loader import load_config  # type: ignore
     from schemas import SchemaError, generate_id, validate_deal  # type: ignore
     from state_db import (  # type: ignore
         StateStoreError,
-        get_store_path,
         load_store,
         mutate_kv,
     )
@@ -157,41 +155,21 @@ def _is_iso_date(value: Any) -> bool:
 
 
 def load_pipeline_store(config: Mapping[str, Any] | None = None, *, strict: bool = True) -> dict[str, Any]:
-    """Load pipeline store.
+    """Load the pipeline KV store from SQLite.
 
-    Missing file initializes as ``deals: []`` via ``state_store.load_store``.
-    Malformed YAML raises ``StateStoreError`` (caller should print and return 1).
+    Missing store initializes as ``deals: []`` via ``state_db.load_store``.
+    Corrupt or unreadable stores raise ``StateStoreError`` (caller should print and return 1).
 
     When ``strict=False`` (read/validate paths), skip per-deal schema validation so
     ``validate`` / ``stale`` / ``list`` can still inspect imperfect data.
     """
-    if strict:
-        return load_store("pipeline", config)
-    # Soft load for inspection without rejecting bad stages/values.
-    try:
-        path = get_store_path("pipeline", config=config)
-    except StateStoreError:
-        raise
-    except Exception as exc:
-        raise StateStoreError(f"Cannot resolve pipeline store path: {exc}") from exc
-    if not path.exists():
-        # Same semantics as load_store for missing files.
-        return load_store("pipeline", config)
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            loaded = yaml.safe_load(fh)
-    except yaml.YAMLError as exc:
-        raise StateStoreError(f"Corrupt YAML in {path}: {exc}") from exc
-    except OSError as exc:
-        raise StateStoreError(f"Cannot read {path}: {exc}") from exc
-    if loaded is None:
+    data = load_store("pipeline", config, validate=strict)
+    if not isinstance(data, dict):
         return {"deals": []}
-    if not isinstance(loaded, dict):
-        raise StateStoreError(f"Invalid YAML in {path}: top-level value must be a mapping")
-    if "deals" not in loaded:
-        loaded = dict(loaded)
-        loaded.setdefault("deals", [])
-    return loaded
+    if "deals" not in data:
+        data = dict(data)
+        data.setdefault("deals", [])
+    return data
 
 
 def days_inactive(deal: Mapping[str, Any], today_date: date | None = None) -> int | None:

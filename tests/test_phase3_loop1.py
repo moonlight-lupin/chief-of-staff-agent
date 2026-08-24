@@ -193,8 +193,9 @@ class TestLeaseRenewal:
         import time as _time
         config, project = temp_project
 
-        ok, _ = reserve_delivery(config, "delivery-renew")
-        assert ok
+        reservation = reserve_delivery(config, "delivery-renew")
+        assert reservation[0]
+        token = reservation.lease_token
 
         # Age the reservation to near lease expiry
         cache = _load_replay_cache(config)
@@ -202,8 +203,8 @@ class TestLeaseRenewal:
         from state_db import _save_replay_cache_unlocked
         _save_replay_cache_unlocked(config, cache)
 
-        # Renew the lease
-        renewed = renew_delivery(config, "delivery-renew")
+        # Renew the lease (tokenized rows require the stored token)
+        renewed = renew_delivery(config, "delivery-renew", lease_token=token)
         assert renewed is True, "renew_delivery must extend the lease"
 
         # Verify the timestamp was updated

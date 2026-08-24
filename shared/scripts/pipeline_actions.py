@@ -2,16 +2,16 @@
 """Core pipeline operations and execution of approved pipeline pending actions.
 
 Handles:
-  - load / save / find / validate deals in pipeline.yaml
+  - load / save / find / validate deals in the pipeline KV store (SQLite)
   - stale deal detection for briefing / review
   - execution of approved ``pipeline.*`` pending actions
 
 Safety:
-  - Must only write pipeline.yaml after an approved pending action
-  - Must use state_store.save_store_atomic for the audit trail
+  - Must only write the pipeline store after an approved pending action
+  - Must use state_db.mutate_kv for the audit trail and CAS
   - Must NOT call any provider (Gmail/Drive/Calendar)
   - Must NOT delete deals
-  - Must NOT write invoices.yaml
+  - Must NOT write the invoices store
   - Stdlib only (shared modules live on sys.path)
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ from state_db import (  # noqa: E402
     mutate_kv,
 )
 from schemas import generate_id  # noqa: E402
-from state_db import load_store, save_store_atomic  # noqa: E402
+from state_db import load_store  # noqa: E402
 
 TERMINAL_STAGES = frozenset({"Paid", "Lost", "Cancelled"})
 DEFAULT_STALE_THRESHOLD_DAYS = 14
@@ -181,7 +181,7 @@ def _recommended_action(stage: str, days_inactive: int) -> str:
 
 
 def load_pipeline(config: Any) -> dict[str, Any]:
-    """Load pipeline.yaml via state_store. Returns dict with ``deals`` list."""
+    """Load the pipeline KV store via state_db. Returns dict with ``deals`` list."""
     data = load_store("pipeline", config)
     if not isinstance(data, dict):
         return {"deals": []}
@@ -197,16 +197,30 @@ def save_pipeline(
     before: Mapping[str, Any] | None,
     after: Mapping[str, Any] | None,
 ) -> Path:
-    """Atomically save pipeline.yaml with audit trail (actor=agent)."""
-    return save_store_atomic(
+    """Atomically replace the pipeline KV store with audit trail (actor=agent).
+
+    The write runs inside ``mutate_kv()`` so concurrent updates cannot
+    last-writer-win outside a CAS transaction.
+    """
+    incoming = dict(data)
+
+    def _mutate(current: dict[str, Any]) -> None:
+        current.clear()
+        current.update(incoming)
+        if not isinstance(current.get("deals"), list):
+            current["deals"] = []
+
+    mutate_kv(
         "pipeline",
-        data,
+        _mutate,
         action=action,
         before=before,
         after=after,
         actor="agent",
         config=config,
     )
+    from state_db import get_store_path
+    return get_store_path("pipeline", config=config)
 
 
 def find_deal_by_id(data: Mapping[str, Any], deal_id: str) -> dict[str, Any] | None:
@@ -496,7 +510,7 @@ def _exec_deal_add(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
     def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         deals = data.setdefault("deals", [])
         if not isinstance(deals, list):
-            raise ValueError("pipeline.yaml 'deals' must be a list")
+            raise ValueError("pipeline store 'deals' must be a list")
 
         deal = _build_deal_from_payload(payload, config)
         existing_ids = {str(d.get("id")) for d in deals if isinstance(d, dict)}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutate and summarize Chief-of-Staff invoices.yaml."""
+"""Mutate and summarize Chief-of-Staff invoices store (SQLite KV)."""
 from __future__ import annotations
 
 import argparse

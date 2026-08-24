@@ -11,7 +11,9 @@ a string. It never mutates, calls providers, or performs I/O.
 """
 from __future__ import annotations
 
+import html as _html
 import json
+import re
 from typing import Any
 
 
@@ -416,22 +418,33 @@ th{color:var(--muted);font-weight:600}
 """
 
 
+_KNOWN_RISK_LABELS = {"high": "High", "medium": "Medium", "low": "Low"}
+
+
 def _risk_badge(risk: str) -> str:
-    cls = {"high": "badge-high", "medium": "badge-medium", "low": "badge-low"}.get(risk, "badge-neutral")
-    label = risk.title() if risk else "Info"
-    return f'<span class="badge {cls}">{label}</span>'
+    key = str(risk or "").strip().lower()
+    cls = {"high": "badge-high", "medium": "badge-medium", "low": "badge-low"}.get(key, "badge-neutral")
+    if key in _KNOWN_RISK_LABELS:
+        label = _KNOWN_RISK_LABELS[key]
+    elif risk:
+        label = str(risk)
+    else:
+        label = "Info"
+    return f'<span class="badge {cls}">{_esc(label)}</span>'
 
 
-def _esc(text: str) -> str:
-    import html as _html
-    return _html.escape(str(text)) if text else ""
+def _esc(text: Any) -> str:
+    return _html.escape(str(text)) if text not in (None, "") else ""
 
 
 def _link(href: str, label: str, cls: str = "") -> str:
     if not href:
         return ""
+    url = str(href).strip()
+    if not re.match(r"^https?://", url, re.I):
+        return ""
     cls_attr = f' class="{cls}"' if cls else ""
-    return f'<a href="{_esc(href)}"{cls_attr}>{_esc(label)}</a>'
+    return f'<a href="{_esc(url)}"{cls_attr}>{_esc(label)}</a>'
 
 
 def _html_needs_attention(items: list) -> str:
@@ -454,10 +467,19 @@ def _html_pending_approvals(pa: dict) -> str:
     if not pa:
         return '<p class="muted">No pending approvals.</p>'
     parts = []
-    for action_type, actions in pa.items():
+    for risk_level in ("high", "medium", "low"):
+        actions = pa.get(risk_level, [])
+        if not actions:
+            continue
         for a in actions:
-            parts.append(f'<div class="item"><strong>{_esc(action_type)}</strong>: '
-                         f'{_esc(a.get("summary", a.get("id", "")))}</div>')
+            if not isinstance(a, dict):
+                continue
+            action_type = a.get("type", a.get("action_type", "?"))
+            summary = a.get("summary", a.get("id", a.get("action_id", "")))
+            parts.append(
+                f'<div class="item">{_risk_badge(risk_level)} <strong>{_esc(action_type)}</strong>: '
+                f'{_esc(summary)}</div>'
+            )
     return "".join(parts) if parts else '<p class="muted">No pending approvals.</p>'
 
 

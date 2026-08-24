@@ -143,16 +143,21 @@ class TestPipelineScript:
         # Add a deal with old last_activity
         run_script("skills/pipeline-manager/scripts/pipeline.py",
             "add", "--client", "Old Deal", "--stage", "Lead")
-        # Manually set old date
-        data = yaml.safe_load((tmp_project / "pipeline.yaml").read_text())
+        # Authoritative state is SQLite; YAML is only a snapshot.
+        from config_loader import load_config
+        from state_db import mutate_kv
+        config = load_config()
         old_date = (date.today() - timedelta(days=30)).isoformat()
-        data["deals"][0]["last_activity"] = old_date
-        data["deals"][0]["created"] = old_date
-        (tmp_project / "pipeline.yaml").write_text(yaml.dump(data))
+
+        def _age(data):
+            data["deals"][0]["last_activity"] = old_date
+            data["deals"][0]["created"] = old_date
+
+        mutate_kv("pipeline", _age, config=config)
 
         rc, out, err = run_script("skills/pipeline-manager/scripts/pipeline.py",
             "list", "--stale")
-        assert rc == 0
+        assert rc == 0, err
         assert "Old Deal" in out
 
     def test_add_note(self, tmp_project):

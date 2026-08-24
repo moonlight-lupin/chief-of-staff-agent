@@ -531,7 +531,13 @@ def parse_date(value: Any) -> date | None:
 
 
 def collect_pipeline(config: Any, project_root: Path) -> list[dict[str, Any]]:
-    data = load_yaml(project_root / "pipeline.yaml")
+    try:
+        from state_db import load_store
+        data = load_store("pipeline", config, validate=False)
+    except Exception:
+        data = {"deals": []}
+    if not isinstance(data, dict):
+        data = {"deals": []}
     threshold = int(config.get("stale_threshold_days") or 14)
     now = date.today()
     stale: list[dict[str, Any]] = []
@@ -551,7 +557,13 @@ def collect_pipeline(config: Any, project_root: Path) -> list[dict[str, Any]]:
 
 
 def collect_todos(config: Any, project_root: Path) -> list[dict[str, Any]]:
-    data = load_yaml(project_root / "todos.yaml")
+    try:
+        from state_db import load_store
+        data = load_store("todos", config, validate=False)
+    except Exception:
+        data = {"todos": []}
+    if not isinstance(data, dict):
+        data = {"todos": []}
     now = date.today()
     items: list[dict[str, Any]] = []
     for todo in data.get("todos", []) or []:
@@ -574,7 +586,13 @@ def dec(value: Any) -> Decimal:
 
 
 def collect_invoices(config: Any, project_root: Path) -> list[dict[str, Any]]:
-    data = load_yaml(project_root / "invoices.yaml")
+    try:
+        from state_db import load_store
+        data = load_store("invoices", config, validate=False)
+    except Exception:
+        data = {"invoices": []}
+    if not isinstance(data, dict):
+        data = {"invoices": []}
     now = date.today()
     overdue: list[dict[str, Any]] = []
     ar_totals: dict[str, Decimal] = {}
@@ -848,10 +866,11 @@ def build_parser() -> argparse.ArgumentParser:
     # run subcommand
     run_p = sub.add_parser("run", help="Generate structured daily briefing")
     run_p.add_argument("--config", help="Path to company.yaml")
-    run_p.add_argument("--summary", action="store_true", help="Text summary output")
-    run_p.add_argument("--json", action="store_true", help="JSON output")
-    run_p.add_argument("--markdown", action="store_true", help="Markdown output")
-    run_p.add_argument("--html", action="store_true", help="HTML output (self-contained, inline CSS)")
+    fmt_g = run_p.add_mutually_exclusive_group()
+    fmt_g.add_argument("--summary", action="store_true", help="Text summary output")
+    fmt_g.add_argument("--json", action="store_true", help="JSON output")
+    fmt_g.add_argument("--markdown", action="store_true", help="Markdown output")
+    fmt_g.add_argument("--html", action="store_true", help="HTML output (self-contained, inline CSS)")
     run_p.add_argument("--output", dest="output_path", help="Write output to file instead of stdout")
     run_p.add_argument("--since", type=int, default=24, help="Hours to look back for events (default: 24)")
     run_p.add_argument("--limit", type=int, default=50, help="Max events to include (default: 50)")
@@ -1032,6 +1051,61 @@ def build_briefing(config_path: str | None, since_hours: int = 24, limit: int = 
     )
 
 
+def _resolve_briefing_format(args: argparse.Namespace, config: Mapping[str, Any] | None) -> str:
+    """CLI format flags win; otherwise use delivery.default_format from config."""
+    if getattr(args, "json", False):
+        return "json"
+    if getattr(args, "markdown", False):
+        return "markdown"
+    if getattr(args, "html", False):
+        return "html"
+    if getattr(args, "summary", False):
+        return "text"
+    delivery = (config or {}).get("delivery") if isinstance(config, Mapping) else None
+    raw = ""
+    if isinstance(delivery, Mapping):
+        raw = str(delivery.get("default_format") or "").strip().lower()
+    if raw in {"html", "json", "markdown", "text"}:
+        return raw
+    return "text"
+
+
+def _html_attachment_path(config: Mapping[str, Any] | None, briefing: dict[str, Any]) -> Path:
+    root = get_project_root(config) if config else None
+    base = Path(root) if root else Path.cwd()
+    stamp = str(briefing.get("generated_at") or "")[:10] or today()
+    return base / f"daily-briefing-{stamp}.html"
+
+
+def _emit_rendered(
+    rendered: str,
+    *,
+    fmt: str,
+    output_path: str | None,
+    explicit_flag: bool,
+    config: Mapping[str, Any] | None,
+    briefing: dict[str, Any],
+) -> str | None:
+    """Write rendered briefing to --output, stdout, or an HTML attachment.
+
+    Returns the attachment path when HTML was delivered as a file (MEDIA:),
+    otherwise None.
+    """
+    if output_path:
+        dest = Path(output_path).expanduser()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(rendered, encoding="utf-8")
+        return str(dest)
+    if fmt == "html" and not explicit_flag:
+        dest = _html_attachment_path(config, briefing)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(rendered, encoding="utf-8")
+        print(f"MEDIA:{dest}")
+        return str(dest)
+    print(rendered)
+    return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Generate structured briefing and output in requested format."""
     workspace_input = None
@@ -1044,13 +1118,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit,
                                           workspace_input=workspace_input)
     from briefing_renderer import render
-    if args.json:
-        print(render(briefing, "json"))
-    elif args.markdown:
-        print(render(briefing, "markdown"))
-    else:
-        # --summary or default → text
-        print(render(briefing, "text"))
+    config = load_config(args.config)
+    fmt = _resolve_briefing_format(args, config)
+    rendered = render(briefing, fmt)
+    _emit_rendered(
+        rendered,
+        fmt=fmt,
+        output_path=getattr(args, "output_path", None),
+        explicit_flag=bool(getattr(args, "html", False) or getattr(args, "json", False)
+                           or getattr(args, "markdown", False) or getattr(args, "summary", False)),
+        config=config,
+        briefing=briefing,
+    )
     if not args.dry_run:
         record_success(args.config, briefing, render(briefing, "text"))
     return 0
@@ -1078,7 +1157,11 @@ def cmd_notify(args: argparse.Namespace) -> int:
             return 1
         if args.dry_run:
             print(f"[DRY-RUN] Would create pending gmail.send to {args.to}")
-            print(render(briefing, "markdown"))
+            fmt = _resolve_briefing_format(args, load_config(args.config))
+            if fmt == "html":
+                print(render(briefing, "html"))
+            else:
+                print(render(briefing, "markdown"))
             return 0
         # Create a PENDING ACTION only — do NOT auto-send
         try:
@@ -1087,17 +1170,29 @@ def cmd_notify(args: argparse.Namespace) -> int:
             if not config:
                 print("Error: cannot load config", file=sys.stderr)
                 return 1
-            rendered = render(briefing, "markdown")
+            fmt = _resolve_briefing_format(args, config)
+            payload: dict[str, Any] = {
+                "to": args.to,
+                "subject": f"Daily Briefing — {briefing.get('generated_at', '')[:10]}",
+            }
+            if fmt == "html":
+                dest = _html_attachment_path(config, briefing)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(render(briefing, "html"), encoding="utf-8")
+                payload["body"] = f"Daily briefing attached.\nMEDIA:{dest}"
+                payload["attachments"] = [{
+                    "path": str(dest),
+                    "filename": dest.name,
+                    "mime_type": "text/html",
+                }]
+            else:
+                payload["body"] = render(briefing, "markdown")
             action = create_pending_action(
                 config=config,
                 action_type="gmail.send",
                 provider="google_api",
                 target=args.to,
-                payload={
-                    "to": args.to,
-                    "subject": f"Daily Briefing — {briefing.get('generated_at', '')[:10]}",
-                    "body": rendered,
-                },
+                payload=payload,
                 summary=f"Email daily briefing to {args.to}",
             )
             print(f"✅ Pending action created: {action['id']} (gmail.send to {args.to})")

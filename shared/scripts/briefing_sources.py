@@ -118,6 +118,67 @@ def _calendar_event_time(event: Mapping[str, Any]) -> datetime | None:
     return None
 
 
+def _calendar_end_iso(event: Mapping[str, Any]) -> str:
+    """Extract an end-time ISO string from common calendar event shapes."""
+    end = event.get("end")
+    if isinstance(end, Mapping):
+        for key in ("dateTime", "datetime", "date", "time"):
+            dt = _parse_datetime(end.get(key))
+            if dt is not None:
+                return dt.isoformat()
+    for key in ("end_time", "endTime", "end"):
+        raw = event.get(key)
+        if isinstance(raw, Mapping):
+            continue
+        dt = _parse_datetime(raw)
+        if dt is not None:
+            return dt.isoformat()
+    return ""
+
+
+def _first_nonempty_str(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _event_link(event: Mapping[str, Any]) -> str:
+    return _first_nonempty_str(
+        event.get("event_link"),
+        event.get("htmlLink"),
+        event.get("webLink"),
+        event.get("html_link"),
+        event.get("web_link"),
+    )
+
+
+def _conference_link(event: Mapping[str, Any]) -> str:
+    direct = _first_nonempty_str(
+        event.get("conference_link"),
+        event.get("hangoutLink"),
+        event.get("hangout_link"),
+        event.get("joinUrl"),
+        event.get("join_url"),
+    )
+    if direct:
+        return direct
+    online = event.get("onlineMeeting") or event.get("online_meeting")
+    if isinstance(online, Mapping):
+        found = _first_nonempty_str(online.get("joinUrl"), online.get("join_url"))
+        if found:
+            return found
+    conf = event.get("conferenceData") or event.get("conference_data")
+    if isinstance(conf, Mapping):
+        for entry in conf.get("entryPoints") or []:
+            if not isinstance(entry, Mapping):
+                continue
+            uri = _first_nonempty_str(entry.get("uri"), entry.get("url"))
+            if uri:
+                return uri
+    return ""
+
+
 def _calendar_summary(event: Mapping[str, Any], when: datetime) -> dict[str, Any]:
     """Normalize a provider calendar event for briefing rendering."""
     summary = (
@@ -127,11 +188,17 @@ def _calendar_summary(event: Mapping[str, Any], when: datetime) -> dict[str, Any
         or event.get("subject")
         or "Calendar event"
     )
+    title = str(summary)
     return {
         "when": when.isoformat(),
-        "summary": str(summary),
+        "summary": title,
+        "title": title,
+        "start": when.isoformat(),
+        "end": _calendar_end_iso(event),
         "event_id": str(event.get("id") or event.get("event_id") or ""),
         "location": str(event.get("location") or ""),
+        "event_link": _event_link(event),
+        "conference_link": _conference_link(event),
     }
 
 
@@ -572,16 +639,10 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
 
 
 def collect_pipeline_stats(config: object) -> dict[str, object]:
-    """Read pipeline.yaml for daily briefing CRM section.
+    """Read the pipeline KV store for the daily briefing CRM section.
 
-    Degrades gracefully if file doesn't exist.
+    Degrades gracefully if the store is missing or unreadable.
     """
-    try:
-        root = _project_root(config)
-    except Exception:
-        return {}
-
-    pipeline_path = root / "pipeline.yaml"
     stats: dict[str, object] = {
         "active_deals": 0,
         "stale_deals": 0,
@@ -595,10 +656,8 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
     }
 
     try:
-        if not pipeline_path.exists():
-            return stats
-        import yaml as _yaml
-        data = _yaml.safe_load(pipeline_path.read_text(encoding="utf-8"))
+        from state_db import load_store
+        data = load_store("pipeline", config if isinstance(config, dict) else None, validate=False)
         if not isinstance(data, dict):
             return stats
         deals = data.get("deals", [])
@@ -620,13 +679,13 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
         # Load invoices for deal_id cross-reference
         invoices_by_deal: dict[str, dict] = {}
         try:
-            invoices_path = root / "invoices.yaml"
-            if invoices_path.exists():
-                inv_data = _yaml.safe_load(invoices_path.read_text(encoding="utf-8"))
-                if isinstance(inv_data, dict):
-                    for inv in inv_data.get("invoices", []):
-                        if isinstance(inv, dict) and inv.get("deal_id"):
-                            invoices_by_deal[str(inv["deal_id"])] = inv
+            inv_data = load_store(
+                "invoices", config if isinstance(config, dict) else None, validate=False
+            )
+            if isinstance(inv_data, dict):
+                for inv in inv_data.get("invoices", []) or []:
+                    if isinstance(inv, dict) and inv.get("deal_id"):
+                        invoices_by_deal[str(inv["deal_id"])] = inv
         except Exception:
             pass
 

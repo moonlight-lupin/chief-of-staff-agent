@@ -693,7 +693,6 @@ def attachment_drive_suggestion(response: str = "", context: dict = None, **kwar
         if "MEDIA:" not in message:
             return None
         # Extract MEDIA: paths
-        import re
         media_paths = re.findall(r"MEDIA:([^\s]+)", message)
         if not media_paths:
             return None

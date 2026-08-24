@@ -3,23 +3,22 @@
 
 Called by the execution router (webhook_events.py) after an operator
 approves a proposed invoice candidate. Re-validates and re-checks
-duplicates before any write to invoices.yaml.
+duplicates before any write to the invoices KV store (SQLite).
 
 Safety:
   - Only appends invoices after re-validation and re-duplicate-check
   - Refuses when a near-duplicate is found (score >= 0.95) unless
     payload has override_duplicate=true
-  - Uses state_store.save_store_atomic for the audit trail
+  - Uses state_db.mutate_kv for the audit trail and CAS
   - Never calls providers, never deletes/updates existing invoices,
     never marks invoices paid
   - Money compared with Decimal (amounts stored as strings in payload /
-    candidates; cast to number only for invoices.yaml schema)
+    candidates; cast to number only for the invoices store schema)
 
 Only stdlib imports (shared modules live on sys.path).
 """
 from __future__ import annotations
 
-import copy
 import json
 import os
 import re
@@ -38,9 +37,9 @@ from state_db import (  # noqa: E402
     mark_executed,
     mark_executing,
     mark_failed,
+    mutate_kv,
 )
 from schemas import generate_id, validate_invoice  # noqa: E402
-from state_db import load_store, save_store_atomic  # noqa: E402
 
 CANDIDATES_FILENAME = ".bookkeeper_invoice_candidates.json"
 DUPLICATE_REFUSE_THRESHOLD = 0.95
@@ -393,8 +392,16 @@ def _normalize_proposed_invoice(proposed: Mapping[str, Any], config: Any) -> dic
         inv["notes"] = ""
 
     # Keep amount also as string for callers that prefer string money, but
-    # invoices.yaml storage remains numeric for schema validation.
+    # invoices store remains numeric for schema validation.
     return inv
+
+
+class _DuplicateInvoiceRefused(Exception):
+    """Raised inside mutate_kv when a likely duplicate should refuse the write."""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        super().__init__(result.get("error") or "duplicate_likely")
+        self.result = result
 
 
 def execute_invoice_record(config: Any, action_id: str) -> dict[str, Any]:
@@ -405,7 +412,7 @@ def execute_invoice_record(config: Any, action_id: str) -> dict[str, Any]:
       2. mark_executing if still approved
       3. Re-load candidate, re-validate, re-check duplicates
       4. Refuse on likely duplicate unless override_duplicate
-      5. Append proposed_invoice via save_store_atomic(action=add_invoice)
+      5. Append proposed_invoice via mutate_kv(action=add_invoice)
       6. Mark candidate recorded; mark_executed with result
 
     Returns a result dict with at least:
@@ -483,72 +490,70 @@ def execute_invoice_record(config: Any, action_id: str) -> dict[str, Any]:
         if not isinstance(proposed_raw, dict) or not proposed_raw:
             raise ValueError(f"Candidate {candidate_id} has no proposed_invoice")
 
-        # Prefer live invoices for re-validation / re-duplicate-check
-        invoices_data = load_store("invoices", config)
-
-        validation = validate_candidate(candidate, invoices_data)
-        if not validation.get("valid") or validation.get("validation_status") == "invalid":
-            raise ValueError(
-                "Re-validation failed: "
-                + "; ".join(validation.get("warnings") or ["invalid candidate"])
-            )
-
-        dups = check_duplicate(proposed_raw, invoices_data)
-        likely = [d for d in dups if float(d.get("score", 0)) >= DUPLICATE_REFUSE_THRESHOLD]
-        if likely and not override_duplicate:
-            top = likely[0]
-            err = (
-                f"duplicate_likely: matches {top.get('invoice_id')} "
-                f"(score={top.get('score')}, reasons={top.get('reasons')}). "
-                "Refuse unless payload.override_duplicate=true"
-            )
-            mark_failed(config, action_id, err)
-            return {
-                "success": False,
-                "refused": True,
-                "reason": "duplicate_likely",
-                "error": err,
-                "invoice_id": None,
-                "candidate_id": candidate_id,
-                "duplicate_candidates": likely,
-            }
-
         inv = _normalize_proposed_invoice(proposed_raw, config)
         # Final schema gate before write
         validate_invoice(inv)
 
-        # Guard again with Domain true-duplicate (cp + amount + issue_date)
-        # even if score-based path was overridden/missed intermediate scores.
-        invoices_list = invoices_data.setdefault("invoices", [])
-        if not isinstance(invoices_list, list):
-            raise ValueError("invoices.yaml 'invoices' must be a list")
+        def _mutate(invoices_data: dict[str, Any]) -> dict[str, Any]:
+            validation = validate_candidate(candidate, invoices_data)
+            if not validation.get("valid") or validation.get("validation_status") == "invalid":
+                raise ValueError(
+                    "Re-validation failed: "
+                    + "; ".join(validation.get("warnings") or ["invalid candidate"])
+                )
 
-        before = copy.deepcopy(invoices_data)
-        invoices_list.append(inv)
-        save_store_atomic(
-            "invoices",
-            invoices_data,
-            action="add_invoice",
-            before=before,
-            after=invoices_data,
-            config=config,
-        )
+            dups = check_duplicate(proposed_raw, invoices_data)
+            likely = [d for d in dups if float(d.get("score", 0)) >= DUPLICATE_REFUSE_THRESHOLD]
+            if likely and not override_duplicate:
+                top = likely[0]
+                err = (
+                    f"duplicate_likely: matches {top.get('invoice_id')} "
+                    f"(score={top.get('score')}, reasons={top.get('reasons')}). "
+                    "Refuse unless payload.override_duplicate=true"
+                )
+                raise _DuplicateInvoiceRefused({
+                    "success": False,
+                    "refused": True,
+                    "reason": "duplicate_likely",
+                    "error": err,
+                    "invoice_id": None,
+                    "candidate_id": candidate_id,
+                    "duplicate_candidates": likely,
+                })
+
+            invoices_list = invoices_data.setdefault("invoices", [])
+            if not isinstance(invoices_list, list):
+                raise ValueError("invoices store 'invoices' must be a list")
+
+            # Guard again with Domain true-duplicate (cp + amount + issue_date)
+            # even if score-based path was overridden/missed intermediate scores.
+            invoices_list.append(inv)
+            return {
+                "success": True,
+                "invoice_id": str(inv["id"]),
+                "candidate_id": candidate_id,
+                "validation_status": validation.get("validation_status"),
+                "warnings": validation.get("warnings") or [],
+                "duplicate_candidates": dups[:5],
+                "override_duplicate": override_duplicate,
+                "amount": _money_str(inv.get("amount")),
+                "currency": inv.get("currency"),
+                "counterparty": inv.get("counterparty"),
+                "direction": inv.get("direction"),
+            }
+
+        try:
+            result = mutate_kv(
+                "invoices",
+                _mutate,
+                config=config,
+                action="add_invoice",
+            )
+        except _DuplicateInvoiceRefused as refused:
+            mark_failed(config, action_id, refused.result.get("error") or "duplicate_likely")
+            return refused.result
 
         _mark_candidate_recorded(config, candidate_id, str(inv["id"]))
-
-        result = {
-            "success": True,
-            "invoice_id": str(inv["id"]),
-            "candidate_id": candidate_id,
-            "validation_status": validation.get("validation_status"),
-            "warnings": validation.get("warnings") or [],
-            "duplicate_candidates": dups[:5],
-            "override_duplicate": override_duplicate,
-            "amount": _money_str(inv.get("amount")),
-            "currency": inv.get("currency"),
-            "counterparty": inv.get("counterparty"),
-            "direction": inv.get("direction"),
-        }
         mark_executed(config, action_id, result)
         return result
 

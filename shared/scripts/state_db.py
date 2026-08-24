@@ -1222,7 +1222,10 @@ class StateDB:
             if not row or row["state"] != "processing":
                 return False
             stored = row["lease_token"]
-            if lease_token and stored and stored != lease_token:
+            if stored:
+                if lease_token is None or lease_token != stored:
+                    return False
+            elif lease_token:
                 return False
             self.conn.execute(
                 "UPDATE webhook_replay SET ts=? WHERE delivery_id=?",
@@ -1400,6 +1403,15 @@ class StateDB:
                     for store_name, ypath in yaml_paths:
                         if not pending(ypath, ypath.name):
                             continue
+                        existing = self.conn.execute(
+                            "SELECT 1 FROM kv_stores WHERE store_name=? AND key=?",
+                            (store_name, KV_ROOT_KEY),
+                        ).fetchone()
+                        if existing:
+                            # SQLite already owns this store; leftover YAML is a
+                            # snapshot, not a source of truth.
+                            self._record_migration_source(ypath.name)
+                            continue
                         try:
                             loaded = yaml.safe_load(ypath.read_text(encoding="utf-8"))
                         except Exception as exc:
@@ -1417,7 +1429,7 @@ class StateDB:
                             (store_name, KV_ROOT_KEY, _dumps(loaded), _now()),
                         )
                         self._record_migration_source(ypath.name)
-                        # Keep YAML in place as a human-readable seed; SQLite is source of truth.
+                        to_rename.append(ypath)
         except json.JSONDecodeError as exc:
             raise StateCorruptionError(f"Legacy state file is corrupt: {exc}") from exc
 
@@ -1425,6 +1437,24 @@ class StateDB:
             self._rename_legacy(path)
         for path in rename_only:
             self._rename_legacy(path)
+        # Explicit human-readable snapshots (never read back as source of truth).
+        if yaml is not None:
+            for store_name, ypath in yaml_paths:
+                if ypath not in to_rename:
+                    continue
+                row = self.conn.execute(
+                    "SELECT value FROM kv_stores WHERE store_name=? AND key=?",
+                    (store_name, KV_ROOT_KEY),
+                ).fetchone()
+                if not row:
+                    continue
+                try:
+                    dumped = yaml.safe_dump(
+                        _loads(row["value"]), sort_keys=False, allow_unicode=True
+                    )
+                    ypath.write_text(dumped, encoding="utf-8")
+                except OSError:
+                    pass
 
 
 # ─── Connection helper ────────────────────────────────────────
@@ -1473,33 +1503,29 @@ def with_store_lock(
     yield get_store_path(store_name, config=config)
 
 
-def load_store(store_name: str, config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Load a KV store, creating and returning its empty template if missing."""
+def load_store(
+    store_name: str,
+    config: Mapping[str, Any] | None = None,
+    *,
+    validate: bool = True,
+) -> dict[str, Any]:
+    """Load a KV store from SQLite, creating and returning its empty template if missing.
+
+    YAML files are ingested once during migration and renamed to ``.migrated``.
+    They are never read as authoritative state after that.
+    """
     get_store_path(store_name, config=config)  # validate name
     with _open_db(config) as db:
         data = db.get_kv(store_name)
         if data is None:
-            # Fall back to a still-present YAML file (unmigrated fixture).
-            ypath = db.root / f"{store_name}.yaml"
-            if ypath.exists() and yaml is not None:
-                try:
-                    loaded = yaml.safe_load(ypath.read_text(encoding="utf-8"))
-                except Exception as exc:
-                    raise StateStoreError(f"Corrupt YAML in {ypath}: {exc}") from exc
-                if loaded is None:
-                    loaded = {}
-                if not isinstance(loaded, dict):
-                    raise StateStoreError(f"Invalid YAML in {ypath}: top-level value must be a mapping")
-                data = loaded
+            data = _template(store_name)
+            if store_name in EMPTY_TEMPLATES:
                 db.put_kv(store_name, data)
-            else:
-                data = _template(store_name)
-                if store_name in EMPTY_TEMPLATES:
-                    db.put_kv(store_name, data)
-                return data
+            return data
         if not data and store_name in EMPTY_TEMPLATES:
             return _template(store_name)
-        validate_store(store_name, data, config=config)
+        if validate:
+            validate_store(store_name, data, config=config)
         return data
 
 
