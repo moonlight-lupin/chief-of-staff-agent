@@ -269,7 +269,7 @@ class TestGuardrailBlock:
 
 class TestActionLifecycle:
     def test_requested_executed_failed(self, run):
-        import pending_actions as pa
+        import state_db as pa
         cfg = run.config
 
         # create -> action_requested
@@ -444,7 +444,7 @@ class TestNoActiveRun:
         assert confirm_action("mail.send", to="x@y.com") is False
 
         # Pending-action lifecycle.
-        import pending_actions as pa
+        import state_db as pa
         act = pa.create_pending_action(cfg, "mail.send", "m365", "x@y.com",
                                        payload={"body": "hi"})
         pa.approve_pending_action(cfg, act["id"])

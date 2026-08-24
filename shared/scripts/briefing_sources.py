@@ -21,8 +21,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 import email_classifier
 import email_label_policy
-import event_store
-import pending_actions
+import state_db as event_store
+import state_db as pending_actions
 import suggested_actions
 
 
@@ -254,16 +254,18 @@ def collect_system_health(config: dict[str, Any] | None) -> dict[str, Any]:
     pending_summary = {state: 0 for state in _PENDING_STATES}
     try:
         root = _project_root(config or {})
-        pending_path = root / ".pending_actions.json"
-        events_path = root / ".events.json"
+        db_path = root / "state.db"
 
-        pending_data = _load_json(pending_path)
-        for action in _items_from_store(pending_data, key="actions"):
-            state = str(action.get("state") or "")
-            if state in pending_summary:
-                pending_summary[state] += 1
+        try:
+            actions = pending_actions.list_pending_actions(config or {})
+            for action in actions:
+                state = str(action.get("state") or "")
+                if state in pending_summary:
+                    pending_summary[state] += 1
+        except Exception:
+            pass
 
-        state_files = "ok" if pending_path.exists() and events_path.exists() else "missing"
+        state_files = "ok" if db_path.exists() else "missing"
         return {
             "state_files": state_files,
             "pending_summary": pending_summary,
@@ -523,7 +525,7 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
 
     # Read pending actions for bookkeeper.invoice.record
     try:
-        from pending_actions import list_pending_actions
+        from state_db import list_pending_actions
         pending = list_pending_actions(config)
         stats["pending_record_actions"] = sum(
             1 for a in pending
@@ -689,7 +691,7 @@ def collect_pipeline_stats(config: object) -> dict[str, object]:
 
     # Pending CRM actions
     try:
-        from pending_actions import list_pending_actions
+        from state_db import list_pending_actions
         pending = list_pending_actions(config)
         stats["pending_crm_actions"] = sum(
             1 for a in pending

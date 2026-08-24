@@ -95,7 +95,7 @@ def composio_mock():
 
 def _age_approved_action(config, action_id, hours_old):
     """Manually set approved_at to N hours ago."""
-    from pending_actions import _load, _save
+    from state_db import _load, _save
     data = _load(config)
     expected_version = data.get("_version", 0)
     data["actions"][action_id]["approved_at"] = (
@@ -167,7 +167,7 @@ class TestApprovedExpiry:
     """Test that approved actions expire if not executed in time."""
 
     def test_approved_action_executable_immediately(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -177,8 +177,8 @@ class TestApprovedExpiry:
         assert result["state"] == "executed"
 
     def test_approved_action_expires_after_24h(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
-        from pending_actions import APPROVED_EXPIRY_HOURS
+        from state_db import create_pending_action, approve_pending_action, mark_executed
+        from state_db import APPROVED_EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -187,8 +187,8 @@ class TestApprovedExpiry:
         assert result is None  # approval lapsed
 
     def test_lapsed_approval_marks_expired(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing
-        from pending_actions import get_pending_action, APPROVED_EXPIRY_HOURS
+        from state_db import create_pending_action, approve_pending_action, mark_executing
+        from state_db import get_pending_action, APPROVED_EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -200,8 +200,8 @@ class TestApprovedExpiry:
         assert loaded["state"] == "expired"
 
     def test_fresh_approval_not_expired(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
-        from pending_actions import APPROVED_EXPIRY_HOURS
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
+        from state_db import APPROVED_EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -343,7 +343,7 @@ class TestSoftDeleteActions:
         data = json.loads(buf.getvalue())
         assert "dry-run" in data["action"]
         # Verify nothing was created
-        from pending_actions import list_pending_actions
+        from state_db import list_pending_actions
         actions = list_pending_actions(config, state="requested")
         assert len(actions) == 0
 
@@ -358,7 +358,7 @@ class TestSoftDeleteActions:
                 "--preflight",
             ])
         assert rc == 0
-        from pending_actions import list_pending_actions
+        from state_db import list_pending_actions
         actions = list_pending_actions(config, state="requested")
         assert len(actions) == 0
 

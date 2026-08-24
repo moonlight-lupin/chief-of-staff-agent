@@ -70,10 +70,10 @@ briefing_sources = _try_import("briefing_sources", lambda: __import__("briefing_
 briefing_renderer = _try_import("briefing_renderer", lambda: __import__("briefing_renderer"))
 action_risk = _try_import("action_risk", lambda: __import__("action_risk"))
 state_tools = _try_import("state_tools", lambda: __import__("state_tools"))
-state_store = _try_import("state_store", lambda: __import__("state_store"))
+state_store = _try_import("state_db", lambda: __import__("state_db"))
 doctor_mod = _try_import("doctor", lambda: __import__("doctor"))
 memory_mod = _try_import("memory", lambda: __import__("memory"))
-pending_actions_mod = _try_import("pending_actions", lambda: __import__("pending_actions"))
+pending_actions_mod = _try_import("state_db", lambda: __import__("state_db"))
 review_queue_mod = _try_import("review_queue", lambda: __import__("review_queue"))
 wiki_curator_mod = _try_import("wiki_curator", lambda: __import__("wiki_curator"))
 daily_briefing_mod = _try_import("daily_briefing", lambda: __import__("daily_briefing"))
@@ -165,11 +165,9 @@ def collect_system_health_panel(config: Any, config_path: str | None) -> dict[st
     # State file readability (no mutations)
     root_path = Path(panel["project_root"]) if panel["project_root"] else None
     state_names = [
-        ".pending_actions.json",
-        ".events.json",
+        "state.db",
         ".email_organisation_classifications.json",
         ".email_organisation_suggestions.json",
-        ".webhook_replay_cache.json",
     ]
     if root_path is not None and root_path.exists():
         for name in state_names:
@@ -177,7 +175,15 @@ def collect_system_health_panel(config: Any, config_path: str | None) -> dict[st
             entry: dict[str, Any] = {"path": str(path), "exists": path.exists(), "readable": False, "error": None}
             if path.exists():
                 try:
-                    path.read_text(encoding="utf-8")
+                    if name.endswith(".db"):
+                        import sqlite3
+                        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                        try:
+                            conn.execute("SELECT 1").fetchone()
+                        finally:
+                            conn.close()
+                    else:
+                        path.read_text(encoding="utf-8")
                     entry["readable"] = True
                 except Exception as exc:
                     entry["error"] = str(exc)
@@ -531,29 +537,31 @@ def collect_state_safety_panel(config: Any) -> dict[str, Any]:
             panel["warnings"].append(f"state_tools inspection failed: {exc}")
     else:
         # Minimal fallback without state_tools
-        pending_path = root / ".pending_actions.json"
+        pending_path = root / "state.db"
         if pending_path.exists():
             try:
-                data = json.loads(pending_path.read_text(encoding="utf-8"))
-                actions = data.get("actions", {}) if isinstance(data, dict) else {}
-                if isinstance(actions, dict):
-                    for aid, action in actions.items():
-                        if isinstance(action, dict) and action.get("state") == "executing":
-                            panel["stuck_executing"].append(
-                                {
-                                    "id": str(action.get("id") or aid),
-                                    "type": str(action.get("type", "")),
-                                    "summary": str(action.get("summary", "")),
-                                    "age_status": "unknown",
-                                }
-                            )
+                from state_db import list_pending_actions
+                cfg = config if isinstance(config, Mapping) else {"paths": {"project_root": str(root)}}
+                if isinstance(cfg, Mapping) and (
+                    not isinstance(cfg.get("paths"), Mapping) or not cfg.get("paths", {}).get("project_root")
+                ):
+                    cfg = {**dict(cfg), "paths": {**(cfg.get("paths") or {}), "project_root": str(root)}}
+                for action in list_pending_actions(cfg, state="executing"):
+                    panel["stuck_executing"].append(
+                        {
+                            "id": str(action.get("id") or ""),
+                            "type": str(action.get("type", "")),
+                            "summary": str(action.get("summary", "")),
+                            "age_status": "unknown",
+                        }
+                    )
                 panel["stuck_executing_count"] = len(panel["stuck_executing"])
             except Exception as exc:
                 panel["malformed_files"].append(
-                    {"name": ".pending_actions.json", "path": str(pending_path), "error": str(exc)}
+                    {"name": "state.db", "path": str(pending_path), "error": str(exc)}
                 )
                 panel["malformed_count"] = 1
-        for name in (".events.json", ".audit", ".runs"):
+        for name in ("state.db", ".audit", ".runs"):
             if not (root / name).exists():
                 panel["missing_optional"].append(
                     {"name": name, "path": str(root / name), "description": "optional state"}
@@ -942,11 +950,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 record(f"dir:{dirname}", "ok", str(d))
             else:
                 record(f"dir:{dirname}", "warn", f"missing optional: {d}")
-        for fname in (".pending_actions.json", ".events.json"):
+        for fname in ("state.db",):
             f = root / fname
             if f.exists():
                 try:
-                    f.read_text(encoding="utf-8")
+                    if fname.endswith(".db"):
+                        import sqlite3
+                        conn = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+                        try:
+                            conn.execute("SELECT 1").fetchone()
+                        finally:
+                            conn.close()
+                    else:
+                        f.read_text(encoding="utf-8")
                     record(f"file:{fname}", "ok", "readable")
                 except Exception as exc:
                     record(f"file:{fname}", "fail", f"unreadable: {exc}")
@@ -966,7 +982,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for mod_name in (
         "briefing_sources",
         "action_risk",
-        "pending_actions",
+        "state_db",
         "memory",
     ):
         if mod_name in _IMPORT_ERRORS:
@@ -1122,7 +1138,7 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
                 except OSError:
                     continue
         # Nested state dirs (audit / runs / knowledge / integrations)
-        for sub in (".audit", ".runs", ".knowledge", ".integrations", ".pending_actions.json"):
+        for sub in (".audit", ".runs", ".knowledge", ".integrations", "state.db"):
             candidate = root / sub
             if candidate.is_file():
                 try:
@@ -1792,10 +1808,16 @@ def cmd_demo(args: argparse.Namespace) -> int:
         tmp_dir = Path(tmp)
         demo_cfg = dict(_DEMO_CONFIG)
         demo_cfg["paths"] = {
-            "project_root": str(examples_dir),
+            "project_root": str(tmp_dir),
             "wiki_path": str(tmp_dir / "wiki"),
             "templates": str(PLUGIN_ROOT / "shared" / "templates"),
         }
+        # Copy sample YAML into the throwaway dir so briefing can read it
+        # without creating state.db (or any other write) under examples/.
+        for name in ("pipeline.yaml", "invoices.yaml", "expenses.yaml", "todos.yaml"):
+            src = examples_dir / name
+            if src.exists():
+                (tmp_dir / name).write_bytes(src.read_bytes())
         cfg_path = tmp_dir / "company.yaml"
         try:
             import yaml as _yaml

@@ -24,21 +24,19 @@ if str(_SCRIPT_DIR) not in sys.path:
 from config_loader import get_hermes_home, load_config
 
 STATE_ITEMS: list[dict[str, object]] = [
-    {"name": ".events.json", "kind": "file", "json": True, "description": "event store"},
-    {"name": ".pending_actions.json", "kind": "file", "json": True, "description": "pending actions queue"},
+    {"name": "state.db", "kind": "file", "json": False, "description": "SQLite WAL state store"},
     {"name": ".email_organisation_policy.json", "kind": "file", "json": True, "description": "email organisation policy"},
     {"name": ".email_organisation_policy.proposal.json", "kind": "file", "json": True, "description": "email organisation policy proposal"},
     {"name": ".email_organisation_classifications.json", "kind": "file", "json": True, "description": "email organisation classifications"},
     {"name": ".email_organisation_suggestions.json", "kind": "file", "json": True, "description": "email organisation suggestions"},
     {"name": ".audit", "kind": "dir", "json": False, "description": "audit logs"},
     {"name": ".runs", "kind": "dir", "json": False, "description": "run logs"},
-    {"name": ".webhook_replay_cache.json", "kind": "file", "json": True, "description": "delivery ID replay cache"},
 ]
 
 JSON_ITEM_NAMES = [str(item["name"]) for item in STATE_ITEMS if item.get("json")]
 REQUIRED_DIRECTORIES = [".audit", ".runs"]
-REPLAY_CACHE_NAME = ".webhook_replay_cache.json"
-PENDING_ACTIONS_NAME = ".pending_actions.json"
+REPLAY_CACHE_NAME = "state.db"
+PENDING_ACTIONS_NAME = "state.db"
 REPLAY_STALE_HOURS = 48
 
 
@@ -331,15 +329,19 @@ def _find_malformed_json(project_root: Path) -> list[dict[str, object]]:
 
 
 def _pending_actions_data(project_root: Path, malformed: list[dict[str, object]]) -> tuple[dict[str, object] | None, Path]:
-    path = project_root / PENDING_ACTIONS_NAME
+    path = project_root / "state.db"
     if not path.exists():
         return None, path
-    if any(item.get("name") == PENDING_ACTIONS_NAME for item in malformed):
+    try:
+        from state_db import StateDB
+        db = StateDB({"paths": {"project_root": str(project_root)}})
+        try:
+            actions = {a["id"]: a for a in db.list_actions()}
+            return {"actions": actions}, path
+        finally:
+            db.close()
+    except Exception:
         return None, path
-    data, error = _load_json_file(path)
-    if error or not isinstance(data, dict):
-        return None, path
-    return data, path
 
 
 def _find_executing_actions(data: dict[str, object] | None, min_age_minutes: int = 0) -> list[dict[str, object]]:
@@ -412,8 +414,18 @@ def _reset_executing_actions(data: dict[str, object], path: Path,
             action["last_error"] = f"{previous}\n{note}" if previous else note
             reset_ids.append(str(action.get("id") or action_id))
     if reset_ids:
-        data["_version"] = _next_version(data.get("_version", 0))
-        _write_json_file(path, data)
+        try:
+            from state_db import StateDB
+            db = StateDB({"paths": {"project_root": str(path.parent)}})
+            try:
+                for aid in reset_ids:
+                    action = actions.get(aid) if isinstance(actions.get(aid), dict) else None
+                    error = (action or {}).get("last_error")
+                    db._cas_update(str(aid), "executing", "approved", last_error=error, executing_at=None)
+            finally:
+                db.close()
+        except Exception:
+            pass
     return reset_ids
 
 
@@ -436,15 +448,14 @@ def _parse_replay_timestamp(value: object) -> datetime | None:
 
 
 def _replay_cache_data(project_root: Path, malformed: list[dict[str, object]]) -> tuple[dict[str, object] | None, Path]:
-    path = project_root / REPLAY_CACHE_NAME
+    path = project_root / "state.db"
     if not path.exists():
         return None, path
-    if any(item.get("name") == REPLAY_CACHE_NAME for item in malformed):
+    try:
+        from state_db import _load_replay_cache
+        return _load_replay_cache({"paths": {"project_root": str(project_root)}}), path
+    except Exception:
         return None, path
-    data, error = _load_json_file(path)
-    if error or not isinstance(data, dict):
-        return None, path
-    return data, path
 
 
 def _find_stale_replay_entries(data: dict[str, object] | None) -> list[dict[str, object]]:
@@ -479,9 +490,12 @@ def _clean_stale_replay_entries(data: dict[str, object], path: Path, stale: list
             del entries[delivery_id]
             removed.append(delivery_id)
     if removed:
-        data["_version"] = _next_version(data.get("_version", 0))
         data["entries"] = entries
-        _write_json_file(path, data)
+        try:
+            from state_db import _save_replay_cache_unlocked
+            _save_replay_cache_unlocked({"paths": {"project_root": str(path.parent)}}, data)
+        except Exception:
+            pass
     return removed
 
 

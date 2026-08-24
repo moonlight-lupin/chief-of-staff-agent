@@ -93,7 +93,7 @@ class TestForgedJWTRejection:
 
     def test_forged_jwt_with_valid_claims_rejected(self, with_pubsub):
         """A forged JWT with correct iss/aud/email but no valid signature."""
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         forged = _make_forged_jwt()
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=ValueError("Signature verification failed")):
@@ -103,7 +103,7 @@ class TestForgedJWTRejection:
 
     def test_tampered_payload_rejected(self, with_pubsub):
         """Tampering with the payload after signing invalidates the signature."""
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         # Simulate: Google's library detects signature mismatch after tampering
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=ValueError("Token signature invalid")):
@@ -112,7 +112,7 @@ class TestForgedJWTRejection:
         assert "JWT verification failed" in reason
 
     def test_invalid_signature_rejected(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=ValueError("Invalid signature")):
             ok, reason = verify_pubsub_oidc("Bearer some.invalid.sig")
@@ -120,7 +120,7 @@ class TestForgedJWTRejection:
         assert "JWT verification failed" in reason
 
     def test_expired_token_rejected(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=ValueError("Token expired")):
             ok, reason = verify_pubsub_oidc("Bearer expired.token.here")
@@ -128,7 +128,7 @@ class TestForgedJWTRejection:
         assert "JWT verification failed" in reason
 
     def test_future_iat_rejected(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=ValueError("Token issued in the future")):
             ok, reason = verify_pubsub_oidc("Bearer future.token.here")
@@ -136,7 +136,7 @@ class TestForgedJWTRejection:
         assert "JWT verification failed" in reason
 
     def test_wrong_signing_key_rejected(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=KeyError("unknown_kid")):
             ok, reason = verify_pubsub_oidc("Bearer unknown.key.token")
@@ -145,7 +145,7 @@ class TestForgedJWTRejection:
 
     def test_wrong_audience_rejected(self, with_pubsub):
         """Google's verify_oauth2_token rejects wrong audience."""
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         with patch("google.oauth2.id_token.verify_oauth2_token",
                    side_effect=ValueError("Wrong audience")):
             ok, reason = verify_pubsub_oidc("Bearer valid.signed.but.wrong.aud")
@@ -154,7 +154,7 @@ class TestForgedJWTRejection:
 
     def test_wrong_service_account_after_verification(self, with_pubsub):
         """Token passes Google verification but has wrong SA email."""
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         # Simulate: Google verifies signature OK, but claims have wrong email
         wrong_claims = {"email": "evil@attacker.com", "email_verified": True,
                         "iss": "https://accounts.google.com", "aud": TEST_AUDIENCE}
@@ -165,7 +165,7 @@ class TestForgedJWTRejection:
         assert "Unexpected service account" in reason
 
     def test_email_not_verified_after_verification(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         claims = {"email": TEST_SA, "email_verified": False,
                   "iss": "https://accounts.google.com", "aud": TEST_AUDIENCE}
         with patch("google.oauth2.id_token.verify_oauth2_token",
@@ -175,7 +175,7 @@ class TestForgedJWTRejection:
         assert "not verified" in reason
 
     def test_wrong_issuer_after_verification(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         claims = {"email": TEST_SA, "email_verified": True,
                   "iss": "https://evil.com", "aud": TEST_AUDIENCE}
         with patch("google.oauth2.id_token.verify_oauth2_token",
@@ -186,7 +186,7 @@ class TestForgedJWTRejection:
 
     def test_valid_token_accepted(self, with_pubsub):
         """A cryptographically valid token with all correct claims passes."""
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         valid_claims = {"email": TEST_SA, "email_verified": True,
                         "iss": "https://accounts.google.com", "aud": TEST_AUDIENCE}
         with patch("google.oauth2.id_token.verify_oauth2_token",
@@ -196,20 +196,20 @@ class TestForgedJWTRejection:
         assert reason == "OK"
 
     def test_missing_auth_header(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         ok, reason = verify_pubsub_oidc(None)
         assert not ok
         assert "Missing" in reason
 
     def test_not_bearer(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         ok, reason = verify_pubsub_oidc("Basic abc123")
         assert not ok
         assert "Bearer" in reason
 
     def test_config_incomplete(self, with_pubsub, monkeypatch):
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", raising=False)
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         ok, reason = verify_pubsub_oidc("Bearer some.token.here")
         assert not ok
         assert "configuration incomplete" in reason.lower()
@@ -221,7 +221,7 @@ class TestGuardrailRestoration:
     """Verify env vars are saved before execution and restored after."""
 
     def _create_and_approve(self, config, action_type, payload, mock_client):
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type=action_type, provider="google_api",
             target="test", payload=payload, summary=f"Test {action_type}",

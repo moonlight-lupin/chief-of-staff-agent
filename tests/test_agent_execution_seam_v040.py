@@ -30,7 +30,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
 import review_queue  # noqa: E402
-from pending_actions import (  # noqa: E402
+from state_db import (  # noqa: E402
     approve_pending_action,
     create_pending_action,
     get_pending_action,

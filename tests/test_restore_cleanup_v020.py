@@ -60,7 +60,7 @@ def google_mock():
 
 def _full_execute(config, action_id):
     """Helper: approve + mark_executing + mark_executed."""
-    from pending_actions import approve_pending_action, mark_executing, mark_executed
+    from state_db import approve_pending_action, mark_executing, mark_executed
     approve_pending_action(config, action_id)
     mark_executing(config, action_id)
     mark_executed(config, action_id, {"success": True})
@@ -85,7 +85,7 @@ class TestDriveRestoreWired:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action
+            from state_db import create_pending_action
             action = create_pending_action(config, "drive.trash", "google_api", "file123",
                                            {"reason": "old", "reversible": True,
                                             "restore_hint": "files_untrash", "provider_method": "drive_trash"})
@@ -101,7 +101,7 @@ class TestCleanupCommand:
     """Test the cleanup CLI command."""
 
     def test_cleanup_removes_old_executed(self, temp_project, google_mock, auto_approve):
-        from pending_actions import create_pending_action, _load, _save, cleanup_old_actions
+        from state_db import create_pending_action, _load, _save, cleanup_old_actions
         config, project = temp_project
         action = create_pending_action(config, "gmail.archive", "google_api", "msg1",
                                        {"reason": "old", "reversible": True,
@@ -124,7 +124,7 @@ class TestCleanupCommand:
         assert "1 old action" in buf.getvalue()
 
     def test_cleanup_keeps_fresh_actions(self, temp_project, google_mock, auto_approve):
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.archive", "google_api", "msg1",
                                        {"reason": "old", "reversible": True,
@@ -135,7 +135,7 @@ class TestCleanupCommand:
             rc = delete_actions.main(["--summary", "cleanup", "--days", "30"])
         assert rc == 0
         # Action should still exist
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         assert get_pending_action(config, action["id"]) is not None
 
     def test_cleanup_json_output(self, temp_project, auto_approve):
@@ -157,7 +157,7 @@ class TestFailedActionRetryUX:
     """Test that failed actions show last_error and can be retried."""
 
     def test_mark_failed_stores_error(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -168,7 +168,7 @@ class TestFailedActionRetryUX:
         assert loaded["retry_count"] == 1
 
     def test_retry_increments_count(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -182,7 +182,7 @@ class TestFailedActionRetryUX:
         assert loaded["retry_count"] == 2
 
     def test_retry_then_success(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_failed, mark_executed, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, mark_executed, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -204,7 +204,7 @@ class TestFailedActionRetryUX:
         with patch("send_email.load_config", return_value=config), \
              patch("send_email.get_client", return_value=mock_client):
             import send_email
-            from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+            from state_db import create_pending_action, approve_pending_action, get_pending_action
             action = create_pending_action(config, "gmail.send", "google_api", "a@b.com",
                                            {"to": "a@b.com", "subject": "S", "body": "B", "cc": ""})
             approve_pending_action(config, action["id"])
@@ -224,7 +224,7 @@ class TestFailedActionRetryUX:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+            from state_db import create_pending_action, approve_pending_action, get_pending_action
             action = create_pending_action(config, "gmail.archive", "google_api", "msg1",
                                            {"reason": "old", "reversible": True,
                                             "restore_hint": "add INBOX", "provider_method": "gmail_archive"})
@@ -246,7 +246,7 @@ class TestRestoreSummaryOutput:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action
+            from state_db import create_pending_action
             action = create_pending_action(config, "gmail.archive", "google_api", "msg1",
                                            {"reason": "old", "reversible": True,
                                             "restore_hint": "add INBOX", "provider_method": "gmail_archive"})
@@ -263,7 +263,7 @@ class TestRestoreSummaryOutput:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action
+            from state_db import create_pending_action
             action = create_pending_action(config, "gmail.trash", "google_api", "msg2",
                                            {"reason": "spam", "reversible": True,
                                             "restore_hint": "remove TRASH", "provider_method": "gmail_trash"})
@@ -308,7 +308,7 @@ class TestRestoreTargetResolution:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import (create_pending_action, approve_pending_action,
+            from state_db import (create_pending_action, approve_pending_action,
                                          mark_executing, mark_executed)
             action = create_pending_action(config, "gmail.archive", "google_api", "orig-id",
                                            {"reason": "old", "reversible": True,

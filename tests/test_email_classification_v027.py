@@ -344,7 +344,7 @@ class TestNoGmailMutations:
     def test_no_pending_actions_during_classify(self, temp_with_policy):
         from email_classifier import classify_inbox
         config, project = temp_with_policy
-        with patch("pending_actions.create_pending_action") as mock_create:
+        with patch("state_db.create_pending_action") as mock_create:
             classify_inbox(config, SAMPLE_EMAILS, limit=10)
             mock_create.assert_not_called()
 
@@ -352,7 +352,7 @@ class TestNoGmailMutations:
         from email_classifier import classify_inbox, generate_org_suggestions
         config, project = temp_with_policy
         classify_inbox(config, SAMPLE_EMAILS, limit=10)
-        with patch("pending_actions.create_pending_action") as mock_create:
+        with patch("state_db.create_pending_action") as mock_create:
             generate_org_suggestions(config, limit=50)
             mock_create.assert_not_called()  # only prepare creates pending
 

@@ -143,7 +143,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, f"{meta['label']} preflight")
         return 0
 
-    from pending_actions import create_pending_action
+    from state_db import create_pending_action
     action = create_pending_action(
         config=cfg,
         action_type=action_type,
@@ -166,7 +166,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import list_pending_actions
+    from state_db import list_pending_actions
     actions = list_pending_actions(cfg, state=args.state)
     # Filter to only soft-delete actions
     actions = [a for a in actions if a.get("type") in SOFT_DELETE_ACTIONS]
@@ -191,7 +191,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import preview_pending_action
+    from state_db import preview_pending_action
     preview = preview_pending_action(cfg, args.action_id)
     if not preview:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -206,7 +206,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
         print(f"Target: {preview['target']}")
         print(f"Provider: {preview['provider']}")
         # Show restore info from the action payload
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         action = get_pending_action(cfg, args.action_id)
         if action and action.get("payload"):
             p = action["payload"]
@@ -225,7 +225,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import approve_pending_action, check_expired
+    from state_db import approve_pending_action, check_expired
     if check_expired(cfg, args.action_id):
         print(f"Action {args.action_id} has expired.", file=sys.stderr)
         return 1
@@ -243,7 +243,7 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import cancel_pending_action
+    from state_db import cancel_pending_action
     action = cancel_pending_action(cfg, args.action_id, reason=args.reason)
     if not action:
         print(f"Action not found or already terminal: {args.action_id}", file=sys.stderr)
@@ -263,7 +263,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
 
-    from pending_actions import get_pending_action, mark_executing, mark_executed, mark_failed
+    from state_db import get_pending_action, mark_executing, mark_executed, mark_failed
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -355,7 +355,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import list_pending_actions
+    from state_db import list_pending_actions
     actions = list_pending_actions(cfg)
     actions = [a for a in actions if a.get("type") in SOFT_DELETE_ACTIONS]
     counts: dict[str, int] = {}
@@ -410,7 +410,7 @@ def cmd_restore(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
 
-    from pending_actions import get_pending_action
+    from state_db import get_pending_action
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -445,7 +445,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import cleanup_old_actions
+    from state_db import cleanup_old_actions
     removed = cleanup_old_actions(cfg, days=args.days)
     if args.summary:
         print(f"Cleaned up {removed} old action(s) older than {args.days} days")

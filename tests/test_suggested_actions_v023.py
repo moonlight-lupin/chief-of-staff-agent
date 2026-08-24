@@ -49,7 +49,7 @@ def temp_project(tmp_path):
 def temp_project_with_events(temp_project):
     """Create a project with some classified events."""
     config, project = temp_project
-    from event_store import ingest_event
+    from state_db import ingest_event
     e1 = ingest_event(config, "gmail", "m1", "email_received",
                       {"from": "client@x.com", "subject": "NDA"})
     e2 = ingest_event(config, "gmail", "m2", "email_urgent",
@@ -97,7 +97,7 @@ class TestSuggestionGeneration:
 
     def test_unknown_event_no_suggestions(self, temp_project):
         from suggested_actions import generate_suggestions
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "custom", "x1", "some_unknown_type", {})
         suggestions = generate_suggestions(config, event)
@@ -145,7 +145,7 @@ class TestNoExecution:
     def test_generate_for_events_never_calls_pending_actions(self, temp_project_with_events):
         config, project, events = temp_project_with_events
         from suggested_actions import generate_for_events
-        with patch("pending_actions.create_pending_action") as mock_create:
+        with patch("state_db.create_pending_action") as mock_create:
             result = generate_for_events(config)
             mock_create.assert_not_called()
         assert result["generated"] > 0

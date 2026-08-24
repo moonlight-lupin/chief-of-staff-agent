@@ -28,14 +28,14 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from pending_actions import (  # noqa: E402
+from state_db import (  # noqa: E402
     get_pending_action,
     mark_executed,
     mark_executing,
     mark_failed,
 )
 from schemas import generate_id  # noqa: E402
-from state_store import load_store, save_store_atomic, with_store_lock  # noqa: E402
+from state_db import load_store, save_store_atomic, with_store_lock  # noqa: E402
 
 TERMINAL_STAGES = frozenset({"Paid", "Lost", "Cancelled"})
 DEFAULT_STALE_THRESHOLD_DAYS = 14

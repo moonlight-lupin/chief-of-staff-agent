@@ -60,7 +60,7 @@ def mock_client():
 
 def _make_suggestion(config, action_type, event_summary="Test event"):
     """Create a single suggestion for testing and persist it to the store."""
-    from event_store import ingest_event
+    from state_db import ingest_event
     from suggested_actions import generate_suggestions, generate_for_events, list_suggestions
     # Map action_type to an event category that produces it
     category_map = {

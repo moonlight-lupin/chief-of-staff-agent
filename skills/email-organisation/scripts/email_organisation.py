@@ -515,7 +515,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
         if not args.to:
             print("--to is required for email channel", file=sys.stderr)
             return 1
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         from workspace_client import get_workspace_client
         from workspace_capabilities import require_capability
         client = get_workspace_client(cfg)

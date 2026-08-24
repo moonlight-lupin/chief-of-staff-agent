@@ -63,7 +63,7 @@ class TestRetryOnAllMutators:
 
     def test_mark_executing_returns_none_on_conflict(self, temp_project):
         """mark_executing must return None (not raise) on ConcurrencyError."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, ConcurrencyError,
         )
@@ -74,7 +74,7 @@ class TestRetryOnAllMutators:
         )
         approve_pending_action(config, action["id"])
 
-        with patch("pending_actions._save",
+        with patch("state_db._save",
                    side_effect=ConcurrencyError("Always fail")):
             try:
                 result = mark_executing(config, action["id"])
@@ -85,7 +85,7 @@ class TestRetryOnAllMutators:
 
     def test_create_pending_action_retries_on_conflict(self, temp_project):
         """create_pending_action must retry on ConcurrencyError."""
-        from pending_actions import create_pending_action, ConcurrencyError, _save
+        from state_db import create_pending_action, ConcurrencyError, _save
         config, project = temp_project
 
         original_save = _save
@@ -97,7 +97,7 @@ class TestRetryOnAllMutators:
                 raise ConcurrencyError("Simulated conflict")
             return original_save(cfg, data, expected_version=None)
 
-        with patch("pending_actions._save", side_effect=flaky_save):
+        with patch("state_db._save", side_effect=flaky_save):
             action = create_pending_action(
                 config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
             )
@@ -108,7 +108,7 @@ class TestRetryOnAllMutators:
 
     def test_approve_returns_none_on_persistent_conflict(self, temp_project):
         """approve_pending_action must not raise on persistent ConcurrencyError."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action, ConcurrencyError,
         )
         config, project = temp_project
@@ -117,7 +117,7 @@ class TestRetryOnAllMutators:
             config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
         )
 
-        with patch("pending_actions._save",
+        with patch("state_db._save",
                    side_effect=ConcurrencyError("Always fail")):
             try:
                 result = approve_pending_action(config, action["id"])
@@ -127,7 +127,7 @@ class TestRetryOnAllMutators:
 
     def test_cancel_returns_none_on_persistent_conflict(self, temp_project):
         """cancel_pending_action must not raise on persistent ConcurrencyError."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, cancel_pending_action, ConcurrencyError,
         )
         config, project = temp_project
@@ -136,7 +136,7 @@ class TestRetryOnAllMutators:
             config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
         )
 
-        with patch("pending_actions._save",
+        with patch("state_db._save",
                    side_effect=ConcurrencyError("Always fail")):
             try:
                 result = cancel_pending_action(config, action["id"])
@@ -157,7 +157,7 @@ class TestHMACTimestampMandatory:
 
     def test_verify_rejects_none_timestamp_when_required(self):
         """verify_signature must reject when timestamp is None and require_timestamp=True."""
-        from webhook_security import verify_signature
+        from webhook_validation import verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
 
@@ -168,7 +168,7 @@ class TestHMACTimestampMandatory:
 
     def test_verify_rejects_empty_timestamp_when_required(self):
         """Empty timestamp string must be rejected when require_timestamp=True."""
-        from webhook_security import verify_signature
+        from webhook_validation import verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
         result = verify_signature(body, "fake", secret=secret, timestamp="",
@@ -189,15 +189,15 @@ class TestLeaseRenewal:
 
     def test_renew_delivery_exists(self, temp_project):
         """renew_delivery function must exist."""
-        from webhook_security import reserve_delivery
+        from state_db import reserve_delivery
         try:
-            from webhook_security import renew_delivery
+            from state_db import renew_delivery
         except ImportError:
             pytest.fail("renew_delivery must exist for slow-handler lease renewal")
 
     def test_renew_delivery_extends_lease(self, temp_project):
         """renew_delivery must extend the processing lease."""
-        from webhook_security import reserve_delivery, renew_delivery, _load_replay_cache
+        from state_db import reserve_delivery, renew_delivery, _load_replay_cache
         import time as _time
         config, project = temp_project
 
@@ -207,7 +207,7 @@ class TestLeaseRenewal:
         # Age the reservation to near lease expiry
         cache = _load_replay_cache(config)
         cache["entries"]["delivery-renew"]["ts"] = _time.time() - 250  # 4 min ago
-        from webhook_security import _save_replay_cache_unlocked
+        from state_db import _save_replay_cache_unlocked
         _save_replay_cache_unlocked(config, cache)
 
         # Renew the lease
@@ -233,7 +233,7 @@ class TestNoFieldFabrication:
 
     def test_save_rejects_missing_stage(self, temp_project):
         """save_store_atomic must fail validation for a deal missing 'stage'."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         config, project = temp_project
 
         data = load_store("pipeline", config=config)
@@ -245,7 +245,7 @@ class TestNoFieldFabrication:
 
     def test_save_with_fill_defaults_flag(self, temp_project):
         """save_store_atomic with _fill_defaults=True (test mode) fills fields."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         config, project = temp_project
 
         data = load_store("pipeline", config=config)
@@ -322,7 +322,7 @@ class TestStuckActionReconciliation:
 
     def test_detect_stuck_executing_action(self, temp_project):
         """readiness check must detect actions stuck in 'executing' state."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, _load, _save,
         )
@@ -343,7 +343,7 @@ class TestStuckActionReconciliation:
 
         # Check if there's a function to detect stuck actions
         try:
-            from pending_actions import find_stuck_actions
+            from state_db import find_stuck_actions
         except ImportError:
             pytest.fail("find_stuck_actions must exist to detect stuck 'executing' actions")
 
@@ -353,7 +353,7 @@ class TestStuckActionReconciliation:
 
     def test_revert_stuck_action(self, temp_project):
         """A stuck 'executing' action must be revertable to 'approved' for retry."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, _load, _save, get_pending_action,
         )
@@ -374,7 +374,7 @@ class TestStuckActionReconciliation:
 
         # Revert it
         try:
-            from pending_actions import revert_stuck_action
+            from state_db import revert_stuck_action
         except ImportError:
             pytest.fail("revert_stuck_action must exist")
 

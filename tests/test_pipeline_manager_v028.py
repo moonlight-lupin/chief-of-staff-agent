@@ -329,7 +329,7 @@ class TestStaleDetection:
 class TestPipelineActions:
     def test_unapproved_cannot_execute(self, temp_project):
         config, project, config_path = temp_project
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         action = create_pending_action(
             config=config, action_type="pipeline.deal.move_stage",
             provider="pipeline", target="deal-001",
@@ -350,7 +350,7 @@ class TestPipelineActions:
              "value": 3000, "currency": "SGD", "created": "2026-07-01",
              "last_activity": "2026-07-01", "documents": [], "notes": []},
         ])
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="pipeline.deal.move_stage",
             provider="pipeline", target="deal-exec-001",
@@ -370,7 +370,7 @@ class TestPipelineActions:
 
     def test_delete_action_unsupported(self, temp_project):
         config, project, config_path = temp_project
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="pipeline.deal.delete",
             provider="pipeline", target="deal-001",
@@ -415,7 +415,7 @@ class TestFullRoute:
              "value": 8000, "currency": "SGD", "created": "2026-07-01",
              "last_activity": "2026-07-01", "documents": [], "notes": []},
         ])
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="pipeline.deal.move_stage",
             provider="pipeline", target="deal-route-001",
@@ -444,7 +444,7 @@ class TestFullRoute:
              "value": 500, "currency": "SGD", "created": "2026-07-01",
              "last_activity": "2026-07-01", "documents": [], "notes": []},
         ])
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="pipeline.deal.add_note",
             provider="pipeline", target="deal-nows-001",

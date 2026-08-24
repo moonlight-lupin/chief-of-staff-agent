@@ -330,7 +330,7 @@ class TestWikiAutoBackup:
         wiki.mkdir()
         _make_wiki_page(wiki / "index.md", "Index", page_type="index")
         # Seed 6+ events to trigger auto-backup
-        from event_store import ingest_event
+        from state_db import ingest_event
         for i in range(7):
             ingest_event(config, source="gmail", source_id=f"msg-{i}",
                           event_type="email_received",
@@ -350,7 +350,7 @@ class TestWikiAutoBackup:
         wiki = project / "wiki"
         wiki.mkdir()
         _make_wiki_page(wiki / "index.md", "Index", page_type="index")
-        from event_store import ingest_event
+        from state_db import ingest_event
         for i in range(3):
             ingest_event(config, source="gmail", source_id=f"msg-s{i}",
                           event_type="email_received",

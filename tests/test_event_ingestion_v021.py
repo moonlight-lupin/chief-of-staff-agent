@@ -52,7 +52,7 @@ class TestIdempotency:
     """Test duplicate event detection and deduplication."""
 
     def test_first_ingest_creates_event(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "msg001", "email_received",
                              {"from": "client@x.com", "subject": "NDA"})
@@ -62,7 +62,7 @@ class TestIdempotency:
         assert event["source_id"] == "msg001"
 
     def test_duplicate_ingest_returns_none(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         first = ingest_event(config, "gmail", "msg001", "email_received",
                              {"from": "client@x.com"})
@@ -72,7 +72,7 @@ class TestIdempotency:
         assert second is None  # duplicate, ignored
 
     def test_different_source_id_not_duplicate(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         first = ingest_event(config, "gmail", "msg001", "email_received", {})
         second = ingest_event(config, "gmail", "msg002", "email_received", {})
@@ -80,7 +80,7 @@ class TestIdempotency:
         assert second is not None
 
     def test_different_source_not_duplicate(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         first = ingest_event(config, "gmail", "msg001", "email_received", {})
         second = ingest_event(config, "calendar", "msg001", "calendar_changed", {})
@@ -89,7 +89,7 @@ class TestIdempotency:
 
     def test_replay_safety(self, temp_project):
         """Re-ingesting the same event multiple times is safe."""
-        from event_store import ingest_event, list_events
+        from state_db import ingest_event, list_events
         config, project = temp_project
         for _ in range(5):
             ingest_event(config, "gmail", "msg001", "email_received", {"subject": "Test"})
@@ -103,7 +103,7 @@ class TestClassification:
     """Test event classification and suggested actions."""
 
     def test_email_received_classification(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "msg001", "email_received", {})
         cls = event["classification"]
@@ -112,7 +112,7 @@ class TestClassification:
         assert "gmail.search" in cls["suggested_actions"]
 
     def test_urgent_email_classification(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "msg001", "email_urgent", {})
         cls = event["classification"]
@@ -120,14 +120,14 @@ class TestClassification:
         assert "gmail.send" in cls["suggested_actions"]
 
     def test_calendar_changed_classification(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "calendar", "evt001", "calendar_changed", {})
         cls = event["classification"]
         assert cls["category"] == "calendar_changed"
 
     def test_unknown_event_type_classified(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "custom", "x001", "some_new_type", {})
         cls = event["classification"]
@@ -136,7 +136,7 @@ class TestClassification:
 
     def test_auto_execute_always_false(self, temp_project):
         """No event type should ever have auto_execute=True."""
-        from event_store import ingest_event, EVENT_CATEGORIES
+        from state_db import ingest_event, EVENT_CATEGORIES
         config, project = temp_project
         for event_type in EVENT_CATEGORIES:
             if event_type == "unknown":
@@ -152,7 +152,7 @@ class TestNoAutoExecution:
     """Prove that ingesting an event never triggers any provider call."""
 
     def test_ingest_never_calls_provider(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         # Even with email_urgent (which suggests gmail.send),
         # no provider should be called
@@ -164,7 +164,7 @@ class TestNoAutoExecution:
         mock_client.calendar_create.assert_not_called()
 
     def test_no_destructive_auto_action(self, temp_project):
-        from event_store import ingest_event, EVENT_CATEGORIES
+        from state_db import ingest_event, EVENT_CATEGORIES
         config, project = temp_project
         # Check that no category has destructive=True
         for cat_name, cat in EVENT_CATEGORIES.items():
@@ -178,7 +178,7 @@ class TestEventLifecycle:
     """Test event state transitions."""
 
     def test_list_by_state(self, temp_project):
-        from event_store import ingest_event, list_events, mark_processed
+        from state_db import ingest_event, list_events, mark_processed
         config, project = temp_project
         e1 = ingest_event(config, "gmail", "m1", "email_received", {})
         e2 = ingest_event(config, "gmail", "m2", "email_received", {})
@@ -189,7 +189,7 @@ class TestEventLifecycle:
         assert len(processed) == 1  # only e1
 
     def test_mark_processed_stores_metadata(self, temp_project):
-        from event_store import ingest_event, mark_processed, get_event
+        from state_db import ingest_event, mark_processed, get_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {})
         result = mark_processed(config, event["id"], processed_by="MH", notes="Handled via reply")
@@ -199,7 +199,7 @@ class TestEventLifecycle:
 
     def test_mark_processed_idempotent(self, temp_project):
         """Double mark-processed should fail on second call."""
-        from event_store import ingest_event, mark_processed
+        from state_db import ingest_event, mark_processed
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {})
         first = mark_processed(config, event["id"])
@@ -208,7 +208,7 @@ class TestEventLifecycle:
         assert second is None  # already processed
 
     def test_list_by_source(self, temp_project):
-        from event_store import ingest_event, list_events
+        from state_db import ingest_event, list_events
         config, project = temp_project
         ingest_event(config, "gmail", "m1", "email_received", {})
         ingest_event(config, "calendar", "e1", "calendar_changed", {})
@@ -218,7 +218,7 @@ class TestEventLifecycle:
         assert len(cal_events) == 1
 
     def test_get_event(self, temp_project):
-        from event_store import ingest_event, get_event
+        from state_db import ingest_event, get_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {"subject": "Test"})
         loaded = get_event(config, event["id"])
@@ -226,7 +226,7 @@ class TestEventLifecycle:
         assert loaded["payload"]["subject"] == "Test"
 
     def test_event_summary(self, temp_project):
-        from event_store import ingest_event, get_event_summary, mark_processed
+        from state_db import ingest_event, get_event_summary, mark_processed
         config, project = temp_project
         e1 = ingest_event(config, "gmail", "m1", "email_received", {})
         e2 = ingest_event(config, "calendar", "e1", "calendar_changed", {})
@@ -238,7 +238,7 @@ class TestEventLifecycle:
         assert summary["pending_count"] == 1
 
     def test_cleanup_old_events(self, temp_project):
-        from event_store import ingest_event, mark_processed, cleanup_old_events, _load, _save
+        from state_db import ingest_event, mark_processed, cleanup_old_events, _load_events as _load, _save_events as _save
         config, project = temp_project
         e1 = ingest_event(config, "gmail", "m1", "email_received", {})
         mark_processed(config, e1["id"])

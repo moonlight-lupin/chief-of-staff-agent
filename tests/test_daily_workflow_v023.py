@@ -215,7 +215,7 @@ class TestBriefingSources:
 
     def test_collect_pending_actions_with_data(self, temp_project):
         config, project = temp_project
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         create_pending_action(
             config=config, action_type="gmail.send", provider="google_api",
             target="x@y.com", payload={"to": "x@y.com", "subject": "t", "body": "b"},
@@ -228,7 +228,7 @@ class TestBriefingSources:
 
     def test_collect_recent_events_respects_since(self, temp_project):
         config, project = temp_project
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received", payload={"email": "test@x.com"})
         from briefing_sources import collect_recent_events
@@ -241,7 +241,7 @@ class TestBriefingSources:
 
     def test_collect_recent_events_respects_limit(self, temp_project):
         config, project = temp_project
-        from event_store import ingest_event
+        from state_db import ingest_event
         for i in range(10):
             ingest_event(config, source="gmail", source_id=f"msg-{i:03d}",
                           event_type="email_received", payload={"email": f"test{i}@x.com"})
@@ -344,7 +344,7 @@ class TestBriefingRun:
         """Verify no provider calls, approvals, or executions happen during briefing."""
         config, project = temp_project
         # Create some pending actions
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         create_pending_action(
             config=config, action_type="gmail.send", provider="google_api",
             target="x@y.com", payload={"to": "x@y.com", "subject": "t", "body": "b"},
@@ -365,14 +365,14 @@ class TestBriefingRun:
         assert parsed["safety"]["executions_performed"] is False
 
         # Verify pending action state unchanged
-        from pending_actions import list_pending_actions
+        from state_db import list_pending_actions
         actions = list_pending_actions(config)
         assert all(a["state"] != "executed" for a in actions)
         assert all(a["state"] != "approved" for a in actions)
 
     def test_pending_actions_grouped_by_risk(self, temp_project, monkeypatch):
         config, project = temp_project
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         create_pending_action(config=config, action_type="gmail.send", provider="google_api",
             target="x@y.com", payload={"to": "x@y.com", "subject": "t", "body": "b"},
             summary="High risk")
@@ -458,7 +458,7 @@ class TestEmailNotify:
         assert "NOT auto-send" in output
 
         # Verify it's pending, not sent
-        from pending_actions import list_pending_actions
+        from state_db import list_pending_actions
         actions = list_pending_actions(config)
         assert any(a["type"] == "gmail.send" for a in actions)
         send_actions = [a for a in actions if a["type"] == "gmail.send"]

@@ -107,7 +107,7 @@ class TestDailyCommand:
         """daily command does not approve any actions."""
         config, project, config_path = temp_project
         mock_pa = MagicMock()
-        with patch("pending_actions.approve_pending_action", mock_pa):
+        with patch("state_db.approve_pending_action", mock_pa):
             import chief_of_staff
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -340,7 +340,7 @@ class TestRecommendedCommands:
     def test_recommends_review_queue_when_pending(self, temp_project):
         """Recommended commands include review_queue.py when pending actions exist."""
         config, project, config_path = temp_project
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         create_pending_action(
             config=config, action_type="gmail.send",
             provider="google_api", target="test@example.com",

@@ -57,7 +57,7 @@ class TestTransactionalStateStore:
 
     def test_concurrent_saves_no_lost_data(self, temp_project):
         """Two concurrent saves to the same store must not lose either write."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         config, project = temp_project
 
         # Initialize with empty pipeline
@@ -79,7 +79,7 @@ class TestTransactionalStateStore:
 
     def test_with_store_lock_context_manager(self, temp_project):
         """with_store_lock should exist and protect load→mutate→save."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         config, project = temp_project
 
         # Initialize
@@ -89,7 +89,7 @@ class TestTransactionalStateStore:
 
         # Try using with_store_lock if it exists
         try:
-            from state_store import with_store_lock
+            from state_db import with_store_lock
         except ImportError:
             pytest.fail("with_store_lock context manager must exist for transactional access")
 
@@ -121,7 +121,7 @@ class TestHMACTimestamp:
 
     def test_sign_payload_with_timestamp(self):
         """sign_payload should accept a timestamp and include it in the signature."""
-        from webhook_security import sign_payload, verify_signature
+        from webhook_validation import sign_payload, verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
         timestamp = str(int(time.time()))
@@ -135,7 +135,7 @@ class TestHMACTimestamp:
 
     def test_verify_signature_with_timestamp(self):
         """verify_signature should accept a timestamp and verify against it."""
-        from webhook_security import sign_payload, verify_signature
+        from webhook_validation import sign_payload, verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
         timestamp = str(int(time.time()))
@@ -145,7 +145,7 @@ class TestHMACTimestamp:
 
     def test_verify_rejects_old_timestamp(self):
         """verify_signature should reject timestamps older than 300s."""
-        from webhook_security import sign_payload, verify_signature
+        from webhook_validation import sign_payload, verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
         old_timestamp = str(int(time.time()) - 600)  # 10 minutes ago
@@ -157,7 +157,7 @@ class TestHMACTimestamp:
 
     def test_verify_rejects_missing_timestamp(self):
         """verify_signature should reject when timestamp is required but missing."""
-        from webhook_security import verify_signature
+        from webhook_validation import verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
 
@@ -169,7 +169,7 @@ class TestHMACTimestamp:
 
     def test_verify_accepts_recent_timestamp(self):
         """verify_signature should accept timestamps within 300s skew."""
-        from webhook_security import sign_payload, verify_signature
+        from webhook_validation import sign_payload, verify_signature
         secret = "test-secret-key-123456"
         body = b'{"event": "test"}'
         timestamp = str(int(time.time()) - 60)  # 1 minute ago
@@ -192,7 +192,7 @@ class TestStoreNamePathEscape:
 
     def test_rejects_dotdot_path(self, temp_project):
         """store_name with ../ must be rejected."""
-        from state_store import get_store_path, StateStoreError
+        from state_db import get_store_path, StateStoreError
         config, project = temp_project
 
         with pytest.raises((StateStoreError, ValueError, RuntimeError)):
@@ -200,7 +200,7 @@ class TestStoreNamePathEscape:
 
     def test_rejects_absolute_path(self, temp_project):
         """Absolute path as store_name must be rejected."""
-        from state_store import get_store_path, StateStoreError
+        from state_db import get_store_path, StateStoreError
         config, project = temp_project
 
         with pytest.raises((StateStoreError, ValueError, RuntimeError)):
@@ -208,7 +208,7 @@ class TestStoreNamePathEscape:
 
     def test_rejects_empty_name(self, temp_project):
         """Empty store_name must be rejected."""
-        from state_store import get_store_path, StateStoreError
+        from state_db import get_store_path, StateStoreError
         config, project = temp_project
 
         with pytest.raises((StateStoreError, ValueError)):
@@ -216,7 +216,7 @@ class TestStoreNamePathEscape:
 
     def test_rejects_slash_in_name(self, temp_project):
         """store_name with forward slashes must be rejected."""
-        from state_store import get_store_path, StateStoreError
+        from state_db import get_store_path, StateStoreError
         config, project = temp_project
 
         with pytest.raises((StateStoreError, ValueError, RuntimeError)):
@@ -224,7 +224,7 @@ class TestStoreNamePathEscape:
 
     def test_accepts_valid_name(self, temp_project):
         """Valid store names must work normally."""
-        from state_store import get_store_path
+        from state_db import get_store_path
         config, project = temp_project
 
         path = get_store_path("pipeline", config=config)
@@ -249,7 +249,7 @@ class TestConcurrencyErrorRetry:
 
     def test_mark_executed_retries_on_conflict(self, temp_project):
         """mark_executed must retry when _save raises ConcurrencyError."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_executed, get_pending_action,
         )
@@ -263,18 +263,18 @@ class TestConcurrencyErrorRetry:
 
         # Simulate a concurrent write that bumps the version between
         # mark_executed's load and save by patching _save to fail once
-        from pending_actions import _save
+        from state_db import _save
         original_save = _save
         call_count = {"n": 0}
 
         def flaky_save(cfg, data, expected_version=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
-                from pending_actions import ConcurrencyError
+                from state_db import ConcurrencyError
                 raise ConcurrencyError("Simulated concurrent write")
             return original_save(cfg, data, expected_version=None)
 
-        with patch("pending_actions._save", side_effect=flaky_save):
+        with patch("state_db._save", side_effect=flaky_save):
             result = mark_executed(config, action["id"], {"success": True})
 
         assert result is not None, "mark_executed must retry and succeed"
@@ -283,7 +283,7 @@ class TestConcurrencyErrorRetry:
 
     def test_mark_executed_gives_up_after_max_retries(self, temp_project):
         """mark_executed must stop retrying after 3 attempts and not crash."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_executed, ConcurrencyError,
         )
@@ -296,7 +296,7 @@ class TestConcurrencyErrorRetry:
         mark_executing(config, action["id"])
 
         # Always raise ConcurrencyError
-        with patch("pending_actions._save",
+        with patch("state_db._save",
                    side_effect=ConcurrencyError("Always fail")):
             # Must not raise — must return None or handle gracefully
             try:
@@ -324,7 +324,7 @@ class TestReplayCacheLease:
 
     def test_stale_processing_reservation_can_be_reclaimed(self, temp_project):
         """A processing reservation older than the lease can be reclaimed."""
-        from webhook_security import reserve_delivery, _load_replay_cache
+        from state_db import reserve_delivery, _load_replay_cache
         import time as _time
         config, project = temp_project
 
@@ -335,7 +335,7 @@ class TestReplayCacheLease:
         # Manually age the reservation past the lease (5 min default)
         cache = _load_replay_cache(config)
         cache["entries"]["delivery-stale"]["ts"] = _time.time() - 400  # 6+ min ago
-        from webhook_security import _save_replay_cache_unlocked
+        from state_db import _save_replay_cache_unlocked
         _save_replay_cache_unlocked(config, cache)
 
         # A new reserve_delivery for the same ID should succeed (reclaim)
@@ -344,7 +344,7 @@ class TestReplayCacheLease:
 
     def test_fresh_processing_reservation_blocks(self, temp_project):
         """A fresh processing reservation must still block duplicate delivery."""
-        from webhook_security import reserve_delivery
+        from state_db import reserve_delivery
         config, project = temp_project
 
         ok1, _ = reserve_delivery(config, "delivery-fresh")
@@ -392,49 +392,24 @@ class TestDirectoryFsync:
     """
 
     def test_pending_actions_save_fsyncs_directory(self, temp_project):
-        """pending_actions._save must fsync the parent directory after replace."""
-        from pending_actions import create_pending_action
+        """Creating an action persists it in state.db (SQLite WAL durability)."""
+        from state_db import create_pending_action, get_pending_action
         config, project = temp_project
-
-        fsync_dir_calls = []
-        original_fsync = os.fsync
-        original_open = os.open
-
-        def spy_open(path, flags, *args, **kwargs):
-            fd = original_open(path, flags, *args, **kwargs)
-            if flags & os.O_DIRECTORY:
-                fsync_dir_calls.append(str(path))
-            return fd
-
-        with patch("os.open", side_effect=spy_open):
-            create_pending_action(
-                config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
-            )
-
-        assert len(fsync_dir_calls) >= 1, (
-            "pending_actions._save must fsync the parent directory after rename"
+        action = create_pending_action(
+            config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
         )
+        assert action is not None
+        assert get_pending_action(config, action["id"]) is not None
+        assert (project / "state.db").exists()
 
     def test_event_store_save_fsyncs_directory(self, temp_project):
-        """event_store._save must fsync the parent directory after replace."""
-        from event_store import ingest_event
+        """Ingesting an event persists it in state.db (SQLite WAL durability)."""
+        from state_db import ingest_event, get_event
         config, project = temp_project
-
-        fsync_dir_calls = []
-        original_open = os.open
-
-        def spy_open(path, flags, *args, **kwargs):
-            fd = original_open(path, flags, *args, **kwargs)
-            if flags & os.O_DIRECTORY:
-                fsync_dir_calls.append(str(path))
-            return fd
-
-        with patch("os.open", side_effect=spy_open):
-            ingest_event(config, "gmail", "msg-001", "email_received", {"from": "a@b.com"})
-
-        assert len(fsync_dir_calls) >= 1, (
-            "event_store._save must fsync the parent directory after rename"
-        )
+        event = ingest_event(config, "gmail", "msg-001", "email_received", {"from": "a@b.com"})
+        assert event is not None
+        assert get_event(config, event["id"]) is not None
+        assert (project / "state.db").exists()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -451,7 +426,7 @@ class TestVersionMonotonicity:
 
     def test_version_never_goes_backwards(self, temp_project):
         """Version must be monotonically increasing even with stale data."""
-        from pending_actions import create_pending_action, _load, _save
+        from state_db import create_pending_action, _load, _save
         config, project = temp_project
 
         # Create an action (version goes to 1)

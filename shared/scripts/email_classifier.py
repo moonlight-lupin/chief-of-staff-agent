@@ -489,7 +489,7 @@ def prepare_pending_from_suggestion(
     if action_type not in ORG_ACTION_ROUTING:
         return {"success": False, "error": f"Unknown action type: {action_type}"}
 
-    from pending_actions import create_pending_action
+    from state_db import create_pending_action
     from workspace_client import get_workspace_client
     from workspace_capabilities import require_capability
 
@@ -534,7 +534,7 @@ def prepare_pending_from_suggestion(
 
 def list_pending_org(config: Any) -> list[dict[str, Any]]:
     """List pending actions from email organisation."""
-    from pending_actions import list_pending_actions
+    from state_db import list_pending_actions
     actions = list_pending_actions(config)
     return [a for a in actions if a.get("payload", {}).get("source") == "email_organisation"]
 

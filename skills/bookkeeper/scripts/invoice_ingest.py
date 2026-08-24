@@ -38,10 +38,10 @@ if str(SHARED_SCRIPTS) not in sys.path:
 
 try:
     from config_loader import load_config  # type: ignore
-    from event_store import get_event, list_events  # type: ignore
-    from pending_actions import create_pending_action  # type: ignore
+    from state_db import get_event, list_events  # type: ignore
+    from state_db import create_pending_action  # type: ignore
     from schemas import generate_id  # type: ignore
-    from state_store import load_store  # type: ignore
+    from state_db import load_store  # type: ignore
 except Exception as exc:  # pragma: no cover
     print(
         f"Chief-of-Staff bootstrap incomplete: cannot import shared scripts from {SHARED_SCRIPTS}: {exc}. "

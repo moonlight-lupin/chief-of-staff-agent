@@ -33,14 +33,14 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from pending_actions import (  # noqa: E402
+from state_db import (  # noqa: E402
     get_pending_action,
     mark_executed,
     mark_executing,
     mark_failed,
 )
 from schemas import generate_id, validate_invoice  # noqa: E402
-from state_store import load_store, save_store_atomic  # noqa: E402
+from state_db import load_store, save_store_atomic  # noqa: E402
 
 CANDIDATES_FILENAME = ".bookkeeper_invoice_candidates.json"
 DUPLICATE_REFUSE_THRESHOLD = 0.95

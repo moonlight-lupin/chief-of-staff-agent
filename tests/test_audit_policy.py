@@ -84,7 +84,7 @@ def _make_deal(name="Test"):
 class TestAuditPolicy:
     def test_non_strict_succeeds_on_audit_failure(self, tmp_project):
         """Mutation succeeds even if audit log can't be written; no crash."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         from audit_log import append_audit
 
         # Patch append_audit to always fail by making .audit a file instead of dir
@@ -111,7 +111,7 @@ class TestAuditPolicy:
 
     def test_strict_mode_raises_on_audit_failure(self, tmp_project):
         """In strict mode, audit failure causes save_store_atomic to raise."""
-        from state_store import load_store, save_store_atomic, StateStoreError
+        from state_db import load_store, save_store_atomic, StateStoreError
 
         # Make .audit a file to force audit failure
         audit_path = tmp_project / ".audit"
@@ -138,7 +138,7 @@ class TestAuditPolicy:
 
     def test_normal_audit_succeeds(self, tmp_project):
         """Normal operation: both mutation and audit succeed."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
 
         data = load_store("pipeline")
         data["deals"].append(_make_deal("Normal"))

@@ -173,7 +173,7 @@ class TestMultiprocessingRace:
         Uses 3 threads (not 5) to stay within the 3-attempt retry budget.
         All created actions must be present with no errors.
         """
-        from pending_actions import _load
+        from state_db import _load
         config, project = temp_project
 
         import threading
@@ -184,7 +184,7 @@ class TestMultiprocessingRace:
 
         def create_action(cfg, target):
             try:
-                from pending_actions import create_pending_action
+                from state_db import create_pending_action
                 r = create_pending_action(cfg, "gmail.send", "google_api", target,
                                        {"to": target})
                 with lock:
@@ -216,7 +216,7 @@ class TestMultiprocessingRace:
 
     def test_concurrent_mark_executing_one_wins(self, temp_project):
         """Two threads marking executing — exactly one must win."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, get_pending_action,
         )

@@ -106,7 +106,7 @@ def _make_pubsub_payload(email="test@x.com", history_id="12345", message_id="msg
 
 class TestPubSubOIDC:
     def test_valid_jwt(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         jwt = _make_jwt()
         valid_claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
                         "email_verified": True, "iss": "https://accounts.google.com",
@@ -117,19 +117,19 @@ class TestPubSubOIDC:
         assert reason == "OK"
 
     def test_missing_auth_header(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         ok, reason = verify_pubsub_oidc(None)
         assert not ok
         assert "Missing" in reason
 
     def test_not_bearer(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         ok, reason = verify_pubsub_oidc("Basic abc123")
         assert not ok
         assert "Bearer" in reason
 
     def test_wrong_issuer(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         # Google verifies signature OK, but issuer is wrong
         claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
                   "email_verified": True, "iss": "https://evil.com",
@@ -140,7 +140,7 @@ class TestPubSubOIDC:
         assert "issuer" in reason.lower()
 
     def test_wrong_audience(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         # Google rejects wrong audience at signature verification
         with _mock_verify_token(side_effect=ValueError("Wrong audience")):
             ok, reason = verify_pubsub_oidc("Bearer valid.signed.token")
@@ -148,7 +148,7 @@ class TestPubSubOIDC:
         assert "JWT verification failed" in reason
 
     def test_wrong_service_account(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         claims = {"email": "evil@attacker.com", "email_verified": True,
                   "iss": "https://accounts.google.com",
                   "aud": "https://myapp.example.com/webhooks/gmail"}
@@ -158,7 +158,7 @@ class TestPubSubOIDC:
         assert "service account" in reason.lower()
 
     def test_email_not_verified(self, with_pubsub):
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         claims = {"email": "pubsub@my-project.iam.gserviceaccount.com",
                   "email_verified": False, "iss": "https://accounts.google.com",
                   "aud": "https://myapp.example.com/webhooks/gmail"}
@@ -170,7 +170,7 @@ class TestPubSubOIDC:
     def test_missing_audience_config(self, with_pubsub, monkeypatch):
         monkeypatch.setenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT", "pubsub@my-project.iam.gserviceaccount.com")
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", raising=False)
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         jwt = _make_jwt()
         ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
         assert not ok
@@ -179,7 +179,7 @@ class TestPubSubOIDC:
     def test_missing_sa_config(self, with_pubsub, monkeypatch):
         monkeypatch.setenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", "https://myapp.example.com/webhooks/gmail")
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT", raising=False)
-        from webhook_security import verify_pubsub_oidc
+        from webhook_validation import verify_pubsub_oidc
         jwt = _make_jwt()
         ok, reason = verify_pubsub_oidc(f"Bearer {jwt}")
         assert not ok
@@ -191,20 +191,20 @@ class TestPubSubOIDC:
 class TestChannelTokenFailClosed:
     def test_no_token_configured_rejected(self, with_secret):
         """When channel token is NOT configured, verify returns False (fail-closed)."""
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert verify_channel_token("anything") is False
         assert verify_channel_token(None) is False
 
     def test_valid_token_accepted(self, with_token):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert verify_channel_token("my-channel-token") is True
 
     def test_wrong_token_rejected(self, with_token):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert verify_channel_token("wrong") is False
 
     def test_missing_token_rejected(self, with_token):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert verify_channel_token(None) is False
 
 
@@ -212,39 +212,39 @@ class TestChannelTokenFailClosed:
 
 class TestPayloadValidation:
     def test_valid_pubsub_payload(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         payload = _make_pubsub_payload()
         ok, reason, data = validate_gmail_pubsub_payload(payload)
         assert ok
         assert data["emailAddress"] == "test@x.com"
 
     def test_missing_message_object(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         ok, reason, data = validate_gmail_pubsub_payload({"subscription": "x"})
         assert not ok
         assert "message" in reason
 
     def test_missing_data_field(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         ok, reason, data = validate_gmail_pubsub_payload({"message": {"messageId": "1"}})
         assert not ok
         assert "data" in reason
 
     def test_missing_message_id(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         ok, reason, data = validate_gmail_pubsub_payload({"message": {"data": "d"}})
         assert not ok
         assert "messageId" in reason
 
     def test_malformed_base64_rejected(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         ok, reason, data = validate_gmail_pubsub_payload(
             {"message": {"data": "!!!invalid!!!", "messageId": "1"}})
         assert not ok
         assert "decode" in reason.lower()
 
     def test_missing_emailAddress_in_decoded(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         inner = json.dumps({"historyId": "123"}).encode()
         encoded = base64.urlsafe_b64encode(inner).decode().rstrip("=")
         ok, reason, data = validate_gmail_pubsub_payload(
@@ -253,13 +253,13 @@ class TestPayloadValidation:
         assert "emailAddress" in reason
 
     def test_calendar_missing_headers_rejected(self):
-        from webhook_security import validate_calendar_headers
+        from webhook_validation import validate_calendar_headers
         ok, reason = validate_calendar_headers({})
         assert not ok
         assert "X-Goog-Channel-ID" in reason
 
     def test_drive_missing_headers_rejected(self):
-        from webhook_security import validate_drive_headers
+        from webhook_validation import validate_drive_headers
         ok, reason = validate_drive_headers({})
         assert not ok
         assert "X-Goog-Channel-ID" in reason
@@ -317,7 +317,7 @@ class TestExecutionFailurePaths:
     """Test all failure paths in the generic executor."""
 
     def _create_and_approve(self, config, action_type, payload, mock_client):
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type=action_type, provider="google_api",
             target="test", payload=payload, summary=f"Test {action_type}",
@@ -345,7 +345,7 @@ class TestExecutionFailurePaths:
         assert rc == 1
         assert "❌ Provider returned error" in buf.getvalue()
 
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         action = get_pending_action(config, action_id)
         assert action["state"] == "approved"  # failed → back to approved for retry
         assert "last_error" in action
@@ -367,7 +367,7 @@ class TestExecutionFailurePaths:
             rc = webhook_events.main(["--summary", "execute", "--action-id", action_id])
         assert rc == 1
 
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         action = get_pending_action(config, action_id)
         assert action["state"] == "approved"  # failed → approved for retry
 
@@ -386,7 +386,7 @@ class TestExecutionFailurePaths:
             rc = webhook_events.main(["--summary", "execute", "--action-id", action_id])
         assert rc == 1
 
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         action = get_pending_action(config, action_id)
         assert action["state"] == "approved"  # failed → approved
 
@@ -401,7 +401,7 @@ class TestExecutionFailurePaths:
             rc = webhook_events.main(["--summary", "execute", "--action-id", action_id])
         assert rc == 1
 
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         action = get_pending_action(config, action_id)
         assert action["state"] == "approved"  # still approved, not executed
 
@@ -422,7 +422,7 @@ class TestExecutionFailurePaths:
             rc = webhook_events.main(["--summary", "execute", "--action-id", action_id])
         assert rc == 0
 
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         action = get_pending_action(config, action_id)
         assert action["state"] == "executed"
 
@@ -470,7 +470,7 @@ class TestMethodSignatures:
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
         mock_client.calendar_create.return_value = {"success": True}
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="calendar.create", provider="google_api",
             target="test", payload={"summary": "Meeting", "start": "2026-07-10T10:00:00", "end": "2026-07-10T11:00:00"},
@@ -491,7 +491,7 @@ class TestMethodSignatures:
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
         mock_client.files_upload.return_value = {"success": True}
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="drive.upload", provider="google_api",
             target="test", payload={"file_path": "/tmp/test.pdf", "parent_id": "folder-1"},
@@ -512,7 +512,7 @@ class TestMethodSignatures:
         mock_client.provider_name = "google_api"
         mock_client.supports.side_effect = lambda a: True
         mock_client.files_download.return_value = {"success": True}
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="drive.download", provider="google_api",
             target="test", payload={"file_id": "f1", "output_path": "/tmp/out.pdf"},
@@ -633,7 +633,7 @@ class TestReceiverOIDC:
 
 class TestValidateSecretConfig:
     def test_all_configured(self, with_token):
-        from webhook_security import validate_secret_config
+        from webhook_validation import validate_secret_config
         result = validate_secret_config()
         assert result["valid"] is True
         assert result["endpoints"]["gmail"] == "native (OIDC)"
@@ -642,7 +642,7 @@ class TestValidateSecretConfig:
         assert result["endpoints"]["generic"] == "enabled"
 
     def test_no_channel_token(self, with_pubsub):
-        from webhook_security import validate_secret_config
+        from webhook_validation import validate_secret_config
         result = validate_secret_config()
         assert result["valid"] is False
         assert result["endpoints"]["calendar"] == "disabled"
@@ -654,7 +654,7 @@ class TestValidateSecretConfig:
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE", raising=False)
         monkeypatch.delenv("CHIEF_OF_STAFF_PUBSUB_SERVICE_ACCOUNT", raising=False)
         monkeypatch.delenv("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN", raising=False)
-        from webhook_security import validate_secret_config
+        from webhook_validation import validate_secret_config
         result = validate_secret_config()
         assert result["valid"] is False
         assert all(s == "disabled" for s in result["endpoints"].values())

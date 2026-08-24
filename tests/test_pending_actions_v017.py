@@ -75,7 +75,7 @@ def google_mock():
 
 def _age_action(config, action_id, hours_old):
     """Manually set created_at to N hours ago."""
-    from pending_actions import _load, _save
+    from state_db import _load, _save
     data = _load(config)
     expected_version = data.get("_version", 0)
     data["actions"][action_id]["created_at"] = (
@@ -90,14 +90,14 @@ class TestOptimisticVersioning:
     """Test optimistic versioning for concurrent write protection."""
 
     def test_version_increments_on_save(self, temp_project):
-        from pending_actions import create_pending_action, _load
+        from state_db import create_pending_action, _load
         config, project = temp_project
         create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         data = _load(config)
         assert data["_version"] >= 1
 
     def test_concurrent_write_raises(self, temp_project):
-        from pending_actions import create_pending_action, _load, _save, ConcurrencyError
+        from state_db import create_pending_action, _load, _save, ConcurrencyError
         config, project = temp_project
         # Create initial action
         create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
@@ -113,7 +113,7 @@ class TestOptimisticVersioning:
             _save(config, data1, expected_version=v1)
 
     def test_save_without_version_check_always_works(self, temp_project):
-        from pending_actions import create_pending_action, _load, _save
+        from state_db import create_pending_action, _load, _save
         config, project = temp_project
         create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         v1 = _load(config)["_version"]
@@ -130,7 +130,7 @@ class TestDoubleApproveDoubleExecute:
     """Verify state machine prevents double transitions."""
 
     def test_double_approve_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         first = approve_pending_action(config, action["id"])
@@ -140,7 +140,7 @@ class TestDoubleApproveDoubleExecute:
         assert second is None  # already approved
 
     def test_double_execute_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -152,14 +152,14 @@ class TestDoubleApproveDoubleExecute:
         assert second is None  # already executed
 
     def test_execute_without_approve_fails(self, temp_project):
-        from pending_actions import create_pending_action, mark_executed
+        from state_db import create_pending_action, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         result = mark_executed(config, action["id"], {"success": True})
         assert result is None
 
     def test_approve_executed_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from state_db import create_pending_action, approve_pending_action, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -173,7 +173,7 @@ class TestExpiry:
     """Test stale action handling."""
 
     def test_expired_action_cannot_approve(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, EXPIRY_HOURS
+        from state_db import create_pending_action, approve_pending_action, EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         # Age it past expiry
@@ -182,7 +182,7 @@ class TestExpiry:
         assert result is None
 
     def test_check_expired_marks_action(self, temp_project):
-        from pending_actions import create_pending_action, check_expired, get_pending_action, EXPIRY_HOURS
+        from state_db import create_pending_action, check_expired, get_pending_action, EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         _age_action(config, action["id"], EXPIRY_HOURS + 1)
@@ -193,13 +193,13 @@ class TestExpiry:
         assert loaded["expired_at"] is not None
 
     def test_fresh_action_not_expired(self, temp_project):
-        from pending_actions import create_pending_action, check_expired
+        from state_db import create_pending_action, check_expired
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         assert check_expired(config, action["id"]) is False
 
     def test_preview_marks_expired(self, temp_project):
-        from pending_actions import create_pending_action, preview_pending_action, EXPIRY_HOURS
+        from state_db import create_pending_action, preview_pending_action, EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         _age_action(config, action["id"], EXPIRY_HOURS + 1)
@@ -207,7 +207,7 @@ class TestExpiry:
         assert preview["state"] == "expired"
 
     def test_cancel_can_cancel_expired(self, temp_project):
-        from pending_actions import create_pending_action, cancel_pending_action, check_expired, EXPIRY_HOURS
+        from state_db import create_pending_action, cancel_pending_action, check_expired, EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         _age_action(config, action["id"], EXPIRY_HOURS + 1)
@@ -217,7 +217,7 @@ class TestExpiry:
         assert cancelled["state"] == "cancelled"
 
     def test_cleanup_removes_expired(self, temp_project):
-        from pending_actions import (
+        from state_db import (
             create_pending_action, check_expired, cleanup_old_actions, get_pending_action, EXPIRY_HOURS
         )
         config, project = temp_project
@@ -225,7 +225,7 @@ class TestExpiry:
         _age_action(config, action["id"], EXPIRY_HOURS + 1)
         check_expired(config, action["id"])
         # Also age the expired_at timestamp
-        from pending_actions import _load, _save
+        from state_db import _load, _save
         data = _load(config)
         expected_version = data.get("_version", 0)
         data["actions"][action["id"]]["expired_at"] = (
@@ -243,26 +243,26 @@ class TestRiskClassification:
     """Test recipient risk classification."""
 
     def test_internal_domain(self, temp_project):
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config, project = temp_project
         risk = classify_recipient_risk("colleague@phronesis-applied.com", config)
         assert risk["level"] == "internal"
         assert "phronesis-applied.com" in risk["reason"]
 
     def test_external_domain(self, temp_project):
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config, project = temp_project
         risk = classify_recipient_risk("client@gmail.com", config)
         assert risk["level"] == "external"
         assert "gmail.com" in risk["reason"]
 
     def test_unknown_email(self):
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         risk = classify_recipient_risk("notanemail", None)
         assert risk["level"] == "unknown"
 
     def test_risk_stored_in_action(self, temp_project):
-        from pending_actions import create_pending_action, get_pending_action
+        from state_db import create_pending_action, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "client@gmail.com", {"to": "client@gmail.com"})
@@ -271,7 +271,7 @@ class TestRiskClassification:
         assert loaded["risk"]["level"] == "external"
 
     def test_internal_risk_stored(self, temp_project):
-        from pending_actions import create_pending_action, get_pending_action
+        from state_db import create_pending_action, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "team@phronesis-applied.com", {"to": "team@phronesis-applied.com"})
@@ -285,7 +285,7 @@ class TestApproverMetadata:
     """Test approver and reason metadata on approve/cancel."""
 
     def test_approve_stores_approver(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approved = approve_pending_action(config, action["id"],
@@ -294,7 +294,7 @@ class TestApproverMetadata:
         assert approved["approval_reason"] == "Client confirmed NDA terms"
 
     def test_approve_without_metadata(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approved = approve_pending_action(config, action["id"])
@@ -302,14 +302,14 @@ class TestApproverMetadata:
         assert approved["approval_reason"] is None
 
     def test_cancel_stores_reason(self, temp_project):
-        from pending_actions import create_pending_action, cancel_pending_action
+        from state_db import create_pending_action, cancel_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         cancelled = cancel_pending_action(config, action["id"], reason="Wrong recipient")
         assert cancelled["cancel_reason"] == "Wrong recipient"
 
     def test_approver_in_preview(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, preview_pending_action
+        from state_db import create_pending_action, approve_pending_action, preview_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"], approver="MH", reason="Approved")
@@ -318,10 +318,10 @@ class TestApproverMetadata:
         assert preview["approval_reason"] == "Approved"
 
     def test_approver_audited(self, temp_project):
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         config, project = temp_project
         with patch("workspace_audit.audit_workspace_action") as mock_audit:
-            from pending_actions import approve_pending_action
+            from state_db import approve_pending_action
             action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
             approve_pending_action(config, action["id"], approver="MH", reason="OK")
         # Find the approve audit call
@@ -339,8 +339,8 @@ class TestPendingSummary:
     """Test the summary command and get_pending_summary()."""
 
     def test_summary_counts_by_state(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, cancel_pending_action
-        from pending_actions import get_pending_summary
+        from state_db import create_pending_action, approve_pending_action, cancel_pending_action
+        from state_db import get_pending_summary
         config, project = temp_project
         a1 = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         a2 = create_pending_action(config, "gmail.send", "google_api", "c@d.com", {"to": "c@d.com"})
@@ -351,7 +351,7 @@ class TestPendingSummary:
         assert summary["by_state"]["cancelled"] == 1
 
     def test_summary_high_risk_external(self, temp_project):
-        from pending_actions import create_pending_action, get_pending_summary
+        from state_db import create_pending_action, get_pending_summary
         config, project = temp_project
         create_pending_action(config, "gmail.send", "google_api",
                               "client@gmail.com", {"to": "client@gmail.com"})
@@ -360,7 +360,7 @@ class TestPendingSummary:
         assert summary["high_risk_pending"][0]["target"] == "client@gmail.com"
 
     def test_summary_no_high_risk_for_internal(self, temp_project):
-        from pending_actions import create_pending_action, get_pending_summary
+        from state_db import create_pending_action, get_pending_summary
         config, project = temp_project
         create_pending_action(config, "gmail.send", "google_api",
                               "team@phronesis-applied.com", {"to": "team@phronesis-applied.com"})
@@ -387,7 +387,7 @@ class TestCLIApproverMetadata:
                 "--approver", "MH", "--reason", "Confirmed by phone",
             ])
         assert rc == 0
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         loaded = get_pending_action(config, action["id"])
         assert loaded["approver"] == "MH"
         assert loaded["approval_reason"] == "Confirmed by phone"
@@ -403,7 +403,7 @@ class TestCLIApproverMetadata:
             action = json.loads(buf.getvalue())
             rc = send_email.main(["cancel", "--action-id", action["id"], "--reason", "Wrong address"])
         assert rc == 0
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         loaded = get_pending_action(config, action["id"])
         assert loaded["cancel_reason"] == "Wrong address"
 
@@ -456,7 +456,7 @@ class TestDeliveryHook:
     """Test format_preview_for_delivery and get_actions_for_delivery."""
 
     def test_format_preview_requested(self, temp_project):
-        from pending_actions import create_pending_action, preview_pending_action, format_preview_for_delivery
+        from state_db import create_pending_action, preview_pending_action, format_preview_for_delivery
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "client@gmail.com", {"to": "client@gmail.com",
@@ -472,8 +472,8 @@ class TestDeliveryHook:
         assert action["id"] in msg
 
     def test_format_preview_approved(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action
-        from pending_actions import preview_pending_action, format_preview_for_delivery
+        from state_db import create_pending_action, approve_pending_action
+        from state_db import preview_pending_action, format_preview_for_delivery
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "a@b.com", {"to": "a@b.com", "subject": "S", "body": "B"})
@@ -484,7 +484,7 @@ class TestDeliveryHook:
         assert "Execute:" in msg
 
     def test_format_preview_shows_risk(self, temp_project):
-        from pending_actions import create_pending_action, preview_pending_action, format_preview_for_delivery
+        from state_db import create_pending_action, preview_pending_action, format_preview_for_delivery
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "client@gmail.com", {"to": "client@gmail.com",
@@ -495,7 +495,7 @@ class TestDeliveryHook:
         assert "external" in msg
 
     def test_get_actions_for_delivery(self, temp_project):
-        from pending_actions import create_pending_action, get_actions_for_delivery
+        from state_db import create_pending_action, get_actions_for_delivery
         config, project = temp_project
         create_pending_action(config, "gmail.send", "google_api",
                               "a@b.com", {"to": "a@b.com", "subject": "S1", "body": "B1"})
@@ -509,7 +509,7 @@ class TestDeliveryHook:
             assert item["id"] in item["formatted_message"]
 
     def test_get_actions_for_delivery_excludes_expired(self, temp_project):
-        from pending_actions import create_pending_action, get_actions_for_delivery, EXPIRY_HOURS
+        from state_db import create_pending_action, get_actions_for_delivery, EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "a@b.com", {"to": "a@b.com", "subject": "S", "body": "B"})
@@ -518,7 +518,7 @@ class TestDeliveryHook:
         assert len(items) == 0  # expired, excluded
 
     def test_get_actions_for_delivery_excludes_non_requested(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, get_actions_for_delivery
+        from state_db import create_pending_action, approve_pending_action, get_actions_for_delivery
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api",
                                        "a@b.com", {"to": "a@b.com", "subject": "S", "body": "B"})

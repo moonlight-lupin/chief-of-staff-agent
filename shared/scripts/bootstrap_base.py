@@ -24,7 +24,7 @@ except Exception as exc:  # pragma: no cover
 
 from config_loader import is_default_assistant_name
 from doctor import run_checks
-from state_store import EMPTY_TEMPLATES
+from state_db import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PLUGIN_ROOT / "shared" / "config"
@@ -836,11 +836,16 @@ def _project_root(config: Mapping[str, Any], config_path: Path) -> Path:
 def _init_stores(root: Path) -> list[str]:
     root.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
-    for store, template in EMPTY_TEMPLATES.items():
-        path = root / f"{store}.yaml"
-        if not path.exists():
-            path.write_text(yaml.safe_dump(template, sort_keys=False), encoding="utf-8")
-            written.append(str(path))
+    from state_db import StateDB
+    cfg = {"paths": {"project_root": str(root)}}
+    db = StateDB(cfg)
+    try:
+        for store, template in EMPTY_TEMPLATES.items():
+            if db.get_kv(store) is None:
+                db.put_kv(store, dict(template))
+                written.append(f"{store} (state.db)")
+    finally:
+        db.close()
     return written
 
 

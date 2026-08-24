@@ -34,7 +34,7 @@ except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for doctor.py") from exc
 
 from config_loader import is_default_assistant_name, load_config, load_dotenv_file
-from state_store import EMPTY_TEMPLATES
+from state_db import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PLUGIN_ROOT / "shared" / "config"
@@ -241,26 +241,69 @@ def _check_yaml_stores(fix: bool, data: dict[str, Any] | None, config_path: Path
     root = _project_root_from_data(data, config_path)
     if root is None:
         return CheckResult("yaml_stores", "fail", "project root unavailable")
+    db_path = root / "state.db"
     missing: list[str] = []
     invalid: list[str] = []
     applied = False
-    for store, template in EMPTY_TEMPLATES.items():
-        path = root / f"{store}.yaml"
-        if not path.exists():
-            missing.append(store)
-            if fix:
-                root.mkdir(parents=True, exist_ok=True)
-                path.write_text(yaml.safe_dump(template, sort_keys=False), encoding="utf-8")
-                applied = True
-        if path.exists():
-            try:
-                loaded = _load_yaml(path) or {}
-                if not isinstance(loaded, dict):
+    cfg = data if isinstance(data, dict) else {"paths": {"project_root": str(root)}}
+    if "paths" not in cfg:
+        cfg = {**cfg, "paths": {"project_root": str(root)}}
+    elif not isinstance(cfg.get("paths"), dict) or not cfg["paths"].get("project_root"):
+        cfg = {**cfg, "paths": {**(cfg.get("paths") or {}), "project_root": str(root)}}
+
+    def _seed_yaml(store: str, template: dict[str, Any]) -> None:
+        ypath = root / f"{store}.yaml"
+        if not ypath.exists():
+            root.mkdir(parents=True, exist_ok=True)
+            ypath.write_text(yaml.safe_dump(template, sort_keys=False), encoding="utf-8")
+
+    try:
+        from state_db import StateDB
+        db = StateDB(cfg)
+        try:
+            for store, template in EMPTY_TEMPLATES.items():
+                loaded = db.get_kv(store)
+                ypath = root / f"{store}.yaml"
+                if loaded is None:
+                    missing.append(store)
+                    if fix:
+                        db.put_kv(store, dict(template))
+                        _seed_yaml(store, dict(template))
+                        applied = True
+                elif not isinstance(loaded, dict):
                     invalid.append(store)
-            except Exception as exc:
-                invalid.append(f"{store}: {exc}")
+                elif fix and not ypath.exists():
+                    _seed_yaml(store, loaded if loaded else dict(template))
+                    applied = True
+        finally:
+            db.close()
+    except Exception as exc:
+        if not db_path.exists() and not fix:
+            missing = list(EMPTY_TEMPLATES)
+            return CheckResult("yaml_stores", "fail", f"state.db missing ({exc})")
+        if fix:
+            try:
+                from state_db import StateDB
+                root.mkdir(parents=True, exist_ok=True)
+                db = StateDB(cfg)
+                for store, template in EMPTY_TEMPLATES.items():
+                    if db.get_kv(store) is None:
+                        db.put_kv(store, dict(template))
+                    _seed_yaml(store, dict(template))
+                db.close()
+                applied = True
+                missing = []
+            except Exception as fix_exc:
+                return CheckResult("yaml_stores", "fail", f"state.db: {fix_exc}")
+        else:
+            return CheckResult("yaml_stores", "fail", f"state.db: {exc}")
     status = "pass" if not missing and not invalid else ("warn" if applied and not invalid else "fail")
-    return CheckResult("yaml_stores", status, f"missing={missing} invalid={invalid}" if (missing or invalid) else "all stores parse", applied)
+    return CheckResult(
+        "yaml_stores",
+        status,
+        f"missing={missing} invalid={invalid}" if (missing or invalid) else "state.db kv stores ok",
+        applied,
+    )
 
 
 def _check_google_workspace(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
@@ -845,7 +888,7 @@ def _check_m365(fix: bool, data: dict[str, Any] | None, config_path: Path) -> Ch
 def _check_webhook_config(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     """Check webhook security configuration."""
     try:
-        from webhook_security import validate_secret_config
+        from webhook_validation import validate_secret_config
         result = validate_secret_config()
         endpoints = result.get("endpoints", {})
         issues = result.get("issues", [])
@@ -870,11 +913,10 @@ def _check_state_files(fix: bool, data: dict[str, Any] | None, config_path: Path
     if not root:
         return CheckResult("state_files", "warn", "project root unknown")
     state_files = [
-        ".events.json", ".pending_actions.json",
+        "state.db",
         ".email_organisation_policy.json",
         ".email_organisation_classifications.json",
         ".email_organisation_suggestions.json",
-        ".webhook_replay_cache.json",
     ]
     state_dirs = [".audit", ".runs"]
     details = []
@@ -883,6 +925,19 @@ def _check_state_files(fix: bool, data: dict[str, Any] | None, config_path: Path
         p = root / name
         if not p.exists():
             continue  # optional file
+        if name == "state.db":
+            try:
+                import sqlite3
+                conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+                try:
+                    conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+                finally:
+                    conn.close()
+                details.append(f"{name}: ok")
+            except Exception as exc:
+                details.append(f"{name}: UNREADABLE ({exc})")
+                all_pass = False
+            continue
         try:
             json.loads(p.read_text())
             details.append(f"{name}: ok")
@@ -908,7 +963,7 @@ ORPHANED_EXECUTING_MINUTES = 15  # Only reset executing actions older than this
 
 
 def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    """Check for orphaned 'executing' actions stuck in .pending_actions.json.
+    """Check for orphaned 'executing' actions stuck in state.db.
 
     Only resets actions older than ORPHANED_EXECUTING_MINUTES to avoid
     resetting a genuinely executing action (duplicate-execution risk).
@@ -917,23 +972,23 @@ def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_pat
     root = _project_root_from_data(data, config_path)
     if not root:
         return CheckResult("orphaned_executing", "warn", "project root unknown")
-    pa_path = root / ".pending_actions.json"
-    if not pa_path.exists():
-        return CheckResult("orphaned_executing", "pass", "no pending actions file")
+    db_path = root / "state.db"
+    if not db_path.exists() and not (root / ".pending_actions.json").exists():
+        return CheckResult("orphaned_executing", "pass", "no pending actions store")
+    cfg = data if isinstance(data, dict) else {"paths": {"project_root": str(root)}}
+    if not isinstance(cfg.get("paths"), dict) or not cfg.get("paths", {}).get("project_root"):
+        cfg = {**cfg, "paths": {**(cfg.get("paths") or {}), "project_root": str(root)}}
     try:
-        pa_data = json.loads(pa_path.read_text())
-    except (json.JSONDecodeError, FileNotFoundError):
+        from state_db import StateDB, revert_stuck_action
+        db = StateDB(cfg)
+        try:
+            executing = [
+                a for a in db.list_actions(state="executing")
+            ]
+        finally:
+            db.close()
+    except Exception:
         return CheckResult("orphaned_executing", "pass", "pending actions unreadable (checked elsewhere)")
-    # Handle both dict format ({"actions": {}}) and list format
-    if isinstance(pa_data, dict) and "actions" in pa_data:
-        actions_dict = pa_data["actions"]
-        executing = [(aid, a) for aid, a in actions_dict.items()
-                     if isinstance(a, dict) and a.get("state") == "executing"]
-    elif isinstance(pa_data, list):
-        executing = [(a.get("id", "?"), a) for a in pa_data
-                     if isinstance(a, dict) and a.get("state") == "executing"]
-    else:
-        return CheckResult("orphaned_executing", "pass", "pending actions empty or new")
     if not executing:
         return CheckResult("orphaned_executing", "pass", "no orphaned executing actions")
 
@@ -941,30 +996,30 @@ def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_pat
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(minutes=ORPHANED_EXECUTING_MINUTES)
 
-    stale = []      # older than threshold → safe to reset
-    fresh = []       # younger than threshold → still running, skip
-    no_ts = []       # missing/invalid executing_at → report but don't reset
+    stale = []
+    fresh = []
+    no_ts = []
 
-    for aid, a in executing:
+    for a in executing:
         ts_str = a.get("executing_at")
         if not ts_str:
-            no_ts.append((aid, a))
+            no_ts.append(a)
             continue
         try:
-            ts = datetime.fromisoformat(ts_str)
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
-            no_ts.append((aid, a))
+            no_ts.append(a)
             continue
         if ts < threshold:
-            stale.append((aid, a))
+            stale.append(a)
         else:
-            fresh.append((aid, a))
+            fresh.append(a)
 
-    stale_ids = [aid for aid, _ in stale]
-    fresh_ids = [aid for aid, _ in fresh]
-    no_ts_ids = [aid for aid, _ in no_ts]
+    stale_ids = [str(a.get("id", "?")) for a in stale]
+    fresh_ids = [str(a.get("id", "?")) for a in fresh]
+    no_ts_ids = [str(a.get("id", "?")) for a in no_ts]
 
     parts = []
     if stale_ids:
@@ -975,11 +1030,8 @@ def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_pat
         parts.append(f"{len(no_ts_ids)} missing executing_at: {', '.join(no_ts_ids)}")
 
     if fix and stale_ids:
-        ts = now.isoformat()
-        for _, a in stale:
-            a["state"] = "approved"
-            a["last_error"] = f"Reset from orphaned 'executing' by doctor --fix at {ts} (was stale >{ORPHANED_EXECUTING_MINUTES}min)"
-        pa_path.write_text(json.dumps(pa_data, indent=2))
+        for a in stale:
+            revert_stuck_action(cfg, a["id"], max_minutes=ORPHANED_EXECUTING_MINUTES)
         detail = f"Reset {len(stale_ids)} stale action(s) to 'approved': {', '.join(stale_ids)}"
         if fresh_ids:
             detail += f"; {len(fresh_ids)} fresh skipped"
@@ -988,7 +1040,6 @@ def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_pat
         return CheckResult("orphaned_executing", "pass" if not fresh_ids else "warn",
             detail, fix_applied=True)
     elif fix and not stale_ids:
-        # Nothing stale to reset
         detail = "; ".join(parts) if parts else "no executing actions"
         return CheckResult("orphaned_executing", "warn" if fresh_ids or no_ts_ids else "pass", detail)
 

@@ -49,7 +49,7 @@ class TestBackupRetention:
 
     def test_backups_pruned_after_save(self, temp_project):
         """After a save, .backups/ must not exceed MAX_BACKUPS (default 20)."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         config, project = temp_project
 
         # Create 25 backups by saving 25 times
@@ -71,7 +71,7 @@ class TestBackupRetention:
 
     def test_backups_pruned_by_age(self, temp_project):
         """Backups older than MAX_BACKUP_DAYS (default 30) must be pruned."""
-        from state_store import load_store, save_store_atomic
+        from state_db import load_store, save_store_atomic
         config, project = temp_project
 
         # Create a backup
@@ -112,7 +112,7 @@ class TestAuditStrictWhitespace:
 
     def test_strict_stores_with_whitespace(self, temp_project):
         """Setting CHIEF_OF_STAFF_AUDIT_STRICT='pipeline, invoices' must match both."""
-        from state_store import load_store, save_store_atomic, StateStoreError
+        from state_db import load_store, save_store_atomic, StateStoreError
         config, project = temp_project
 
         # Initialize the store
@@ -127,7 +127,7 @@ class TestAuditStrictWhitespace:
             data["deals"].append({"id": "deal-2", "name": "Deal 2"})
 
             # Patch append_audit to fail — strict mode should raise
-            with patch("state_store.append_audit",
+            with patch("state_db.append_audit",
                        side_effect=Exception("audit DB down")):
                 with pytest.raises(StateStoreError, match="strict mode"):
                     save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
@@ -136,7 +136,7 @@ class TestAuditStrictWhitespace:
 
     def test_strict_stores_no_whitespace(self, temp_project):
         """Setting CHIEF_OF_STAFF_AUDIT_STRICT='pipeline,invoices' (no space) must also work."""
-        from state_store import load_store, save_store_atomic, StateStoreError
+        from state_db import load_store, save_store_atomic, StateStoreError
         config, project = temp_project
 
         data = load_store("pipeline", config=config)
@@ -148,7 +148,7 @@ class TestAuditStrictWhitespace:
             data = load_store("pipeline", config=config)
             data["deals"].append({"id": "deal-2", "name": "Deal 2"})
 
-            with patch("state_store.append_audit",
+            with patch("state_db.append_audit",
                        side_effect=Exception("audit DB down")):
                 with pytest.raises(StateStoreError, match="strict mode"):
                     save_store_atomic("pipeline", data, config=config, _fill_defaults=True)
@@ -169,7 +169,7 @@ class TestProjectRootFailLoudly:
 
     def test_missing_project_root_raises(self, tmp_path):
         """pending_actions._project_root must raise when no root is configured."""
-        from pending_actions import _project_root
+        from state_db import _project_root
 
         # Clear all project root env vars
         env_backup = {}

@@ -2,7 +2,6 @@
 """v0.3.15 — email-organisation classify → suggest → prepare on Composio MS."""
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
@@ -126,10 +125,9 @@ class TestOutlookClassifySuggestPrepare:
             prepared = prepare_pending_from_suggestion(config, sug_id)
         assert prepared["success"] is True
         assert prepared.get("action_id")
-        pending_path = project / ".pending_actions.json"
-        assert pending_path.exists()
-        data = json.loads(pending_path.read_text())
-        action = next(iter(data["actions"].values()))
+        from state_db import get_pending_action
+        action = get_pending_action(config, prepared["action_id"])
+        assert action is not None
         assert action["type"] == "gmail.label"
         assert action["payload"]["label_id"] == "Finance/Invoices"
         assert action["payload"]["message_id"] == "AAMk-prep"

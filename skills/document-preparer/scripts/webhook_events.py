@@ -80,7 +80,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import list_events
+    from state_db import list_events
     # Use source filter — list_events supports exact match,
     # but we need prefix match for "webhook.*"
     # Fetch a larger set and filter, but use limit properly
@@ -109,7 +109,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import get_event
+    from state_db import get_event
     ev = get_event(cfg, args.event_id)
     if not ev:
         print(f"Event not found: {args.event_id}", file=sys.stderr)
@@ -133,7 +133,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
 def cmd_validate_secret(args: argparse.Namespace) -> int:
     """Validate webhook security configuration."""
-    from webhook_security import validate_secret_config
+    from webhook_validation import validate_secret_config
     result = validate_secret_config()
     if result["valid"]:
         print("✅ All webhook endpoints configured")
@@ -151,7 +151,7 @@ def cmd_validate_secret(args: argparse.Namespace) -> int:
 
 def cmd_sign(args: argparse.Namespace) -> int:
     """Generate HMAC signature for testing."""
-    from webhook_security import get_webhook_secret, sign_payload
+    from webhook_validation import get_webhook_secret, sign_payload
     secret = get_webhook_secret()
     if not secret:
         print("❌ CHIEF_OF_STAFF_WEBHOOK_SECRET not set", file=sys.stderr)
@@ -167,7 +167,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import approve_pending_action, get_pending_action
+    from state_db import approve_pending_action, get_pending_action
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -191,7 +191,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import get_pending_action, mark_executing, mark_executed, mark_failed
+    from state_db import get_pending_action, mark_executing, mark_executed, mark_failed
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -378,7 +378,7 @@ def cmd_pending(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import list_pending_actions
+    from state_db import list_pending_actions
     actions = list_pending_actions(cfg)
     if args.summary:
         if not actions:

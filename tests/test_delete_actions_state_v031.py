@@ -53,7 +53,7 @@ def auto_approve():
 
 def _prepare_approved(config, action_type, target, provider_method):
     """Create a soft-delete action already in 'approved' state."""
-    from pending_actions import create_pending_action, approve_pending_action
+    from state_db import create_pending_action, approve_pending_action
     action = create_pending_action(
         config, action_type, "google_api", target,
         {"reason": "test", "reversible": True,
@@ -80,7 +80,7 @@ class TestProviderReturnsFailure:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             action = _prepare_approved(config, "gmail.archive", "msg1", "gmail_archive")
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -107,7 +107,7 @@ class TestProviderReturnsFailure:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             action = _prepare_approved(config, "drive.trash", "file1", "drive_trash")
             rc = delete_actions.main(["execute", "--action-id", action["id"]])
         assert rc == 1
@@ -130,7 +130,7 @@ class TestProviderRaises:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             action = _prepare_approved(config, "calendar.cancel", "evt1", "calendar_cancel")
             rc = delete_actions.main(["execute", "--action-id", action["id"]])
         assert rc == 1
@@ -154,7 +154,7 @@ class TestCapabilityRefused:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             action = _prepare_approved(config, "calendar.cancel", "evt1", "calendar_cancel")
             rc = delete_actions.main(["execute", "--action-id", action["id"]])
         # Refused before the provider method was ever invoked
@@ -178,7 +178,7 @@ class TestCapabilityRefused:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             action = _prepare_approved(config, "calendar.cancel", "evt1", "calendar_cancel")
             rc = delete_actions.main(["execute", "--action-id", action["id"]])
         mock_client.calendar_cancel.assert_not_called()
@@ -205,7 +205,7 @@ class TestProviderSuccess:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=mock_client):
             import delete_actions
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             action = _prepare_approved(config, "gmail.archive", "msg1", "gmail_archive")
             rc = delete_actions.main(["execute", "--action-id", action["id"]])
         assert rc == 0

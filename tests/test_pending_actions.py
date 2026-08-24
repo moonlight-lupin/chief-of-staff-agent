@@ -86,7 +86,7 @@ class TestPendingActionsStorage:
     """Unit tests for pending_actions module."""
 
     def test_create_pending_action(self, temp_project):
-        from pending_actions import create_pending_action, get_pending_action
+        from state_db import create_pending_action, get_pending_action
         config, project = temp_project
         action = create_pending_action(
             config, "gmail.send", "google_api", "client@test.com",
@@ -100,7 +100,7 @@ class TestPendingActionsStorage:
         assert loaded["target"] == "client@test.com"
 
     def test_list_pending_actions(self, temp_project):
-        from pending_actions import create_pending_action, list_pending_actions
+        from state_db import create_pending_action, list_pending_actions
         config, project = temp_project
         create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         create_pending_action(config, "gmail.send", "google_api", "c@d.com", {"to": "c@d.com"})
@@ -110,7 +110,7 @@ class TestPendingActionsStorage:
         assert len(requested) == 2
 
     def test_approve_pending_action(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approved = approve_pending_action(config, action["id"])
@@ -121,7 +121,7 @@ class TestPendingActionsStorage:
         assert loaded["state"] == "approved"
 
     def test_cancel_pending_action(self, temp_project):
-        from pending_actions import create_pending_action, cancel_pending_action
+        from state_db import create_pending_action, cancel_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         cancelled = cancel_pending_action(config, action["id"])
@@ -129,12 +129,12 @@ class TestPendingActionsStorage:
         assert cancelled["cancelled_at"] is not None
 
     def test_approve_not_found(self, temp_project):
-        from pending_actions import approve_pending_action
+        from state_db import approve_pending_action
         config, project = temp_project
         assert approve_pending_action(config, "nonexistent") is None
 
     def test_approve_already_approved_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -142,7 +142,7 @@ class TestPendingActionsStorage:
         assert approve_pending_action(config, action["id"]) is None
 
     def test_mark_executed(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -153,14 +153,14 @@ class TestPendingActionsStorage:
         assert executed["result"]["success"] is True
 
     def test_mark_executed_without_approval_fails(self, temp_project):
-        from pending_actions import create_pending_action, mark_executed
+        from state_db import create_pending_action, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         result = mark_executed(config, action["id"], {"success": True})
         assert result is None  # can't execute without approval
 
     def test_preview_pending_action(self, temp_project):
-        from pending_actions import create_pending_action, preview_pending_action
+        from state_db import create_pending_action, preview_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com",
                                        {"to": "a@b.com", "subject": "Test", "body": "Hello world"})
@@ -170,7 +170,7 @@ class TestPendingActionsStorage:
         assert preview["preview"]["body_preview"] == "Hello world"
 
     def test_cancel_executed_fails(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed, cancel_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed, cancel_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -179,7 +179,7 @@ class TestPendingActionsStorage:
         assert cancel_pending_action(config, action["id"]) is None
 
     def test_cleanup_old_actions(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed, cancel_pending_action, cleanup_old_actions, _load
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed, cancel_pending_action, cleanup_old_actions, _load
         config, project = temp_project
         # Create and execute an old action
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
@@ -190,7 +190,7 @@ class TestPendingActionsStorage:
         data = _load(config)
         from datetime import datetime, timedelta
         data["actions"][action["id"]]["executed_at"] = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
-        from pending_actions import _save
+        from state_db import _save
         _save(config, data)
         # Create a fresh one
         create_pending_action(config, "gmail.send", "google_api", "c@d.com", {"to": "c@d.com"})
@@ -360,7 +360,7 @@ class TestSendEmailCLI:
             send_email.main(["approve", "--action-id", action["id"]])
             send_email.main(["execute", "--action-id", action["id"]])
             # Verify state on disk
-            from pending_actions import get_pending_action
+            from state_db import get_pending_action
             loaded = get_pending_action(config, action["id"])
         assert loaded["state"] == "executed"
         assert loaded["result"]["success"] is True

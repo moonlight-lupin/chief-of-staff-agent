@@ -90,7 +90,7 @@ class TestMemorySystem:
         config, project, config_path = temp_with_config
 
         # Seed some events
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "contact@example.com", "subject": "Project alpha update"})
@@ -119,7 +119,7 @@ class TestMemorySystem:
         """Every autonomous memory change is logged in memory_changes.json."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "contact@example.com", "subject": "Test"})
@@ -145,7 +145,7 @@ class TestMemorySystem:
         """Dry-run reports without writing."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "test@x.com", "subject": "Test"})
@@ -193,7 +193,7 @@ class TestMemorySystem:
         """Memory extraction must not call any provider."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "test@x.com", "subject": "Test"})
@@ -276,7 +276,7 @@ class TestWikiCurator:
         """Wiki curator creates daily log pages."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "contact@example.com", "subject": "Project alpha update"})
@@ -298,7 +298,7 @@ class TestWikiCurator:
         """Dry-run reports without writing."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "test@x.com", "subject": "Test"})
@@ -337,7 +337,7 @@ class TestWikiCurator:
         """Created pages have valid YAML frontmatter."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "contact@example.com", "subject": "Test"})
@@ -359,7 +359,7 @@ class TestWikiCurator:
         """Wiki curator appends to log.md."""
         config, project, config_path = temp_with_config
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "test@x.com", "subject": "Test"})
@@ -424,7 +424,7 @@ class TestWikiCurator:
         test_file = wiki / "entities" / "existing.md"
         test_file.write_text("# Existing\n\nThis should not be deleted.\n")
 
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "test@x.com", "subject": "Test"})
@@ -512,7 +512,7 @@ class TestBriefingKnowledgeSection:
         monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config_path))
 
         # Seed an event so wiki_curator has something to process
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-001",
                       event_type="email_received",
                       payload={"from": "contact@example.com", "subject": "Project alpha update"})

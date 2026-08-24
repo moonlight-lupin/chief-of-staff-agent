@@ -226,7 +226,7 @@ class TestCalendarCancelUnsupported:
         """An APPROVED m365 calendar.cancel pending action is refused pre-execution
         by require_capability — the provider cancel is never attempted."""
         import webhook_events
-        from pending_actions import (create_pending_action, approve_pending_action,
+        from state_db import (create_pending_action, approve_pending_action,
                                       get_pending_action)
         action = create_pending_action(
             m365_config, "calendar.cancel", "m365", "evt1",

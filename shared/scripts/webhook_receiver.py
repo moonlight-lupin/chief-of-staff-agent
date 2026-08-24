@@ -93,10 +93,10 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
             body = self.rfile.read(content_length) if content_length > 0 else b""
 
             # Authentication by endpoint type
-            from webhook_security import (
+            from webhook_validation import (
                 verify_signature, verify_channel_token, verify_pubsub_oidc,
-                reserve_delivery, complete_delivery, release_delivery,
             )
+            from state_db import reserve_delivery, complete_delivery, release_delivery
 
             if endpoint == "/webhooks/gmail":
                 # Gmail: try OIDC JWT first (native Pub/Sub), fall back to HMAC (dev/proxy)
@@ -171,7 +171,7 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
 
             # Ingest into event_store
             try:
-                from event_store import ingest_event
+                from state_db import ingest_event
                 result = ingest_event(
                     config,
                     source=event["source"],
@@ -250,7 +250,7 @@ def start_server(
     generate_suggestions: bool = False,
 ) -> None:
     """Start the webhook receiver HTTP server."""
-    from webhook_security import validate_secret_config
+    from webhook_validation import validate_secret_config
     check = validate_secret_config()
 
     if check["issues"]:

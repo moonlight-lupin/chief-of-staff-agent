@@ -69,7 +69,7 @@ def google_mock():
 
 
 def _age_approved(config, action_id, hours_old):
-    from pending_actions import _load, _save
+    from state_db import _load, _save
     data = _load(config)
     expected_version = data.get("_version", 0)
     data["actions"][action_id]["approved_at"] = (
@@ -84,7 +84,7 @@ class TestExecutionStateMachine:
     """Test approved → executing → executed | failed transitions."""
 
     def test_mark_executing_transitions_state(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -94,7 +94,7 @@ class TestExecutionStateMachine:
         assert executing.get("executing_at") is not None
 
     def test_mark_executed_requires_executing_state(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executed
+        from state_db import create_pending_action, approve_pending_action, mark_executed
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -103,7 +103,7 @@ class TestExecutionStateMachine:
         assert result is None  # not in executing state
 
     def test_full_state_machine(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -113,7 +113,7 @@ class TestExecutionStateMachine:
         assert loaded["state"] == "executed"
 
     def test_mark_failed_back_to_approved(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -125,7 +125,7 @@ class TestExecutionStateMachine:
 
     def test_retry_after_failure(self, temp_project):
         """After mark_failed, can mark_executing again and then mark_executed."""
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_failed, mark_executed, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, mark_executed, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -145,7 +145,7 @@ class TestPreExecutionExpiryCheck:
     """The critical race fix: expired approval must never call provider."""
 
     def test_mark_executing_rejects_lapsed(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, mark_executing, APPROVED_EXPIRY_HOURS, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, mark_executing, APPROVED_EXPIRY_HOURS, get_pending_action
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -161,7 +161,7 @@ class TestPreExecutionExpiryCheck:
         with patch("send_email.load_config", return_value=config), \
              patch("send_email.get_client", return_value=google_mock):
             import send_email
-            from pending_actions import create_pending_action, approve_pending_action, APPROVED_EXPIRY_HOURS
+            from state_db import create_pending_action, approve_pending_action, APPROVED_EXPIRY_HOURS
             action = create_pending_action(config, "gmail.send", "google_api", "a@b.com",
                                            {"to": "a@b.com", "subject": "S", "body": "B", "cc": ""})
             approve_pending_action(config, action["id"])
@@ -176,7 +176,7 @@ class TestPreExecutionExpiryCheck:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action, approve_pending_action, APPROVED_EXPIRY_HOURS
+            from state_db import create_pending_action, approve_pending_action, APPROVED_EXPIRY_HOURS
             action = create_pending_action(config, "gmail.archive", "google_api", "msg123",
                                            {"reason": "old", "reversible": True,
                                             "restore_hint": "add INBOX", "provider_method": "gmail_archive"})
@@ -187,7 +187,7 @@ class TestPreExecutionExpiryCheck:
         google_mock.gmail_archive.assert_not_called()  # NEVER called
 
     def test_assert_executable_returns_action(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, assert_executable
+        from state_db import create_pending_action, approve_pending_action, assert_executable
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -196,7 +196,7 @@ class TestPreExecutionExpiryCheck:
         assert result["state"] == "approved"  # no state change
 
     def test_assert_executable_rejects_lapsed(self, temp_project):
-        from pending_actions import create_pending_action, approve_pending_action, assert_executable, APPROVED_EXPIRY_HOURS
+        from state_db import create_pending_action, approve_pending_action, assert_executable, APPROVED_EXPIRY_HOURS
         config, project = temp_project
         action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
         approve_pending_action(config, action["id"])
@@ -215,7 +215,7 @@ class TestRestoreWorkflows:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+            from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
             # Create and execute an archive action
             action = create_pending_action(config, "gmail.archive", "google_api", "msg123",
                                            {"reason": "old", "reversible": True,
@@ -233,7 +233,7 @@ class TestRestoreWorkflows:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+            from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
             action = create_pending_action(config, "gmail.trash", "google_api", "msg456",
                                            {"reason": "spam", "reversible": True,
                                             "restore_hint": "remove TRASH", "provider_method": "gmail_trash"})
@@ -249,7 +249,7 @@ class TestRestoreWorkflows:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+            from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
             action = create_pending_action(config, "calendar.cancel", "google_api", "evt789",
                                            {"reason": "cancelled", "reversible": True,
                                             "restore_hint": "update status", "provider_method": "calendar_cancel"})
@@ -266,7 +266,7 @@ class TestRestoreWorkflows:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action
+            from state_db import create_pending_action
             action = create_pending_action(config, "gmail.archive", "google_api", "msg123",
                                            {"reason": "old", "reversible": True,
                                             "restore_hint": "add INBOX", "provider_method": "gmail_archive"})
@@ -280,7 +280,7 @@ class TestRestoreWorkflows:
         with patch("delete_actions.load_config", return_value=config), \
              patch("delete_actions.get_client", return_value=google_mock):
             import delete_actions
-            from pending_actions import create_pending_action, approve_pending_action, mark_executing, mark_executed
+            from state_db import create_pending_action, approve_pending_action, mark_executing, mark_executed
             action = create_pending_action(config, "gmail.send", "google_api", "a@b.com",
                                            {"to": "a@b.com", "subject": "S", "body": "B", "cc": ""})
             approve_pending_action(config, action["id"])

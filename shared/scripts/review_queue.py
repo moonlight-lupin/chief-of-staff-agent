@@ -52,7 +52,7 @@ for _path in (_SCRIPT_DIR, _DOC_PREPARER_SCRIPTS):
 
 from action_risk import get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
 from config_loader import get_project_root, load_config  # noqa: E402
-from pending_actions import (  # noqa: E402
+from state_db import (  # noqa: E402
     approve_pending_action,
     dismiss_pending_action,
     get_pending_action,

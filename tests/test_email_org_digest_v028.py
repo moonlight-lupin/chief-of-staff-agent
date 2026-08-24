@@ -247,7 +247,7 @@ class TestNoMutations:
         with patch("email_organisation.load_config", return_value=config), \
              patch("workspace_client.get_workspace_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None), \
-             patch("pending_actions.approve_pending_action") as mock_approve:
+             patch("state_db.approve_pending_action") as mock_approve:
             import email_organisation
             email_organisation.main(["notify", "--channel", "email", "--to", "me@test.com"])
             mock_approve.assert_not_called()

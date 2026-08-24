@@ -20,7 +20,7 @@ try:
     import yaml  # type: ignore
     from config_loader import load_config  # type: ignore
     from schemas import SchemaError, generate_id, validate_deal  # type: ignore
-    from state_store import (  # type: ignore
+    from state_db import (  # type: ignore
         StateStoreError,
         get_store_path,
         load_store,

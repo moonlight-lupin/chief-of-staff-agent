@@ -68,7 +68,7 @@ def temp_project(tmp_path):
 
 def _seed_action(config, action_type="gmail.send", target="x@y.com", **kwargs):
     """Helper to create a pending action."""
-    from pending_actions import create_pending_action
+    from state_db import create_pending_action
     payload = kwargs.pop("payload", {"to": target, "subject": "Test", "body": "Test body"})
     return create_pending_action(
         config=config, action_type=action_type, provider="google_api",
@@ -92,7 +92,7 @@ class TestList:
 
     def test_list_filter_by_state(self, temp_project):
         config, project, config_path = temp_project
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         a1 = create_pending_action(config=config, action_type="gmail.send", provider="google_api",
             target="x@y.com", payload={"to": "x@y.com", "subject": "T", "body": "B"}, summary="S1")
         a2 = create_pending_action(config=config, action_type="gmail.label", provider="google_api",
@@ -176,7 +176,7 @@ class TestApprove:
                                       "--approver", "MH",
                                       "--reason", "Checked recipient and content"])
         assert rc == 0
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         updated = get_pending_action(config, action["id"])
         assert updated["state"] == "approved"
         assert updated["approver"] == "MH"
@@ -209,7 +209,7 @@ class TestDismiss:
                                       "--action-id", action["id"],
                                       "--reason", "Not needed"])
         assert rc == 0
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         updated = get_pending_action(config, action["id"])
         assert updated["state"] == "dismissed"
         assert "dismiss_reason" in updated
@@ -222,7 +222,7 @@ class TestDismiss:
         with redirect_stdout(buf):
             review_queue._main(["--config", str(config_path), "dismiss",
                                  "--action-id", action["id"], "--reason", "Not needed"])
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         # Action should still exist (not deleted)
         updated = get_pending_action(config, action["id"])
         assert updated is not None
@@ -254,7 +254,7 @@ class TestExecute:
         """Execute an approved action — mock the workspace client."""
         config, project, config_path = temp_project
         action = _seed_action(config, "gmail.send", "x@y.com")
-        from pending_actions import approve_pending_action
+        from state_db import approve_pending_action
         approve_pending_action(config, action["id"], approver="MH", reason="ok")
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
@@ -335,7 +335,7 @@ class TestBulkApprove:
                                       "--all", "--risk", "low", "--type", "gmail.label",
                                       "--reason", "bulk approved", "--confirm-low-risk-bulk"])
         assert rc == 0
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         assert get_pending_action(config, a1["id"])["state"] == "approved"
         assert get_pending_action(config, a2["id"])["state"] == "approved"
 
@@ -398,7 +398,7 @@ class TestAudit:
     def test_audit_shows_events(self, temp_project):
         config, project, config_path = temp_project
         action = _seed_action(config, "gmail.send", "x@y.com")
-        from pending_actions import approve_pending_action
+        from state_db import approve_pending_action
         approve_pending_action(config, action["id"], approver="MH", reason="ok")
         import review_queue
         buf = io.StringIO()

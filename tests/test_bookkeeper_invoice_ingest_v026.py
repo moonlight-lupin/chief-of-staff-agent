@@ -81,7 +81,7 @@ def temp_project(tmp_path):
 def _seed_invoice_event(config, subject="Invoice INV-123 from Acme Corp SGD 1200.00 due 2026-07-24",
                         from_email="billing@acme.com"):
     """Helper to seed an invoice-like event."""
-    from event_store import ingest_event
+    from state_db import ingest_event
     return ingest_event(config, source="gmail", source_id=f"msg-{datetime.now().strftime('%H%M%S%f')}",
                         event_type="email_received",
                         payload={"from": from_email, "subject": subject,
@@ -207,7 +207,7 @@ class TestInvoiceIngest:
             assert invoices_before == invoices_after
 
             # A pending action should exist
-            from pending_actions import list_pending_actions
+            from state_db import list_pending_actions
             pending = list_pending_actions(config)
             assert any(a.get("type") == "bookkeeper.invoice.record" for a in pending)
         else:
@@ -238,7 +238,7 @@ class TestInvoiceIngest:
     def test_no_bank_details_stored(self, temp_project):
         """No bank account details should be stored in candidates."""
         config, project, config_path = temp_project
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, source="gmail", source_id="msg-bank",
                       event_type="email_received",
                       payload={"from": "bank@x.com",
@@ -284,7 +284,7 @@ class TestBookkeeperActions:
     def test_unapproved_cannot_execute(self, temp_project):
         """Unapproved invoice-record action cannot execute."""
         config, project, config_path = temp_project
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         action = create_pending_action(
             config=config, action_type="bookkeeper.invoice.record",
             provider="bookkeeper", target="bic_001",
@@ -339,7 +339,7 @@ class TestBookkeeperActions:
         candidates_path.write_text(json.dumps({"candidates": {"bic_test001": candidate}, "_version": 1}))
 
         # Create and approve pending action
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="bookkeeper.invoice.record",
             provider="bookkeeper", target="bic_test001",
@@ -379,7 +379,7 @@ class TestBookkeeperActions:
         }
         candidates_path.write_text(json.dumps({"candidates": {"bic_test002": candidate}, "_version": 1}))
 
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="bookkeeper.invoice.record",
             provider="bookkeeper", target="bic_test002",
@@ -415,7 +415,7 @@ class TestBookkeeperActions:
         }
         candidates_path.write_text(json.dumps({"candidates": {"bic_route001": candidate}, "_version": 1}))
 
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="bookkeeper.invoice.record",
             provider="bookkeeper", target="bic_route001",
@@ -463,7 +463,7 @@ class TestBookkeeperActions:
         }
         candidates_path.write_text(json.dumps({"candidates": {"bic_no_ws": candidate}, "_version": 1}))
 
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="bookkeeper.invoice.record",
             provider="bookkeeper", target="bic_no_ws",

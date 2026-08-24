@@ -28,7 +28,7 @@ def adapt_gmail_pubsub(payload: dict[str, Any]) -> dict[str, Any]:
     Validates the Pub/Sub envelope structure and decoded data.
     Raises ValueError on malformed payloads (caller should return 400/500).
     """
-    from webhook_security import validate_gmail_pubsub_payload
+    from webhook_validation import validate_gmail_pubsub_payload
 
     is_valid, reason, gmail_data = validate_gmail_pubsub_payload(payload)
     if not is_valid:
@@ -89,7 +89,7 @@ def adapt_calendar_headers(headers: dict[str, str]) -> dict[str, Any]:
 
     Validates required headers. Raises ValueError if missing.
     """
-    from webhook_security import validate_calendar_headers
+    from webhook_validation import validate_calendar_headers
     is_valid, reason = validate_calendar_headers(headers)
     if not is_valid:
         raise ValueError(f"Invalid Calendar push headers: {reason}")
@@ -144,7 +144,7 @@ def adapt_drive_headers(headers: dict[str, str]) -> dict[str, Any]:
 
     Validates required headers. Raises ValueError if missing.
     """
-    from webhook_security import validate_drive_headers
+    from webhook_validation import validate_drive_headers
     is_valid, reason = validate_drive_headers(headers)
     if not is_valid:
         raise ValueError(f"Invalid Drive push headers: {reason}")

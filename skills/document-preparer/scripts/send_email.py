@@ -60,7 +60,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         print_result(unsupported, args.summary, "Mail send")
         return 1
 
-    from pending_actions import create_pending_action
+    from state_db import create_pending_action
     action = create_pending_action(
         config=cfg,
         action_type="mail.send",
@@ -83,7 +83,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import list_pending_actions
+    from state_db import list_pending_actions
     actions = list_pending_actions(cfg, state=args.state)
     if args.summary:
         if not actions:
@@ -112,7 +112,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import preview_pending_action
+    from state_db import preview_pending_action
     preview = preview_pending_action(cfg, args.action_id)
     if not preview:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -147,7 +147,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import approve_pending_action, check_expired
+    from state_db import approve_pending_action, check_expired
     # Check expiry first
     if check_expired(cfg, args.action_id):
         print(f"Action {args.action_id} has expired. Re-prepare with 'send_email.py prepare'.", file=sys.stderr)
@@ -166,7 +166,7 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import cancel_pending_action
+    from state_db import cancel_pending_action
     action = cancel_pending_action(cfg, args.action_id, reason=args.reason)
     if not action:
         print(f"Action not found or already terminal: {args.action_id}", file=sys.stderr)
@@ -191,7 +191,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     if cfg is None:
         return 1
 
-    from pending_actions import get_pending_action, mark_executing, mark_executed, mark_failed
+    from state_db import get_pending_action, mark_executing, mark_executed, mark_failed
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -251,7 +251,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from pending_actions import get_pending_summary
+    from state_db import get_pending_summary
     summary = get_pending_summary(cfg)
     if args.summary:
         print(f"Pending actions: {summary['total']} total")

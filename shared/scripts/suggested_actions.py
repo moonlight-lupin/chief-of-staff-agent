@@ -203,7 +203,7 @@ def _save(config: Any, data: dict[str, Any], expected_version: int | None = None
     if expected_version is not None:
         current = _load(config)
         if current.get("_version", 0) != expected_version:
-            from pending_actions import ConcurrencyError
+            from state_db import ConcurrencyError
             raise ConcurrencyError("Suggestions store changed since load")
     new_version = (data.get("_version", 0) or 0) + 1
     data["_version"] = new_version
@@ -261,7 +261,7 @@ def generate_for_events(config: Any, event_ids: list[str] | None = None) -> dict
     If event_ids is None, generates for all classified/surfaced events.
     Returns summary: {generated, skipped, events_processed}
     """
-    from event_store import list_events, get_event
+    from state_db import list_events, get_event
 
     if event_ids is None:
         events = list_events(config, state="classified") + list_events(config, state="surfaced")
@@ -526,7 +526,7 @@ def deliver_email_digest(
 
     Returns the pending action dict, or error dict.
     """
-    from pending_actions import create_pending_action
+    from state_db import create_pending_action
     from workspace_client import get_workspace_client
 
     client = get_workspace_client(config)
@@ -674,7 +674,7 @@ def act_on_suggestion(
 
     # Write/destructive actions — create pending action only
     if action_type in WRITE_ACTIONS:
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         from workspace_client import get_workspace_client
         from workspace_capabilities import require_capability
         client = get_workspace_client(config)

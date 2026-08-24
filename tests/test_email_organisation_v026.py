@@ -494,7 +494,7 @@ class TestNoGmailMutations:
     def test_no_pending_actions_created(self, temp_project, mock_client):
         from email_label_policy import parse_labels, generate_policy
         config, project = temp_project
-        with patch("pending_actions.create_pending_action") as mock_create:
+        with patch("state_db.create_pending_action") as mock_create:
             parsed = parse_labels(SAMPLE_LABELS)
             policy = generate_policy(parsed, provider="google_api")
             mock_create.assert_not_called()

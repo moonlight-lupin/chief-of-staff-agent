@@ -79,14 +79,14 @@ class TestEventStateFix:
     """Verify the event state machine fix."""
 
     def test_ingest_returns_classified_state(self, temp_project):
-        from event_store import ingest_event
+        from state_db import ingest_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {})
         assert event["state"] == "classified"
 
     def test_mark_surfaced_works_after_ingest(self, temp_project):
         """mark_surfaced should work immediately after ingest (no 'received' gap)."""
-        from event_store import ingest_event, mark_surfaced, get_event
+        from state_db import ingest_event, mark_surfaced, get_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {})
         surfaced = mark_surfaced(config, event["id"])
@@ -96,7 +96,7 @@ class TestEventStateFix:
 
     def test_mark_processed_from_classified(self, temp_project):
         """mark_processed should work from 'classified' state."""
-        from event_store import ingest_event, mark_processed
+        from state_db import ingest_event, mark_processed
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {})
         result = mark_processed(config, event["id"], processed_by="MH")
@@ -105,7 +105,7 @@ class TestEventStateFix:
 
     def test_full_lifecycle_classified_to_processed(self, temp_project):
         """Full lifecycle: ingest → classified → surfaced → processed."""
-        from event_store import ingest_event, mark_surfaced, mark_processed, get_event
+        from state_db import ingest_event, mark_surfaced, mark_processed, get_event
         config, project = temp_project
         event = ingest_event(config, "gmail", "m1", "email_received", {})
         assert event["state"] == "classified"
@@ -135,7 +135,7 @@ class TestPollGmail:
     def test_poll_gmail_dedupe_on_second_poll(self, temp_project, mock_client):
         """Polling twice should not duplicate events."""
         from poll_events import poll_gmail
-        from event_store import list_events
+        from state_db import list_events
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             first = poll_gmail(config, max_results=10)
@@ -149,7 +149,7 @@ class TestPollGmail:
     def test_poll_gmail_classifies_urgent(self, temp_project, mock_client):
         """Email with IMPORTANT label should be classified as email_urgent."""
         from poll_events import poll_gmail
-        from event_store import list_events
+        from state_db import list_events
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             poll_gmail(config, max_results=10)
@@ -183,7 +183,7 @@ class TestPollCalendar:
 
     def test_poll_calendar_dedupe(self, temp_project, mock_client):
         from poll_events import poll_calendar
-        from event_store import list_events
+        from state_db import list_events
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             poll_calendar(config, days=1)
@@ -193,7 +193,7 @@ class TestPollCalendar:
 
     def test_poll_calendar_classifies_cancelled(self, temp_project, mock_client):
         from poll_events import poll_calendar
-        from event_store import list_events
+        from state_db import list_events
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             poll_calendar(config, days=1)
@@ -227,7 +227,7 @@ class TestPollDrive:
 
     def test_poll_drive_dedupe(self, temp_project, mock_client):
         from poll_events import poll_drive
-        from event_store import list_events
+        from state_db import list_events
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             poll_drive(config, max_results=10)
@@ -259,13 +259,13 @@ class TestPollAll:
         assert gmail_res["ingested"] == 2
         assert cal_res["ingested"] == 2
         assert drive_res["ingested"] == 2
-        from event_store import list_events
+        from state_db import list_events
         all_events = list_events(config)
         assert len(all_events) == 6
 
     def test_poll_all_dedupe_on_second_run(self, temp_project, mock_client):
         from poll_events import poll_gmail, poll_calendar, poll_drive
-        from event_store import list_events
+        from state_db import list_events
         config, project = temp_project
         with patch("poll_events.get_client", return_value=mock_client):
             # First poll

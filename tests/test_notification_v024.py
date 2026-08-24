@@ -50,7 +50,7 @@ def temp_project(tmp_path):
 def temp_with_suggestions(temp_project):
     """Project with events and generated suggestions."""
     config, project = temp_project
-    from event_store import ingest_event
+    from state_db import ingest_event
     from suggested_actions import generate_for_events
     ingest_event(config, "gmail", "m1", "email_received", {"from": "client@x.com"})
     ingest_event(config, "gmail", "m2", "email_urgent", {"from": "boss@x.com"})
@@ -295,7 +295,7 @@ class TestNotificationNoExecution:
         with patch("suggest_actions.load_config", return_value=config), \
              patch("workspace_client.get_workspace_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None), \
-             patch("pending_actions.approve_pending_action") as mock_approve:
+             patch("state_db.approve_pending_action") as mock_approve:
             import suggest_actions
             suggest_actions.main(["notify", "--channel", "email", "--to", "me@test.com"])
             mock_approve.assert_not_called()  # NEVER auto-approves
@@ -307,7 +307,7 @@ class TestNotificationNoExecution:
         with patch("suggest_actions.load_config", return_value=config), \
              patch("workspace_client.get_workspace_client", return_value=mock_client), \
              patch("workspace_capabilities.require_capability", return_value=None), \
-             patch("pending_actions.mark_executing") as mock_exec:
+             patch("state_db.mark_executing") as mock_exec:
             import suggest_actions
             suggest_actions.main(["notify", "--channel", "email", "--to", "me@test.com"])
             mock_exec.assert_not_called()  # NEVER auto-executes

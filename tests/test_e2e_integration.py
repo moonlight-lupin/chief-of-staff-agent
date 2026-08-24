@@ -66,7 +66,7 @@ class TestE2EPrepareApproveExecute:
 
     def test_full_lifecycle(self, temp_project, google_mock, auto_approve):
         """Complete prepare→approve→execute cycle with audit trail."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_executed, get_pending_action,
         )
@@ -99,7 +99,7 @@ class TestE2EPrepareApproveExecute:
 
     def test_lapsed_approval_rejected(self, temp_project, google_mock, auto_approve):
         """An action with a lapsed approval must not be executable."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, get_pending_action,
         )
@@ -111,7 +111,7 @@ class TestE2EPrepareApproveExecute:
         approve_pending_action(config, action["id"])
 
         # Manually age the approval past the expiry
-        from pending_actions import _load, _save
+        from state_db import _load, _save
         data = _load(config)
         data["actions"][action["id"]]["approved_at"] = (
             datetime.now(timezone.utc) - timedelta(hours=50)
@@ -128,7 +128,7 @@ class TestE2EPrepareApproveExecute:
 
     def test_concurrent_execute_one_wins(self, temp_project, google_mock, auto_approve):
         """Two concurrent mark_executing calls — exactly one must win."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing,
         )
@@ -150,7 +150,7 @@ class TestE2EPrepareApproveExecute:
 
     def test_audit_trail_complete(self, temp_project, google_mock, auto_approve):
         """All state transitions must produce audit records."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_executed,
         )
@@ -171,7 +171,7 @@ class TestE2EPrepareApproveExecute:
 
     def test_cancelled_action_not_executable(self, temp_project, google_mock, auto_approve):
         """A cancelled action must not be executable."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, cancel_pending_action,
             mark_executing,
         )

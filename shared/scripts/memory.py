@@ -32,12 +32,12 @@ except Exception:  # pragma: no cover - graceful standalone fallback
     config_loader = None  # type: ignore[assignment]
 
 try:
-    import event_store
+    import state_db as event_store
 except Exception:  # pragma: no cover
     event_store = None  # type: ignore[assignment]
 
 try:
-    import pending_actions
+    import state_db as pending_actions
 except Exception:  # pragma: no cover
     pending_actions = None  # type: ignore[assignment]
 

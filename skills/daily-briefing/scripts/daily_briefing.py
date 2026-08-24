@@ -1080,7 +1080,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
             return 0
         # Create a PENDING ACTION only — do NOT auto-send
         try:
-            from pending_actions import create_pending_action
+            from state_db import create_pending_action
             config = load_config(args.config)
             if not config:
                 print("Error: cannot load config", file=sys.stderr)

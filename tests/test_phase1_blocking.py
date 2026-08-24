@@ -186,7 +186,7 @@ class TestB2PendingActionsConcurrency:
         This is the critical race: two processes both see 'approved', both
         transition to 'executing', and both send the same email.
         """
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, get_pending_action,
         )
@@ -216,7 +216,7 @@ class TestB2PendingActionsConcurrency:
         Current code: both load the same version, both append, both save with
         version+1 — last writer wins, first action is lost.
         """
-        from pending_actions import create_pending_action, list_pending_actions
+        from state_db import create_pending_action, list_pending_actions
         config, project = temp_project
 
         # Create two actions rapidly (simulating concurrent processes)
@@ -235,25 +235,21 @@ class TestB2PendingActionsConcurrency:
         assert len(all_actions) == 2
 
     def test_save_uses_unique_temp_file(self, temp_project):
-        """The temp file used during atomic write must be unique, not a fixed name.
-
-        Current code uses path.with_suffix('.tmp') — a fixed name shared by
-        all writers. Concurrent writers can corrupt each other's temp files.
-        """
-        from pending_actions import _save, _load, _pending_path
+        """SQLite persist of two actions in one save must not lose either."""
+        from state_db import _save, _load
         config, project = temp_project
 
-        # We can't directly test temp file naming without inspecting the code,
-        # but we can verify that concurrent saves don't corrupt the file
         data = _load(config)
-        data["actions"]["test1"] = {"id": "test1", "state": "requested"}
-        data["actions"]["test2"] = {"id": "test2", "state": "requested"}
+        data["actions"]["test1"] = {"id": "test1", "state": "requested", "type": "mail.send",
+                                    "provider": "google", "target": "a@x.com", "payload": {},
+                                    "created_at": "2026-01-01T00:00:00+00:00"}
+        data["actions"]["test2"] = {"id": "test2", "state": "requested", "type": "mail.send",
+                                    "provider": "google", "target": "b@x.com", "payload": {},
+                                    "created_at": "2026-01-01T00:00:00+00:00"}
 
         _save(config, data)
 
-        # Verify file is valid JSON (not corrupted)
-        path = _pending_path(config)
-        loaded = json.loads(path.read_text())
+        loaded = _load(config)
         assert "test1" in loaded["actions"]
         assert "test2" in loaded["actions"]
 
@@ -267,7 +263,7 @@ class TestB2EventStoreConcurrency:
 
     def test_concurrent_ingest_no_lost_events(self, temp_project):
         """Two concurrent event ingestions must not lose either event."""
-        from event_store import ingest_event, list_events
+        from state_db import ingest_event, list_events
         config, project = temp_project
 
         event1 = ingest_event(
@@ -292,7 +288,7 @@ class TestB2ReplayCacheConcurrency:
 
     def test_concurrent_reserve_delivery_one_wins(self, temp_project):
         """Two concurrent reserve_delivery calls for the same ID — exactly one must win."""
-        from webhook_security import reserve_delivery
+        from state_db import reserve_delivery
         config, project = temp_project
 
         ok1, _ = reserve_delivery(config, "delivery-123")
@@ -314,7 +310,7 @@ def _worker_mark_executing(config, action_id, results, idx):
     """Worker process for multiprocessing concurrency test."""
     try:
         sys.path.insert(0, str(SHARED_SCRIPTS))
-        from pending_actions import mark_executing
+        from state_db import mark_executing
         result = mark_executing(config, action_id)
         results[idx] = (result is not None)
     except Exception as exc:
@@ -330,7 +326,7 @@ class TestB2MultiprocessingRace:
 
     def test_two_processes_mark_executing_one_wins(self, temp_project):
         """Two processes mark_executing the same action — exactly one must win."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action, get_pending_action,
         )
         config, project = temp_project

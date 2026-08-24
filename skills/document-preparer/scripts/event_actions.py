@@ -41,7 +41,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import list_events
+    from state_db import list_events
     events = list_events(cfg, state=args.state, source=args.source,
                          category=args.category, limit=args.limit)
     if args.summary:
@@ -66,7 +66,7 @@ def cmd_get(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import get_event
+    from state_db import get_event
     event = get_event(cfg, args.event_id)
     if not event:
         print(f"Event not found: {args.event_id}", file=sys.stderr)
@@ -79,7 +79,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import get_event_summary
+    from state_db import get_event_summary
     summary = get_event_summary(cfg)
     if args.summary:
         print(f"Events: {summary['total']} total, {summary['pending_count']} pending")
@@ -98,7 +98,7 @@ def cmd_mark_processed(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import mark_processed
+    from state_db import mark_processed
     event = mark_processed(cfg, args.event_id, processed_by=args.by, notes=args.notes)
     if not event:
         print(f"Event not found or already processed: {args.event_id}", file=sys.stderr)
@@ -111,7 +111,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import cleanup_old_events
+    from state_db import cleanup_old_events
     removed = cleanup_old_events(cfg, days=args.days)
     if args.summary:
         print(f"Cleaned up {removed} processed event(s) older than {args.days} days")
@@ -125,7 +125,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from event_store import ingest_event
+    from state_db import ingest_event
     try:
         payload = json.loads(args.payload_json) if args.payload_json else {}
     except json.JSONDecodeError as exc:

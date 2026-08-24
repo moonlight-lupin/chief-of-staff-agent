@@ -56,7 +56,7 @@ class TestAuditBlockedPath:
     def test_blocked_action_is_audited(self, temp_project):
         """When confirm_action blocks, the audit log must record it."""
         from workspace_guardrails import guarded, ActionResult
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
 
         config, project = temp_project
 
@@ -134,7 +134,7 @@ class TestRecipientDomainClassification:
 
     def test_homograph_domain_not_internal(self):
         """acme.com.attacker.io must NOT be classified as internal for company acme.com."""
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config = {"company": {"website": "acme.com"}}
         result = classify_recipient_risk("user@acme.com.attacker.io", config)
         assert result["level"] != "internal", (
@@ -143,7 +143,7 @@ class TestRecipientDomainClassification:
 
     def test_suffix_domain_not_internal(self):
         """acme.co must NOT be classified as internal for company acme.com."""
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config = {"company": {"website": "acme.com"}}
         result = classify_recipient_risk("user@acme.co", config)
         assert result["level"] != "internal", (
@@ -152,14 +152,14 @@ class TestRecipientDomainClassification:
 
     def test_exact_domain_is_internal(self):
         """acme.com must be classified as internal for company acme.com."""
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config = {"company": {"website": "acme.com"}}
         result = classify_recipient_risk("user@acme.com", config)
         assert result["level"] == "internal"
 
     def test_subdomain_is_internal(self):
         """mail.acme.com must be classified as internal for company acme.com."""
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config = {"company": {"website": "acme.com"}}
         result = classify_recipient_risk("user@mail.acme.com", config)
         assert result["level"] == "internal", (
@@ -168,7 +168,7 @@ class TestRecipientDomainClassification:
 
     def test_url_with_protocol_domain_is_internal(self):
         """Company website as URL (https://acme.com) must still match domain."""
-        from pending_actions import classify_recipient_risk
+        from state_db import classify_recipient_risk
         config = {"company": {"website": "https://acme.com"}}
         result = classify_recipient_risk("user@acme.com", config)
         assert result["level"] == "internal"
@@ -183,7 +183,7 @@ class TestRetryCapAndNeedsVerification:
 
     def test_retry_cap_transitions_to_failed(self, temp_project):
         """After MAX_RETRIES (3), mark_failed must transition to 'failed', not 'approved'."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_failed, get_pending_action,
         )
@@ -208,7 +208,7 @@ class TestRetryCapAndNeedsVerification:
 
     def test_retry_count_increments(self, temp_project):
         """mark_failed must increment retry_count."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_failed, get_pending_action,
         )
@@ -231,7 +231,7 @@ class TestRetryCapAndNeedsVerification:
 
     def test_failed_action_cannot_be_executed(self, temp_project):
         """A 'failed' action must not be executable (terminal state)."""
-        from pending_actions import (
+        from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, mark_failed, mark_executing as me2,
         )

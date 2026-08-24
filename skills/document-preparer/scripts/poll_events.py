@@ -44,7 +44,7 @@ def poll_gmail(config: Any, max_results: int = 10) -> dict[str, Any]:
 
     Returns summary: {polled, ingested, duplicates, errors}
     """
-    from event_store import ingest_event
+    from state_db import ingest_event
 
     client = get_client(config)
     result = {"polled": 0, "ingested": 0, "duplicates": 0, "errors": 0, "details": []}
@@ -100,7 +100,7 @@ def poll_calendar(config: Any, days: int = 1) -> dict[str, Any]:
 
     Returns summary: {polled, ingested, duplicates, errors}
     """
-    from event_store import ingest_event
+    from state_db import ingest_event
     from datetime import date, timedelta
 
     client = get_client(config)
@@ -163,7 +163,7 @@ def poll_drive(config: Any, max_results: int = 10) -> dict[str, Any]:
 
     Returns summary: {polled, ingested, duplicates, errors}
     """
-    from event_store import ingest_event
+    from state_db import ingest_event
 
     client = get_client(config)
     result = {"polled": 0, "ingested": 0, "duplicates": 0, "errors": 0, "details": []}

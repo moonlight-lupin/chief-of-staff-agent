@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover - only used when shared scripts are absent
     load_config = None  # type: ignore[assignment]
 
 try:
-    from event_store import list_events
+    from state_db import list_events
 except Exception:  # pragma: no cover - only used when event store is absent.
     list_events = None  # type: ignore[assignment]
 

@@ -84,7 +84,7 @@ class TestClassifySuggestApproveExecute:
         assert result["confidence"] > 0
 
         # 2. Create a pending action from the classification
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         action = create_pending_action(
             config=config,
             action_type="gmail.label",
@@ -97,7 +97,7 @@ class TestClassifySuggestApproveExecute:
         action_id = action["id"]
 
         # 3. Approve the action
-        from pending_actions import approve_pending_action, get_pending_action
+        from state_db import approve_pending_action, get_pending_action
         approved = approve_pending_action(config, action_id, approver="MH", reason="auto-test")
         assert approved["state"] == "approved"
 
@@ -125,7 +125,7 @@ class TestClassifySuggestApproveExecute:
     def test_full_chain_gmail_send(self, temp_project):
         config, project = temp_project
 
-        from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, get_pending_action
         action = create_pending_action(
             config=config,
             action_type="gmail.send",
@@ -197,7 +197,7 @@ class TestWebhookToSuggestion:
         assert data["event_id"] is not None
 
         # Verify event is in event_store
-        from event_store import list_events
+        from state_db import list_events
         events = list_events(config)
         assert len(events) >= 1
         assert events[0]["event_type"] == "email_received"
@@ -211,7 +211,7 @@ class TestFailedExecutionRetry:
     def test_retry_after_failure(self, temp_project):
         config, project = temp_project
 
-        from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, get_pending_action
         action = create_pending_action(
             config=config,
             action_type="gmail.label",
@@ -258,7 +258,7 @@ class TestFailedExecutionRetry:
     def test_retry_after_exception(self, temp_project):
         config, project = temp_project
 
-        from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, get_pending_action
         action = create_pending_action(
             config=config,
             action_type="gmail.send",
@@ -332,7 +332,7 @@ class TestOrphanedExecutingCleanup:
         config, project = temp_project
 
         # Create an action and manually set it to 'executing'
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config,
             action_type="gmail.label",
@@ -345,15 +345,14 @@ class TestOrphanedExecutingCleanup:
 
         # Manually set to executing with an old timestamp (simulate crash during execution)
         from datetime import datetime, timezone, timedelta
+        from state_db import _load, _save
         old_ts = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
-        pa_path = project / ".pending_actions.json"
-        pa_data = json.loads(pa_path.read_text())
-        actions = pa_data.get("actions", {})
-        for aid, a in actions.items():
-            if aid == action["id"]:
-                a["state"] = "executing"
-                a["executing_at"] = old_ts
-        pa_path.write_text(json.dumps(pa_data, indent=2))
+        pa_data = _load(config)
+        stored = pa_data.get("actions", {}).get(action["id"])
+        assert stored is not None
+        stored["state"] = "executing"
+        stored["executing_at"] = old_ts
+        _save(config, pa_data)
 
         # Run doctor --fix (only the orphaned check will find it)
         import doctor
@@ -365,7 +364,7 @@ class TestOrphanedExecutingCleanup:
         assert "Reset" in result.detail
 
         # Verify it was actually reset
-        from pending_actions import get_pending_action
+        from state_db import get_pending_action
         final = get_pending_action(config, action["id"])
         assert final["state"] == "approved"
         assert "orphaned" in final.get("last_error", "").lower()
@@ -374,7 +373,7 @@ class TestOrphanedExecutingCleanup:
         """Executing actions younger than the threshold should NOT be reset."""
         config, project = temp_project
 
-        from pending_actions import create_pending_action, approve_pending_action, get_pending_action
+        from state_db import create_pending_action, approve_pending_action, get_pending_action
         action = create_pending_action(
             config=config,
             action_type="gmail.label",
@@ -387,15 +386,14 @@ class TestOrphanedExecutingCleanup:
 
         # Set to executing with a RECENT timestamp (1 minute ago — should be fresh)
         from datetime import datetime, timezone, timedelta
+        from state_db import _load, _save
         recent_ts = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-        pa_path = project / ".pending_actions.json"
-        pa_data = json.loads(pa_path.read_text())
-        actions = pa_data.get("actions", {})
-        for aid, a in actions.items():
-            if aid == action["id"]:
-                a["state"] = "executing"
-                a["executing_at"] = recent_ts
-        pa_path.write_text(json.dumps(pa_data, indent=2))
+        pa_data = _load(config)
+        stored = pa_data.get("actions", {}).get(action["id"])
+        assert stored is not None
+        stored["state"] = "executing"
+        stored["executing_at"] = recent_ts
+        _save(config, pa_data)
 
         # Run doctor --fix
         import doctor

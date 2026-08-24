@@ -137,7 +137,7 @@ class TestGmailPubSubAdapter:
 
     def test_handles_malformed_data(self):
         from webhook_adapters import adapt_gmail_pubsub
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         payload = {"message": {"data": "!!!invalid!!!", "messageId": "m1"}}
         # Validation should reject, not silently produce empty fields
         ok, reason, data = validate_gmail_pubsub_payload(payload)
@@ -145,7 +145,7 @@ class TestGmailPubSubAdapter:
         assert "decode" in reason.lower()
 
     def test_empty_message(self):
-        from webhook_security import validate_gmail_pubsub_payload
+        from webhook_validation import validate_gmail_pubsub_payload
         payload = {"message": {}, "subscription": "x"}
         # Missing data field — should be rejected
         ok, reason, data = validate_gmail_pubsub_payload(payload)
@@ -248,13 +248,13 @@ class TestEndpointRouting:
 
 class TestReplayProtection:
     def test_first_delivery_reserved(self, with_secret):
-        from webhook_security import reserve_delivery, complete_delivery
+        from state_db import reserve_delivery, complete_delivery
         config, project = with_secret
         ok, reason = reserve_delivery(config, "delivery-1")
         assert ok and reason == "OK"
 
     def test_replay_after_complete(self, with_secret):
-        from webhook_security import reserve_delivery, complete_delivery
+        from state_db import reserve_delivery, complete_delivery
         config, project = with_secret
         reserve_delivery(config, "delivery-2")
         complete_delivery(config, "delivery-2")
@@ -263,7 +263,7 @@ class TestReplayProtection:
         assert "completed" in reason
 
     def test_concurrent_processing_rejected(self, with_secret):
-        from webhook_security import reserve_delivery
+        from state_db import reserve_delivery
         config, project = with_secret
         reserve_delivery(config, "delivery-3")  # processing
         ok, reason = reserve_delivery(config, "delivery-3")
@@ -271,7 +271,7 @@ class TestReplayProtection:
         assert "processing" in reason
 
     def test_release_allows_retry(self, with_secret):
-        from webhook_security import reserve_delivery, release_delivery
+        from state_db import reserve_delivery, release_delivery
         config, project = with_secret
         reserve_delivery(config, "delivery-4")
         release_delivery(config, "delivery-4")  # simulate failure
@@ -281,7 +281,7 @@ class TestReplayProtection:
     def test_different_empty_body_calendars_different_ids(self, with_secret):
         """Two empty-body Calendar notifications with different message numbers
         must NOT be treated as replays of each other."""
-        from webhook_security import reserve_delivery
+        from state_db import reserve_delivery
         config, project = with_secret
         ok1, _ = reserve_delivery(config, "ch-1:msg-1")
         ok2, _ = reserve_delivery(config, "ch-1:msg-2")
@@ -292,19 +292,19 @@ class TestReplayProtection:
 
 class TestChannelToken:
     def test_valid_token(self, with_token):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert verify_channel_token("my-channel-token")
 
     def test_invalid_token(self, with_token):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert not verify_channel_token("wrong-token")
 
     def test_no_token_when_required(self, with_token):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         assert not verify_channel_token(None)
 
     def test_disabled_when_not_configured(self, with_secret):
-        from webhook_security import verify_channel_token
+        from webhook_validation import verify_channel_token
         # Fail-closed: no token configured = rejected
         assert verify_channel_token("anything") is False
         assert verify_channel_token(None) is False
@@ -321,7 +321,7 @@ class TestReceiverIntegration:
     def test_gmail_pubsub_ingested(self, with_secret):
         config, project = with_secret
         from webhook_receiver import WebhookStats
-        from webhook_security import sign_payload
+        from webhook_validation import sign_payload
         stats = WebhookStats()
         handler_class = self._make_handler(config, stats)
 
@@ -420,7 +420,8 @@ class TestReceiverIntegration:
     def test_ingestion_failure_releases_delivery(self, with_secret):
         config, project = with_secret
         from webhook_receiver import WebhookStats
-        from webhook_security import sign_payload, reserve_delivery, _load_replay_cache
+        from webhook_validation import sign_payload
+        from state_db import reserve_delivery, _load_replay_cache
         stats = WebhookStats()
         handler_class = self._make_handler(config, stats)
 
@@ -433,7 +434,7 @@ class TestReceiverIntegration:
         handler.rfile = io.BytesIO(body)
         handler.wfile = io.BytesIO()
 
-        with patch("event_store.ingest_event", side_effect=Exception("DB error")), \
+        with patch("state_db.ingest_event", side_effect=Exception("DB error")), \
              patch.object(handler, "_respond") as mock_respond:
             handler.do_POST()
 
@@ -450,7 +451,7 @@ class TestReceiverIntegration:
 class TestGenericApproveExecute:
     def test_approve_pending_action(self, with_secret):
         config, project = with_secret
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         action = create_pending_action(
             config=config, action_type="gmail.label", provider="google_api",
             target="msg-1", payload={"message_id": "msg-1", "label_id": "Label_1"},
@@ -469,7 +470,7 @@ class TestGenericApproveExecute:
 
     def test_execute_approved_action(self, with_secret):
         config, project = with_secret
-        from pending_actions import create_pending_action, approve_pending_action
+        from state_db import create_pending_action, approve_pending_action
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
         mock_client.mail_tag.return_value = {"success": True, "action": "gmail.label"}
@@ -495,7 +496,7 @@ class TestGenericApproveExecute:
 
     def test_execute_not_approved_fails(self, with_secret):
         config, project = with_secret
-        from pending_actions import create_pending_action
+        from state_db import create_pending_action
         action = create_pending_action(
             config=config, action_type="gmail.label", provider="google_api",
             target="msg-3", payload={}, summary="Test",
@@ -511,7 +512,7 @@ class TestGenericApproveExecute:
 class TestCLIDisplayFix:
     def test_inspect_shows_event_type(self, with_secret):
         config, project = with_secret
-        from event_store import ingest_event
+        from state_db import ingest_event
         ingest_event(config, "webhook.gmail", "display-test-1", "email_received", {"x": 1})
         import webhook_events
         with patch("webhook_events.load_config", return_value=config):
@@ -525,7 +526,7 @@ class TestCLIDisplayFix:
 
     def test_replay_shows_event_type(self, with_secret):
         config, project = with_secret
-        from event_store import ingest_event
+        from state_db import ingest_event
         event = ingest_event(config, "webhook.gmail", "replay-type-1", "email_received", {"x": 1})
         import webhook_events
         with patch("webhook_events.load_config", return_value=config):
@@ -543,15 +544,15 @@ class TestSafety:
         config, project = with_secret
         mock_client = MagicMock()
         with patch("workspace_client.get_workspace_client", return_value=mock_client):
-            from event_store import ingest_event
+            from state_db import ingest_event
             ingest_event(config, "webhook.gmail", "safety-test-1", "email_received", {"x": 1})
             mock_client.mail_send.assert_not_called()
             mock_client.mail_tag.assert_not_called()
 
     def test_no_pending_actions_during_webhook(self, with_secret):
         config, project = with_secret
-        with patch("pending_actions.create_pending_action") as mock_create:
-            from event_store import ingest_event
+        with patch("state_db.create_pending_action") as mock_create:
+            from state_db import ingest_event
             ingest_event(config, "webhook.gmail", "safety-test-2", "email_received", {"x": 1})
             mock_create.assert_not_called()
 
