@@ -163,7 +163,9 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
             delivery_id = event.get("delivery_id", event.get("source_id", ""))
 
             # Reserve delivery ID (replay protection)
-            is_valid, replay_reason = reserve_delivery(config, delivery_id)
+            reserved = reserve_delivery(config, delivery_id)
+            is_valid, replay_reason = reserved
+            lease_token = reserved.lease_token
             if not is_valid:
                 stats.rejected_replay += 1
                 self._respond(409, {"error": replay_reason})
@@ -181,14 +183,14 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
                 )
             except Exception as exc:
                 # Release delivery on failure — allows retry
-                release_delivery(config, delivery_id)
+                release_delivery(config, delivery_id, lease_token=lease_token)
                 stats.errors += 1
                 self._respond(500, {"error": f"Ingestion failure: {exc}"})
                 return
 
             if result is None:
                 # Duplicate in event_store (already ingested before)
-                complete_delivery(config, delivery_id)
+                complete_delivery(config, delivery_id, lease_token=lease_token)
                 stats.duplicated += 1
                 self._respond(200, {"status": "duplicate", "event_id": None})
                 return
@@ -206,7 +208,7 @@ def create_handler(config: Any, stats: WebhookStats, generate_suggestions: bool 
                     pass  # Suggestion generation failure is non-fatal
 
             # Mark delivery as completed
-            complete_delivery(config, delivery_id)
+            complete_delivery(config, delivery_id, lease_token=lease_token)
 
             self._respond(200, {
                 "status": "ingested",

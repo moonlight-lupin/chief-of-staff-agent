@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     cancelled_at TEXT,
     dismissed_at TEXT,
     expired_at TEXT,
+    failed_at TEXT,
     cancel_reason TEXT,
     dismiss_reason TEXT,
     retry_count INTEGER DEFAULT 0,
@@ -165,7 +166,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_ev_state ON events(state);
 CREATE INDEX IF NOT EXISTS idx_ev_received ON events(received_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ev_key ON events(key);
 
 CREATE TABLE IF NOT EXISTS webhook_replay (
     delivery_id TEXT PRIMARY KEY,
@@ -179,6 +179,10 @@ CREATE TABLE IF NOT EXISTS migration_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     migrated_at TEXT NOT NULL,
     sources TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_lock (
+    id INTEGER PRIMARY KEY CHECK (id = 1)
 );
 """
 
@@ -195,6 +199,9 @@ class StateCorruptionError(Exception):
 
 class ConcurrencyError(Exception):
     """Raised when optimistic version check fails (compat shim)."""
+
+
+T = TypeVar("T")
 
 
 # ─── Helpers ──────────────────────────────────────────────────
@@ -218,14 +225,80 @@ def _dumps(value: Any) -> str:
 
 
 def _loads(raw: Any, default: Any = None) -> Any:
+    """Parse persisted JSON.
+
+    ``default`` is used only for genuinely missing values (SQL NULL). Malformed
+    JSON is corruption and raises ``StateCorruptionError``.
+    """
     if raw is None:
         return default
     if not isinstance(raw, str):
         return raw
     try:
         return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return default
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise StateCorruptionError(f"Corrupt JSON in persisted state: {exc}") from exc
+
+
+_BUSY_RETRIES = 3
+_TOKEN_OMITTED: Any = object()
+
+
+def _is_lock_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "busy" in msg or "locked" in msg
+
+
+def _begin_immediate(conn: sqlite3.Connection, retries: int = _BUSY_RETRIES) -> None:
+    """Acquire a reserved write lock. Retry SQLITE_BUSY/LOCKED; then raise.
+
+    Does not swallow failures. ``BEGIN IMMEDIATE`` must succeed (or already be
+    held) before the caller reads any version/row it intends to overwrite.
+    """
+    delay = 0.02
+    last_exc: BaseException | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            if conn.in_transaction:
+                # A leftover deferred transaction does not hold a reserved lock.
+                conn.rollback()
+            conn.execute("BEGIN IMMEDIATE")
+            return
+        except sqlite3.OperationalError as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if "within a transaction" in msg:
+                # Already in a transaction on this connection.
+                return
+            if _is_lock_error(exc) and attempt < retries - 1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            if _is_lock_error(exc):
+                raise ConcurrencyError(f"Could not acquire write lock: {exc}") from exc
+            raise
+    raise ConcurrencyError(f"Could not acquire write lock: {last_exc}") from last_exc
+
+
+class DeliveryReservation(tuple):
+    """``(ok, reason)`` for backward-compatible unpacking, plus ``lease_token``.
+
+    Contract tests unpack two values. Token-aware callers read ``.lease_token``.
+    """
+
+    def __new__(cls, ok: bool, reason: str, lease_token: str | None = None) -> DeliveryReservation:
+        inst = super().__new__(cls, (ok, reason))
+        inst._lease_token = lease_token  # type: ignore[attr-defined]
+        return inst
+
+    @property
+    def lease_token(self) -> str | None:
+        return self._lease_token  # type: ignore[attr-defined]
+
+    def __getitem__(self, index: int | slice) -> Any:  # type: ignore[override]
+        if index == 2:
+            return self.lease_token
+        return tuple.__getitem__(self, index)
 
 
 def _log_event(event: str, **fields: Any) -> None:
@@ -447,6 +520,7 @@ def _action_insert_params(action: Mapping[str, Any]) -> tuple[Any, ...]:
         action.get("cancelled_at"),
         action.get("dismissed_at"),
         action.get("expired_at"),
+        action.get("failed_at"),
         action.get("cancel_reason"),
         action.get("dismiss_reason"),
         int(action.get("retry_count") or 0),
@@ -459,9 +533,9 @@ _ACTION_INSERT_SQL = """
 INSERT OR REPLACE INTO pending_actions (
     id, type, provider, target, payload, summary, state, risk,
     approver, approval_reason, created_at, approved_at, executing_at,
-    executed_at, cancelled_at, dismissed_at, expired_at,
+    executed_at, cancelled_at, dismissed_at, expired_at, failed_at,
     cancel_reason, dismiss_reason, retry_count, last_error, result
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 _EVENT_INSERT_SQL = """
@@ -522,7 +596,6 @@ class StateDB:
         self.root = _db_root(config)
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "state.db"
-        is_new = not self.db_path.exists()
         try:
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
@@ -531,6 +604,9 @@ class StateDB:
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(_SCHEMA_SQL)
+            self.conn.execute("DROP INDEX IF EXISTS idx_ev_key")
+            self._ensure_column("pending_actions", "failed_at", "TEXT")
+            self.conn.execute("INSERT OR IGNORE INTO audit_lock (id) VALUES (1)")
             self.conn.commit()
             # BEGIN IMMEDIATE so two writers cannot both read version N and
             # last-writer-wins on a full-table replace (compat _load/_save).
@@ -540,8 +616,14 @@ class StateDB:
             if "locked" in msg or "busy" in msg:
                 raise
             raise StateCorruptionError(f"state.db is corrupt or unreadable: {exc}") from exc
-        if is_new:
-            self._migrate_legacy()
+        # Idempotent: run on every open so a crash between commit and
+        # legacy-file rename cannot skip remaining sources.
+        self._migrate_legacy()
+
+    def _ensure_column(self, table: str, column: str, decl: str) -> None:
+        cols = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     def close(self) -> None:
         try:
@@ -593,14 +675,24 @@ class StateDB:
         ).fetchone()
         if row is None:
             return None
-        data = _loads(row["value"], None)
+        data = _loads(row["value"])
         if not isinstance(data, dict):
-            return None
-        if store_name in EMPTY_TEMPLATES:
-            try:
-                validate_store(store_name, data, config=self.config)
-            except SchemaError:
-                pass
+            raise StateCorruptionError(
+                f"KV store {store_name!r} is not a JSON object"
+            )
+        # Structural schema check — a non-list records field is corruption,
+        # not a missing store. Per-record validation stays with mutate/save
+        # so incomplete documents can still be read (contract roundtrip).
+        key = {
+            "pipeline": "deals",
+            "invoices": "invoices",
+            "expenses": "expenses",
+            "todos": "todos",
+        }.get(store_name)
+        if key is not None:
+            records = data.get(key, [])
+            if records is not None and not isinstance(records, list):
+                raise SchemaError(f"{key}: must be a list")
         return data
 
     def put_kv(
@@ -620,6 +712,89 @@ class StateDB:
             )
         if action:
             self._append_kv_audit(store_name, action, before, after if after is not None else plain, actor)
+
+    def mutate_kv(
+        self,
+        store_name: str,
+        mutate_fn: Callable[[dict[str, Any]], Any],
+        *,
+        _fill_defaults: bool = False,
+    ) -> Any:
+        """Atomically read → mutate → validate → write a KV store.
+
+        Holds BEGIN IMMEDIATE for the entire sequence so two workers cannot
+        both load the same document and last-writer-wins on ``__root__``.
+        ``mutate_fn`` receives the current store dict (empty template if
+        missing) and may mutate it in place. Its return value is returned
+        to the caller.
+        """
+        _begin_immediate(self.conn)
+        try:
+            row = self.conn.execute(
+                "SELECT value FROM kv_stores WHERE store_name=? AND key=?",
+                (store_name, KV_ROOT_KEY),
+            ).fetchone()
+            if row is None:
+                data: dict[str, Any] = _template(store_name)
+            else:
+                loaded = _loads(row["value"])
+                if not isinstance(loaded, dict):
+                    raise StateCorruptionError(
+                        f"KV store {store_name!r} is not a JSON object"
+                    )
+                data = loaded
+            result = mutate_fn(data)
+            if not isinstance(data, dict):
+                raise TypeError("mutate_fn must keep the KV store as a dict")
+            if _fill_defaults:
+                _fill_required_store_fields(store_name, data)
+            validate_store(store_name, data, config=self.config)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO kv_stores (store_name, key, value, updated_at) VALUES (?,?,?,?)",
+                (store_name, KV_ROOT_KEY, _dumps(_plain(data)), _now()),
+            )
+            self.conn.commit()
+            return result
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
+
+    @contextlib.contextmanager
+    def audit_lock(self) -> Iterator[None]:
+        """Serialize hash-chain audit appends with BEGIN EXCLUSIVE."""
+        delay = 0.02
+        last_exc: BaseException | None = None
+        acquired = False
+        for attempt in range(_BUSY_RETRIES):
+            try:
+                if self.conn.in_transaction:
+                    self.conn.rollback()
+                self.conn.execute("BEGIN EXCLUSIVE")
+                acquired = True
+                break
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                if _is_lock_error(exc) and attempt < _BUSY_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                if _is_lock_error(exc):
+                    raise ConcurrencyError(f"Could not acquire audit lock: {exc}") from exc
+                raise
+        if not acquired:
+            raise ConcurrencyError(f"Could not acquire audit lock: {last_exc}") from last_exc
+        try:
+            yield
+            self.conn.commit()
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
 
     def _append_kv_audit(
         self,
@@ -678,6 +853,7 @@ class StateDB:
             "cancelled_at": None,
             "dismissed_at": None,
             "expired_at": None,
+            "failed_at": None,
             "result": None,
             "approver": None,
             "approval_reason": None,
@@ -771,6 +947,7 @@ class StateDB:
         elif new_state == "expired":
             extra["expired_at"] = now
         elif new_state == "failed":
+            extra["failed_at"] = now
             if "last_error" in fields:
                 extra["last_error"] = fields["last_error"]
             if "retry_count" in fields:
@@ -923,7 +1100,7 @@ class StateDB:
 
     # ── Webhook replay ──
 
-    def reserve_delivery(self, delivery_id: str, ttl: int = REPLAY_TTL_SECONDS) -> tuple[bool, str]:
+    def reserve_delivery(self, delivery_id: str, ttl: int = REPLAY_TTL_SECONDS) -> DeliveryReservation:
         now = time.time()
         with self.conn:
             self.conn.execute("DELETE FROM webhook_replay WHERE ts < ?", (now - ttl,))
@@ -933,26 +1110,26 @@ class StateDB:
             ).fetchone()
             if row:
                 if row["state"] == "done":
-                    return False, "Replay detected: delivery already completed"
+                    return DeliveryReservation(False, "Replay detected: delivery already completed")
                 if row["state"] == "processing":
                     age = now - (row["ts"] or 0)
                     if age < PROCESSING_LEASE_SECONDS:
-                        return False, "Replay detected: delivery already processing"
+                        return DeliveryReservation(False, "Replay detected: delivery already processing")
                     token = str(uuid.uuid4())
                     self.conn.execute(
                         "UPDATE webhook_replay SET state=?, ts=?, lease_token=? WHERE delivery_id=?",
                         ("processing", now, token, delivery_id),
                     )
-                    return True, "OK"
-                return False, "Replay detected"
+                    return DeliveryReservation(True, "OK", token)
+                return DeliveryReservation(False, "Replay detected")
             token = str(uuid.uuid4())
             self.conn.execute(
                 "INSERT INTO webhook_replay (delivery_id, state, ts, lease_token) VALUES (?,?,?,?)",
                 (delivery_id, "processing", now, token),
             )
-            return True, "OK"
+            return DeliveryReservation(True, "OK", token)
 
-    def complete_delivery(self, delivery_id: str, lease_token: str | None = None) -> None:
+    def complete_delivery(self, delivery_id: str, lease_token: str | None | object = _TOKEN_OMITTED) -> None:
         with self.conn:
             row = self.conn.execute(
                 "SELECT lease_token FROM webhook_replay WHERE delivery_id=?",
@@ -961,14 +1138,17 @@ class StateDB:
             if row is None:
                 return
             stored = row["lease_token"]
-            if stored and lease_token is not None and lease_token != stored:
-                return
+            if stored:
+                if lease_token is _TOKEN_OMITTED:
+                    pass  # legacy callers that omit the token
+                elif lease_token is None or lease_token != stored:
+                    return
             self.conn.execute(
                 "UPDATE webhook_replay SET state=?, ts=? WHERE delivery_id=?",
                 ("done", time.time(), delivery_id),
             )
 
-    def release_delivery(self, delivery_id: str, lease_token: str | None = None) -> None:
+    def release_delivery(self, delivery_id: str, lease_token: str | None | object = _TOKEN_OMITTED) -> None:
         with self.conn:
             row = self.conn.execute(
                 "SELECT lease_token FROM webhook_replay WHERE delivery_id=?",
@@ -977,8 +1157,11 @@ class StateDB:
             if row is None:
                 return
             stored = row["lease_token"]
-            if stored and lease_token is not None and lease_token != stored:
-                return
+            if stored:
+                if lease_token is _TOKEN_OMITTED:
+                    pass  # legacy callers that omit the token
+                elif lease_token is None or lease_token != stored:
+                    return
             self.conn.execute("DELETE FROM webhook_replay WHERE delivery_id=?", (delivery_id,))
 
     def renew_delivery(self, delivery_id: str, lease_token: str | None = None) -> bool:
@@ -1019,18 +1202,62 @@ class StateDB:
         with self.conn:
             cur = self.conn.execute(
                 """DELETE FROM pending_actions
-                   WHERE state IN ('executed','cancelled','expired')
-                     AND COALESCE(executed_at, cancelled_at, expired_at) IS NOT NULL
-                     AND COALESCE(executed_at, cancelled_at, expired_at) < ?""",
-                (cutoff,),
+                   WHERE
+                     (state = 'executed' AND executed_at IS NOT NULL AND executed_at < ?)
+                     OR (state = 'cancelled' AND cancelled_at IS NOT NULL AND cancelled_at < ?)
+                     OR (state = 'expired' AND expired_at IS NOT NULL AND expired_at < ?)
+                     OR (state = 'dismissed' AND dismissed_at IS NOT NULL AND dismissed_at < ?)
+                     OR (state = 'failed' AND COALESCE(failed_at, executing_at, created_at) IS NOT NULL
+                         AND COALESCE(failed_at, executing_at, created_at) < ?)
+                """,
+                (cutoff, cutoff, cutoff, cutoff, cutoff),
             )
             return int(cur.rowcount or 0)
 
     # ── Migration ──
 
+    def _migrated_sources(self) -> set[str]:
+        """Return source names already recorded in migration_log (per-source)."""
+        found: set[str] = set()
+        try:
+            rows = self.conn.execute("SELECT sources FROM migration_log").fetchall()
+        except sqlite3.Error:
+            return found
+        for row in rows:
+            raw = row["sources"]
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                found.add(str(raw))
+                continue
+            if isinstance(parsed, list):
+                found.update(str(s) for s in parsed)
+            else:
+                found.add(str(parsed))
+        return found
+
+    def _record_migration_source(self, source: str) -> None:
+        self.conn.execute(
+            "INSERT INTO migration_log (migrated_at, sources) VALUES (?,?)",
+            (_now(), json.dumps([source])),
+        )
+
+    def _rename_legacy(self, path: Path) -> None:
+        dest = Path(str(path) + ".migrated")
+        try:
+            if path.exists() and not dest.exists():
+                path.rename(dest)
+        except OSError:
+            try:
+                path.rename(Path(str(path) + ".bak"))
+            except OSError:
+                pass
+
     def _migrate_legacy(self) -> None:
         root = self.root
-        sources: list[str] = []
+        already = self._migrated_sources()
         to_rename: list[Path] = []
 
         pa_path = root / ".pending_actions.json"
@@ -1038,14 +1265,34 @@ class StateDB:
         wr_path = root / ".webhook_replay_cache.json"
         yaml_paths = [(name, root / f"{name}.yaml") for name in EMPTY_TEMPLATES]
 
-        has_legacy = pa_path.exists() or ev_path.exists() or wr_path.exists() or any(p.exists() for _, p in yaml_paths)
-        if not has_legacy:
+        json_sources = [
+            (pa_path, ".pending_actions.json"),
+            (ev_path, ".events.json"),
+            (wr_path, ".webhook_replay_cache.json"),
+        ]
+
+        def pending(path: Path, source: str) -> bool:
+            return path.exists() and source not in already
+
+        rename_only = [path for path, source in json_sources if path.exists() and source in already]
+        has_work = (
+            any(pending(path, source) for path, source in json_sources)
+            or any(pending(ypath, ypath.name) for _, ypath in yaml_paths)
+        )
+        if not has_work:
+            for path in rename_only:
+                self._rename_legacy(path)
             return
 
         try:
             with self.conn:
-                if pa_path.exists():
-                    data = json.loads(pa_path.read_text(encoding="utf-8"))
+                if pending(pa_path, ".pending_actions.json"):
+                    try:
+                        data = json.loads(pa_path.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError as exc:
+                        raise StateCorruptionError(
+                            f"Legacy state file is corrupt: {exc}"
+                        ) from exc
                     actions = data.get("actions", {}) if isinstance(data, dict) else {}
                     if isinstance(actions, dict):
                         for action in actions.values():
@@ -1053,11 +1300,16 @@ class StateDB:
                                 self.conn.execute(_ACTION_INSERT_SQL, _action_insert_params(action))
                     if isinstance(data, dict) and "_version" in data:
                         self._set_meta("pending_actions_version", int(data.get("_version") or 0))
-                    sources.append(".pending_actions.json")
+                    self._record_migration_source(".pending_actions.json")
                     to_rename.append(pa_path)
 
-                if ev_path.exists():
-                    data = json.loads(ev_path.read_text(encoding="utf-8"))
+                if pending(ev_path, ".events.json"):
+                    try:
+                        data = json.loads(ev_path.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError as exc:
+                        raise StateCorruptionError(
+                            f"Legacy state file is corrupt: {exc}"
+                        ) from exc
                     events = data.get("events", {}) if isinstance(data, dict) else {}
                     if isinstance(events, dict):
                         for event in events.values():
@@ -1068,11 +1320,16 @@ class StateDB:
                                     pass
                     if isinstance(data, dict) and "_version" in data:
                         self._set_meta("events_version", int(data.get("_version") or 0))
-                    sources.append(".events.json")
+                    self._record_migration_source(".events.json")
                     to_rename.append(ev_path)
 
-                if wr_path.exists():
-                    data = json.loads(wr_path.read_text(encoding="utf-8"))
+                if pending(wr_path, ".webhook_replay_cache.json"):
+                    try:
+                        data = json.loads(wr_path.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError as exc:
+                        raise StateCorruptionError(
+                            f"Legacy state file is corrupt: {exc}"
+                        ) from exc
                     entries = data.get("entries", {}) if isinstance(data, dict) else {}
                     if isinstance(entries, dict):
                         for did, entry in entries.items():
@@ -1087,44 +1344,38 @@ class StateDB:
                                     entry.get("lease_token"),
                                 ),
                             )
-                    sources.append(".webhook_replay_cache.json")
+                    self._record_migration_source(".webhook_replay_cache.json")
                     to_rename.append(wr_path)
 
                 if yaml is not None:
                     for store_name, ypath in yaml_paths:
-                        if not ypath.exists():
+                        if not pending(ypath, ypath.name):
                             continue
                         try:
                             loaded = yaml.safe_load(ypath.read_text(encoding="utf-8"))
-                        except Exception:
-                            continue
+                        except Exception as exc:
+                            raise StateCorruptionError(
+                                f"Legacy YAML {ypath.name} is corrupt: {exc}"
+                            ) from exc
+                        if loaded is None:
+                            loaded = {}
                         if not isinstance(loaded, dict):
-                            continue
+                            raise StateCorruptionError(
+                                f"Legacy YAML {ypath.name} is corrupt: top-level value must be a mapping"
+                            )
                         self.conn.execute(
                             "INSERT OR REPLACE INTO kv_stores (store_name, key, value, updated_at) VALUES (?,?,?,?)",
                             (store_name, KV_ROOT_KEY, _dumps(loaded), _now()),
                         )
-                        sources.append(ypath.name)
+                        self._record_migration_source(ypath.name)
                         # Keep YAML in place as a human-readable seed; SQLite is source of truth.
-
-                if sources:
-                    self.conn.execute(
-                        "INSERT INTO migration_log (migrated_at, sources) VALUES (?,?)",
-                        (_now(), json.dumps(sources)),
-                    )
         except json.JSONDecodeError as exc:
             raise StateCorruptionError(f"Legacy state file is corrupt: {exc}") from exc
 
         for path in to_rename:
-            dest = Path(str(path) + ".migrated")
-            try:
-                if not dest.exists():
-                    path.rename(dest)
-            except OSError:
-                try:
-                    path.rename(Path(str(path) + ".bak"))
-                except OSError:
-                    pass
+            self._rename_legacy(path)
+        for path in rename_only:
+            self._rename_legacy(path)
 
 
 # ─── Connection helper ────────────────────────────────────────
@@ -1163,7 +1414,13 @@ def with_store_lock(
     config: Mapping[str, Any] | None = None,
     timeout: float = 10,
 ) -> Iterator[Path]:
-    """No-op lock: SQLite WAL serializes writers. Yields the legacy YAML path."""
+    """Deprecated: no-op lock. SQLite WAL no longer serializes KV read-modify-write.
+
+    The previous file lock was deleted with the YAML store. This context
+    manager remains so existing ``with with_store_lock(...)`` call sites
+    keep importing, but it provides no isolation. Use ``mutate_kv()`` to
+    wrap load → mutate → save in one ``BEGIN IMMEDIATE`` transaction.
+    """
     yield get_store_path(store_name, config=config)
 
 
@@ -1310,9 +1567,73 @@ def save_store_atomic(
     return db_path
 
 
-# ─── Pending-action compatibility ─────────────────────────────
+def mutate_kv(
+    store_name: str,
+    mutate_fn: Callable[[dict[str, Any]], T],
+    config: Mapping[str, Any] | None = None,
+    action: str | None = None,
+    before: Mapping[str, Any] | None = None,
+    after: Mapping[str, Any] | None = None,
+    actor: str = "agent",
+    _fill_defaults: bool = False,
+) -> T:
+    """Read-modify-write a KV store under a single BEGIN IMMEDIATE transaction.
 
-T = TypeVar("T")
+    Prefer this over ``load_store()`` → mutate → ``save_store_atomic()``.
+    """
+    get_store_path(store_name, config=config)
+    before_box: dict[str, Any] = {}
+    after_box: dict[str, Any] = {}
+
+    def _wrapped(data: dict[str, Any]) -> T:
+        before_box["data"] = copy.deepcopy(data)
+        result = mutate_fn(data)
+        after_box["data"] = data
+        return result
+
+    with _open_db(config) as db:
+        result = db.mutate_kv(store_name, _wrapped, _fill_defaults=_fill_defaults)
+        plain_data = _plain(dict(after_box.get("data") or {}))
+        if yaml is not None:
+            try:
+                ypath = get_store_path(store_name, config=config)
+                ypath.parent.mkdir(parents=True, exist_ok=True)
+                _backup_yaml_and_prune(store_name, ypath, ypath.parent)
+                ypath.write_text(
+                    yaml.safe_dump(plain_data, sort_keys=False, allow_unicode=True),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+
+    audit_before = before if before is not None else before_box.get("data") or {}
+    audit_after = after if after is not None else after_box.get("data") or plain_data
+    strict_stores = [
+        s.strip() for s in os.getenv("CHIEF_OF_STAFF_AUDIT_STRICT", "").split(",") if s.strip()
+    ]
+    if action or store_name in strict_stores:
+        try:
+            append_audit(
+                store_name,
+                action=action or "save",
+                before=dict(audit_before or {}),
+                after=dict(audit_after),
+                actor=actor,
+                config=config,
+            )
+        except Exception as audit_exc:
+            if store_name in strict_stores:
+                raise StateStoreError(
+                    f"Mutation succeeded but audit log failed (strict mode for {store_name}): {audit_exc}"
+                ) from audit_exc
+            print(
+                f"Warning: audit log write failed for {store_name} (mutation succeeded): {audit_exc}",
+                file=sys.stderr,
+            )
+    return result
+
+
+# ─── Pending-action compatibility ─────────────────────────────
 
 
 def _with_retry(config: Any, mutate_fn: Callable[[Any], T], max_attempts: int = 8) -> T | None:
@@ -1357,10 +1678,7 @@ def _load(config: Any) -> dict[str, Any]:
 def _save(config: Any, data: dict[str, Any], expected_version: int | None = None) -> int:
     """Replace pending actions from a legacy dict. Honors expected_version."""
     with _open_db(config) as db:
-        try:
-            db.conn.execute("BEGIN IMMEDIATE")
-        except sqlite3.OperationalError:
-            pass
+        _begin_immediate(db.conn)
         try:
             current_version = db._get_meta("pending_actions_version", 0)
             if expected_version is not None and current_version != expected_version:
@@ -1401,7 +1719,8 @@ def _load_events(config: Any) -> dict[str, Any]:
 
 def _save_events(config: Any, data: dict[str, Any], expected_version: int | None = None) -> int:
     with _open_db(config) as db:
-        with db.conn:
+        _begin_immediate(db.conn)
+        try:
             current_version = db._get_meta("events_version", 0)
             if expected_version is not None and current_version != expected_version:
                 raise ConcurrencyError(
@@ -1418,7 +1737,14 @@ def _save_events(config: Any, data: dict[str, Any], expected_version: int | None
                     )
             db._set_meta("events_version", new_version)
             data["_version"] = new_version
+            db.conn.commit()
             return new_version
+        except Exception:
+            try:
+                db.conn.rollback()
+            except Exception:
+                pass
+            raise
 
 
 def create_pending_action(
@@ -1450,6 +1776,7 @@ def create_pending_action(
         "cancelled_at": None,
         "dismissed_at": None,
         "expired_at": None,
+        "failed_at": None,
         "result": None,
         "approver": None,
         "approval_reason": None,
@@ -1491,12 +1818,8 @@ def list_pending_actions(
     state: str | None = None,
     include_expired: bool = True,
 ) -> list[dict[str, Any]]:
-    try:
-        with _open_db(config) as db:
-            return db.list_actions(state=state, include_expired=include_expired)
-    except StateCorruptionError as exc:
-        _log_event("state_corruption", level="error", component="pending_actions", error=str(exc))
-        return []
+    with _open_db(config) as db:
+        return db.list_actions(state=state, include_expired=include_expired)
 
 
 def get_pending_action(config: Any, action_id: str) -> dict[str, Any] | None:
@@ -1673,6 +1996,7 @@ def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | Non
         action["retry_count"] = action.get("retry_count", 0) + 1
         if action["retry_count"] >= MAX_RETRIES:
             action["state"] = "failed"
+            action["failed_at"] = _now()
         else:
             action["state"] = "approved"
         action["last_error"] = error
@@ -1933,17 +2257,25 @@ def reserve_delivery(
     config: Any,
     delivery_id: str,
     ttl_seconds: int = REPLAY_TTL_SECONDS,
-) -> tuple[bool, str]:
+) -> DeliveryReservation:
     with _open_db(config) as db:
         return db.reserve_delivery(delivery_id, ttl=ttl_seconds)
 
 
-def complete_delivery(config: Any, delivery_id: str, lease_token: str | None = None) -> None:
+def complete_delivery(
+    config: Any,
+    delivery_id: str,
+    lease_token: str | None | object = _TOKEN_OMITTED,
+) -> None:
     with _open_db(config) as db:
         db.complete_delivery(delivery_id, lease_token=lease_token)
 
 
-def release_delivery(config: Any, delivery_id: str, lease_token: str | None = None) -> None:
+def release_delivery(
+    config: Any,
+    delivery_id: str,
+    lease_token: str | None | object = _TOKEN_OMITTED,
+) -> None:
     with _open_db(config) as db:
         db.release_delivery(delivery_id, lease_token=lease_token)
 

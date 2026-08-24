@@ -412,15 +412,14 @@ class TestAudit:
 # ─── Malformed State ────────────────────────────────────────
 
 class TestMalformedState:
-    def test_malformed_degrades_gracefully(self, temp_project):
+    def test_malformed_raises_corruption_error(self, temp_project):
+        """Corrupt legacy state must raise StateCorruptionError (fail-loud),
+        not silently degrade to empty (Phase 5 fix #3)."""
         config, project, config_path = temp_project
-        # Write malformed pending actions
         (project / ".pending_actions.json").write_text("{invalid json}")
-        import review_queue
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            rc = review_queue._main(["--config", str(config_path), "list"])
-        assert rc in (0, 1)
+        import state_db
+        with pytest.raises(state_db.StateCorruptionError):
+            state_db.StateDB(config)
 
 
 # ─── Briefing Integration ───────────────────────────────────

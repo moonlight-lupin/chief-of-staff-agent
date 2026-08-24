@@ -6,18 +6,17 @@ drive_upload, drive_download to project_root/.audit/workspace.log as JSONL.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import sqlite3
 import sys
+import time
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-
-try:
-    import file_lock
-except Exception:  # pragma: no cover - lock is best-effort
-    file_lock = None  # type: ignore[assignment]
 
 
 def _audit_path(config: Any) -> Path:
@@ -76,6 +75,50 @@ def _last_hash(path: Path) -> str:
             "Audit log has legacy records without _hash — migration needed"
         )
     return str(rec["_hash"])
+
+
+@contextlib.contextmanager
+def _chain_lock(path: Path) -> Iterator[None]:
+    """Serialize hash-chain appends with BEGIN EXCLUSIVE on a sidecar SQLite DB."""
+    lock_path = path.parent / ".workspace.lock.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(lock_path), timeout=10.0)
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS audit_lock (id INTEGER PRIMARY KEY CHECK (id = 1))"
+        )
+        conn.execute("INSERT OR IGNORE INTO audit_lock (id) VALUES (1)")
+        conn.commit()
+        delay = 0.02
+        acquired = False
+        last_exc: BaseException | None = None
+        for attempt in range(3):
+            try:
+                conn.execute("BEGIN EXCLUSIVE")
+                acquired = True
+                break
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                msg = str(exc).lower()
+                if ("busy" in msg or "locked" in msg) and attempt < 2:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
+        if not acquired:
+            raise sqlite3.OperationalError(f"Could not acquire audit lock: {last_exc}")
+        try:
+            yield
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+    finally:
+        conn.close()
 
 
 def verify_audit_chain(config: Any) -> bool:
@@ -193,10 +236,7 @@ def audit_workspace_action(
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(to_write) + "\n")
 
-        if file_lock is not None:
-            with file_lock.with_lock(str(path), timeout=10):
-                _append()
-        else:
+        with _chain_lock(path):
             _append()
     except Exception as exc:
         print(f"Warning: workspace audit write failed: {exc}", file=sys.stderr)

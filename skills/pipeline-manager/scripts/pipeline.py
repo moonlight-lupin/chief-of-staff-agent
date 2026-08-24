@@ -24,7 +24,7 @@ try:
         StateStoreError,
         get_store_path,
         load_store,
-        save_store_atomic,
+        mutate_kv,
     )
 except Exception as exc:  # pragma: no cover
     print(
@@ -259,10 +259,6 @@ def cmd_add(args: argparse.Namespace) -> tuple[dict[str, Any], str, Any, Any]:
     status = args.status or "active"
     if status not in VALID_STATUSES:
         raise ValueError(f"Invalid status {status!r}; expected one of {sorted(VALID_STATUSES)}")
-    data = load_pipeline_store(config)
-    deals = data.setdefault("deals", [])
-    if not isinstance(deals, list):
-        raise ValueError("pipeline.yaml 'deals' must be a list")
     now = today()
     deal = {
         "id": generate_id("deal"),
@@ -280,10 +276,19 @@ def cmd_add(args: argparse.Namespace) -> tuple[dict[str, Any], str, Any, Any]:
         "notes": [],
     }
     validate_deal(deal, config)
-    before = copy.deepcopy(data)
-    deals.append(deal)
-    save_store_atomic("pipeline", data, action="add_deal", before=before, after=data, config=config)
-    return deal, "add_deal", before, data
+    holder: dict[str, Any] = {}
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        deals = data.setdefault("deals", [])
+        if not isinstance(deals, list):
+            raise ValueError("pipeline.yaml 'deals' must be a list")
+        holder["before"] = copy.deepcopy(data)
+        deals.append(deal)
+        holder["after"] = data
+        return deal
+
+    mutate_kv("pipeline", _mutate, action="add_deal", config=config)
+    return deal, "add_deal", holder.get("before"), holder.get("after")
 
 
 def cmd_move(args: argparse.Namespace) -> tuple[dict[str, Any], str, Any, Any]:
@@ -291,39 +296,37 @@ def cmd_move(args: argparse.Namespace) -> tuple[dict[str, Any], str, Any, Any]:
     stages = sales_stages(config)
     if args.stage not in stages:
         raise ValueError(f"Invalid stage {args.stage!r}; valid stages: {', '.join(stages)}")
-    data = load_pipeline_store(config)
-    before = copy.deepcopy(data)
-    deal = find_deal(data, args.id)
-    old_stage = deal.get("stage")
-    now = today()
-    note_reason = (args.note or "").strip() if getattr(args, "note", None) else ""
-    reason_text = note_reason if note_reason else "(none)"
-    audit_text = f"Moved from {old_stage} to {args.stage}. Reason: {reason_text}"
+    holder: dict[str, Any] = {}
 
-    deal["stage"] = args.stage
-    deal["last_activity"] = now
-    # stage_history may exist; normalize_deal ensures list
-    deal.setdefault("stage_history", []).append(
-        {"stage": args.stage, "at": now, "from": old_stage, "reason": note_reason or None}
-    )
-    deal.setdefault("notes", []).append({"at": timestamp(), "note": audit_text})
-    if args.status:
-        if args.status not in VALID_STATUSES:
-            raise ValueError(f"Invalid status {args.status!r}; expected one of {sorted(VALID_STATUSES)}")
-        deal["status"] = args.status
-    validate_deal(deal, config)
-    save_store_atomic(
-        "pipeline",
-        data,
-        action="move_stage",
-        before={"id": args.id, "stage": old_stage},
-        after={"id": args.id, "stage": args.stage},
-        config=config,
-    )
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        holder["before"] = copy.deepcopy(data)
+        deal = find_deal(data, args.id)
+        old_stage = deal.get("stage")
+        now = today()
+        note_reason = (args.note or "").strip() if getattr(args, "note", None) else ""
+        reason_text = note_reason if note_reason else "(none)"
+        audit_text = f"Moved from {old_stage} to {args.stage}. Reason: {reason_text}"
+
+        deal["stage"] = args.stage
+        deal["last_activity"] = now
+        deal.setdefault("stage_history", []).append(
+            {"stage": args.stage, "at": now, "from": old_stage, "reason": note_reason or None}
+        )
+        deal.setdefault("notes", []).append({"at": timestamp(), "note": audit_text})
+        if args.status:
+            if args.status not in VALID_STATUSES:
+                raise ValueError(f"Invalid status {args.status!r}; expected one of {sorted(VALID_STATUSES)}")
+            deal["status"] = args.status
+        validate_deal(deal, config)
+        holder["after"] = data
+        holder["deal"] = deal
+        return deal
+
+    deal = mutate_kv("pipeline", _mutate, action="move_stage", config=config)
     suggestion = stage_move_suggestion(args.stage)
     if suggestion:
         print(suggestion, file=sys.stderr)
-    return deal, "move_stage", before, data
+    return deal, "move_stage", holder.get("before"), holder.get("after")
 
 
 def _list_summary(records: list[dict[str, Any]], config: Mapping[str, Any]) -> dict[str, Any]:
@@ -527,38 +530,40 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def cmd_add_note(args: argparse.Namespace) -> dict[str, Any]:
     config = configure(args.config)
-    data = load_pipeline_store(config)
-    before = copy.deepcopy(data)
-    deal = find_deal(data, args.id)
-    note = {"at": timestamp(), "note": args.note}
-    if getattr(args, "archival", False):
-        note["archival"] = True
-    deal.setdefault("notes", []).append(note)
-    if not getattr(args, "archival", False):
-        deal["last_activity"] = today()
-    validate_deal(deal, config)
-    save_store_atomic("pipeline", data, action="add_note", before=before, after=data, config=config)
-    return deal
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        deal = find_deal(data, args.id)
+        note = {"at": timestamp(), "note": args.note}
+        if getattr(args, "archival", False):
+            note["archival"] = True
+        deal.setdefault("notes", []).append(note)
+        if not getattr(args, "archival", False):
+            deal["last_activity"] = today()
+        validate_deal(deal, config)
+        return deal
+
+    return mutate_kv("pipeline", _mutate, action="add_note", config=config)
 
 
 def cmd_link_doc(args: argparse.Namespace) -> dict[str, Any]:
     config = configure(args.config)
-    data = load_pipeline_store(config)
-    before = copy.deepcopy(data)
-    deal = find_deal(data, args.id)
-    path_value = str(args.path)
-    if document_path_is_unfiled(path_value, str(deal.get("client_name") or "")):
-        print("WARNING: unfiled_document_path", file=sys.stderr)
-        print(
-            f"WARNING: document path {path_value!r} is absolute or outside expected client folder structure",
-            file=sys.stderr,
-        )
-    doc = {"type": args.type, "path": path_value, "status": args.status, "linked_at": timestamp()}
-    deal.setdefault("documents", []).append(doc)
-    deal["last_activity"] = today()
-    validate_deal(deal, config)
-    save_store_atomic("pipeline", data, action="link_doc", before=before, after=data, config=config)
-    return deal
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        deal = find_deal(data, args.id)
+        path_value = str(args.path)
+        if document_path_is_unfiled(path_value, str(deal.get("client_name") or "")):
+            print("WARNING: unfiled_document_path", file=sys.stderr)
+            print(
+                f"WARNING: document path {path_value!r} is absolute or outside expected client folder structure",
+                file=sys.stderr,
+            )
+        doc = {"type": args.type, "path": path_value, "status": args.status, "linked_at": timestamp()}
+        deal.setdefault("documents", []).append(doc)
+        deal["last_activity"] = today()
+        validate_deal(deal, config)
+        return deal
+
+    return mutate_kv("pipeline", _mutate, action="link_doc", config=config)
 
 
 def cmd_show(args: argparse.Namespace) -> dict[str, Any]:

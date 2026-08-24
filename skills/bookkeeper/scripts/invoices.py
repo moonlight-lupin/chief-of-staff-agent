@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import sys
@@ -21,7 +20,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
 try:
     from config_loader import load_config  # type: ignore
     from schemas import SchemaError, generate_id, validate_invoice  # type: ignore
-    from state_db import load_store, save_store_atomic  # type: ignore
+    from state_db import load_store, mutate_kv  # type: ignore
 except Exception as exc:  # pragma: no cover
     print(
         f"Chief-of-Staff bootstrap incomplete: cannot import shared scripts from {SHARED_SCRIPTS}: {exc}. "
@@ -111,10 +110,6 @@ def duplicate_of(existing: dict[str, Any], candidate: dict[str, Any]) -> bool:
 
 def cmd_add(args: argparse.Namespace) -> dict[str, Any]:
     cfg = configure(args.config)
-    data = load_store("invoices")
-    invoices = data.setdefault("invoices", [])
-    if not isinstance(invoices, list):
-        raise ValueError("invoices.yaml 'invoices' must be a list")
     inv = {
         "id": generate_id("INV"),
         "direction": args.direction,
@@ -130,30 +125,36 @@ def cmd_add(args: argparse.Namespace) -> dict[str, Any]:
         "notes": args.notes or "",
     }
     validate_invoice(inv)
-    for existing in invoices:
-        if isinstance(existing, dict) and duplicate_of(existing, inv):
-            raise ValueError(
-                "Duplicate invoice detected: same counterparty, amount, and issue_date "
-                f"as {existing.get('id', '<unknown>')}"
-            )
-    before = copy.deepcopy(data)
-    invoices.append(inv)
-    save_store_atomic("invoices", data, action="add_invoice", before=before, after=data)
-    return inv
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        invoices = data.setdefault("invoices", [])
+        if not isinstance(invoices, list):
+            raise ValueError("invoices.yaml 'invoices' must be a list")
+        for existing in invoices:
+            if isinstance(existing, dict) and duplicate_of(existing, inv):
+                raise ValueError(
+                    "Duplicate invoice detected: same counterparty, amount, and issue_date "
+                    f"as {existing.get('id', '<unknown>')}"
+                )
+        invoices.append(inv)
+        return inv
+
+    return mutate_kv("invoices", _mutate, action="add_invoice")
 
 
 def cmd_mark_paid(args: argparse.Namespace) -> dict[str, Any]:
     configure(args.config)
-    data = load_store("invoices")
-    before = copy.deepcopy(data)
-    inv = find_invoice(data, args.id)
-    current = str(inv.get("status"))
-    check_transition(current, "paid")
-    inv["status"] = "paid"
-    inv["paid_date"] = args.paid_date or today()
-    validate_invoice(inv)
-    save_store_atomic("invoices", data, action="mark_paid", before=before, after=data)
-    return inv
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        inv = find_invoice(data, args.id)
+        current = str(inv.get("status"))
+        check_transition(current, "paid")
+        inv["status"] = "paid"
+        inv["paid_date"] = args.paid_date or today()
+        validate_invoice(inv)
+        return inv
+
+    return mutate_kv("invoices", _mutate, action="mark_paid")
 
 
 def parse_date(value: Any) -> date | None:

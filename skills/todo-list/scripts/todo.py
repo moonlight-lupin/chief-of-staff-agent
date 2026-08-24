@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import sys
@@ -19,7 +18,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
 try:
     from config_loader import load_config  # type: ignore
     from schemas import SchemaError, generate_id, validate_todo  # type: ignore
-    from state_db import load_store, save_store_atomic  # type: ignore
+    from state_db import load_store, mutate_kv  # type: ignore
 except Exception as exc:  # pragma: no cover
     print(
         f"Chief-of-Staff bootstrap incomplete: cannot import shared scripts from {SHARED_SCRIPTS}: {exc}. "
@@ -78,10 +77,6 @@ def find_todo(data: dict[str, Any], todo_id: str) -> dict[str, Any]:
 
 def cmd_add(args: argparse.Namespace) -> dict[str, Any]:
     configure(args.config)
-    data = load_store("todos")
-    todos = data.setdefault("todos", [])
-    if not isinstance(todos, list):
-        raise ValueError("todos.yaml 'todos' must be a list")
     todo = {
         "id": generate_id("todo"),
         "title": args.title,
@@ -95,46 +90,54 @@ def cmd_add(args: argparse.Namespace) -> dict[str, Any]:
         "source_ref": args.source_ref,
     }
     validate_todo(todo)
-    before = copy.deepcopy(data)
-    todos.append(todo)
-    save_store_atomic("todos", data, action="add_todo", before=before, after=data)
-    return todo
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        todos = data.setdefault("todos", [])
+        if not isinstance(todos, list):
+            raise ValueError("todos.yaml 'todos' must be a list")
+        todos.append(todo)
+        return todo
+
+    return mutate_kv("todos", _mutate, action="add_todo")
 
 
 def cmd_complete(args: argparse.Namespace) -> dict[str, Any]:
     configure(args.config)
-    data = load_store("todos")
-    before = copy.deepcopy(data)
-    todo = find_todo(data, args.id)
-    todo["status"] = "done"
-    todo["completed"] = args.completed or today()
-    validate_todo(todo)
-    save_store_atomic("todos", data, action="complete_todo", before=before, after=data)
-    return todo
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        todo = find_todo(data, args.id)
+        todo["status"] = "done"
+        todo["completed"] = args.completed or today()
+        validate_todo(todo)
+        return todo
+
+    return mutate_kv("todos", _mutate, action="complete_todo")
 
 
 def cmd_defer(args: argparse.Namespace) -> dict[str, Any]:
     configure(args.config)
-    data = load_store("todos")
-    before = copy.deepcopy(data)
-    todo = find_todo(data, args.id)
-    todo["due"] = args.to
-    todo["status"] = "open"
-    todo["completed"] = None
-    validate_todo(todo)
-    save_store_atomic("todos", data, action="defer_todo", before=before, after=data)
-    return todo
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        todo = find_todo(data, args.id)
+        todo["due"] = args.to
+        todo["status"] = "open"
+        todo["completed"] = None
+        validate_todo(todo)
+        return todo
+
+    return mutate_kv("todos", _mutate, action="defer_todo")
 
 
 def cmd_cancel(args: argparse.Namespace) -> dict[str, Any]:
     configure(args.config)
-    data = load_store("todos")
-    before = copy.deepcopy(data)
-    todo = find_todo(data, args.id)
-    todo["status"] = "cancelled"
-    validate_todo(todo)
-    save_store_atomic("todos", data, action="cancel_todo", before=before, after=data)
-    return todo
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        todo = find_todo(data, args.id)
+        todo["status"] = "cancelled"
+        validate_todo(todo)
+        return todo
+
+    return mutate_kv("todos", _mutate, action="cancel_todo")
 
 
 def sort_key(todo: dict[str, Any]) -> tuple[int, str, str]:

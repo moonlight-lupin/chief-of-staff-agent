@@ -16,7 +16,6 @@ Safety:
 """
 from __future__ import annotations
 
-import copy
 import re
 import sys
 from datetime import date, datetime, timezone
@@ -33,9 +32,10 @@ from state_db import (  # noqa: E402
     mark_executed,
     mark_executing,
     mark_failed,
+    mutate_kv,
 )
 from schemas import generate_id  # noqa: E402
-from state_db import load_store, save_store_atomic, with_store_lock  # noqa: E402
+from state_db import load_store, save_store_atomic  # noqa: E402
 
 TERMINAL_STAGES = frozenset({"Paid", "Lost", "Cancelled"})
 DEFAULT_STALE_THRESHOLD_DAYS = 14
@@ -493,21 +493,17 @@ def _build_deal_from_payload(payload: Mapping[str, Any], config: Any) -> dict[st
 
 
 def _exec_deal_add(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
-    with with_store_lock("pipeline", config=config):
-        data = load_pipeline(config)
-        before = copy.deepcopy(data)
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         deals = data.setdefault("deals", [])
         if not isinstance(deals, list):
             raise ValueError("pipeline.yaml 'deals' must be a list")
 
         deal = _build_deal_from_payload(payload, config)
-        # Uniqueness check
         existing_ids = {str(d.get("id")) for d in deals if isinstance(d, dict)}
         if deal["id"] in existing_ids:
             raise ValueError(f"Deal id already exists: {deal['id']}")
 
         deals.append(deal)
-        save_pipeline(config, data, "add_deal", before, data)
         return {
             "success": True,
             "action_type": "pipeline.deal.add",
@@ -515,6 +511,8 @@ def _exec_deal_add(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
             "client_name": deal.get("client_name"),
             "stage": deal.get("stage"),
         }
+
+    return mutate_kv("pipeline", _mutate, config=config, action="add_deal")
 
 
 def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -531,8 +529,7 @@ def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, 
             f"Invalid stage {new_stage!r}; valid stages: {', '.join(stages)}"
         )
 
-    with with_store_lock("pipeline", config=config):
-        data = load_pipeline(config)
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         deal = find_deal_by_id(data, deal_id)
         if deal is None:
             raise ValueError(f"Deal not found: {deal_id}")
@@ -547,7 +544,6 @@ def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, 
         deal["stage"] = new_stage
         deal["last_activity"] = now
         deal.setdefault("stage_history", []).append({"stage": new_stage, "at": now})
-        # Append audit note for stage move
         deal.setdefault("notes", []).append(
             {
                 "at": _now_iso(),
@@ -564,13 +560,6 @@ def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, 
         if not report["valid"]:
             raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
 
-        save_pipeline(
-            config,
-            data,
-            "move_stage",
-            {"id": deal_id, "stage": old_stage},
-            {"id": deal_id, "stage": new_stage},
-        )
         return {
             "success": True,
             "action_type": "pipeline.deal.move_stage",
@@ -578,6 +567,13 @@ def _exec_deal_move_stage(config: Any, payload: Mapping[str, Any]) -> dict[str, 
             "from_stage": old_stage,
             "to_stage": new_stage,
         }
+
+    return mutate_kv(
+        "pipeline",
+        _mutate,
+        config=config,
+        action="move_stage",
+    )
 
 
 def _exec_deal_add_note(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -588,9 +584,7 @@ def _exec_deal_add_note(config: Any, payload: Mapping[str, Any]) -> dict[str, An
     if note_text is None or str(note_text).strip() == "":
         raise ValueError("payload.note is required")
 
-    with with_store_lock("pipeline", config=config):
-        data = load_pipeline(config)
-        before = copy.deepcopy(data)
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         deal = find_deal_by_id(data, deal_id)
         if deal is None:
             raise ValueError(f"Deal not found: {deal_id}")
@@ -600,7 +594,6 @@ def _exec_deal_add_note(config: Any, payload: Mapping[str, Any]) -> dict[str, An
             "at": _now_iso(),
             "note": str(note_text).strip(),
         }
-        # Optional author / kind
         if payload.get("author"):
             entry["author"] = str(payload["author"])
         if payload.get("kind"):
@@ -614,13 +607,14 @@ def _exec_deal_add_note(config: Any, payload: Mapping[str, Any]) -> dict[str, An
         if not report["valid"]:
             raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
 
-        save_pipeline(config, data, "add_note", before, data)
         return {
             "success": True,
             "action_type": "pipeline.deal.add_note",
             "deal_id": deal_id,
             "note": entry,
         }
+
+    return mutate_kv("pipeline", _mutate, config=config, action="add_note")
 
 
 def _exec_deal_link_document(config: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -649,9 +643,7 @@ def _exec_deal_link_document(config: Any, payload: Mapping[str, Any]) -> dict[st
     if not doc_path:
         raise ValueError("payload.path (document path) is required")
 
-    with with_store_lock("pipeline", config=config):
-        data = load_pipeline(config)
-        before = copy.deepcopy(data)
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         deal = find_deal_by_id(data, deal_id)
         if deal is None:
             raise ValueError(f"Deal not found: {deal_id}")
@@ -674,13 +666,14 @@ def _exec_deal_link_document(config: Any, payload: Mapping[str, Any]) -> dict[st
         if not report["valid"]:
             raise ValueError("Deal validation failed: " + "; ".join(report["errors"]))
 
-        save_pipeline(config, data, "link_doc", before, data)
         return {
             "success": True,
             "action_type": "pipeline.deal.link_document",
             "deal_id": deal_id,
             "document": doc,
         }
+
+    return mutate_kv("pipeline", _mutate, config=config, action="link_doc")
 
 
 # ---------------------------------------------------------------------------
