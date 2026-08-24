@@ -1,5 +1,78 @@
 # Changelog
 
+## v0.5.0 Beta — SQLite WAL state store, HTML briefing, attachment-to-Drive hook
+
+The first release with transactional state persistence and rich-format
+briefings. SQLite WAL replaces four file-based state stores with a single
+ACID database. The daily briefing gains an HTML render mode with inline CSS,
+risk badges, and calendar event links. A new post-LLM hook suggests filing
+email attachments into Google Drive — always with user confirmation, never
+auto-uploading.
+
+**Release posture:** beta. The SQLite migration is fully wired and tested
+(2084 tests). HTML briefing and the attachment hook are new surfaces with
+contract tests but limited production exposure. M365 native remains
+code-complete but not live-verified (unchanged from v0.4.0).
+
+### SQLite WAL state store (Phase 5)
+
+- **Full replacement, not a shim.** Four file-based stores
+  (`state_store`, `pending_actions`, `event_store`, `webhook_security`)
+  replaced by a single SQLite WAL database (`state_db.py`, ~2000 lines).
+  All callers updated to the SQLite-native API.
+- **Transactional safety.** `mutate_kv()` wraps read-check-write in
+  `BEGIN IMMEDIATE` with `SQLITE_BUSY` retry. `transition_action()`
+  uses compare-and-swap on state + version columns.
+- **Auto-migration.** Legacy JSON/YAML files ingested into SQLite on
+  first open, then renamed to `.migrated`. SQLite is the sole source
+  of truth; YAML is never read as authoritative state.
+- **Strict corruption detection.** Corrupt JSON raises
+  `StateCorruptionError` instead of silently becoming an empty store.
+- **Lease token replay protection.** `renew_delivery()` requires exact
+  token match when a stored token exists.
+- **CAS column allowlist.** `_ALLOWED_CAS_COLUMNS` frozenset validates
+  column names before SQL interpolation — no injection path.
+- **Migration-safe table rebuilds.** `@pragma foreign_keys=off` runner
+  directive for safe table rebuilds inside transactions.
+
+### HTML briefing
+
+- **`render_html()`** — self-contained HTML with inline CSS, collapsible
+  `<details>` sections, risk badges, dark-mode support. No JavaScript.
+- **Calendar event links.** `event_link` field added to event schema
+  (Google Calendar `htmlLink` / M365 Graph `webLink`). Separate from
+  conference link. `_calendar_summary()` emits `start`/`end`/
+  `event_link`/`conference_link` for the renderer.
+- **XSS protection.** Risk labels escaped. URL scheme allowlist in
+  `_link()` rejects `javascript:` and other dangerous schemes.
+- **CLI flags.** `--html` renders HTML, `--output PATH` writes to file.
+  `delivery.default_format` in `company.yaml` sets the default format.
+  Format flags are mutually exclusive.
+
+### Attachment-to-Drive hook
+
+- **`attachment_drive_suggestion()`** — 10th post-LLM hook. Detects
+  attachments in email messages, classifies by extension, suggests
+  filing into the Drive structure. Never auto-uploads. Always requires
+  explicit user confirmation.
+- **Config.** `hooks.attachment_suggestions: true/false` in
+  `company.yaml`.
+
+### Other
+
+- Pipeline and bookkeeper write paths moved from load→modify→save
+  (full-table replace) to `mutate_kv()` CAS callbacks. Concurrent
+  updates can no longer be silently lost.
+- `_esc()` preserves `0`/`0.0`/`False` instead of collapsing them
+  to empty strings in HTML tables.
+- Docstrings updated to reference `state_db` / SQLite throughout.
+
+### Review
+
+Cross-model review by Codex (GPT-5.6 Sol) and Claude Code (Opus 5).
+12 findings (4 BLOCKING, 4 MAJOR, 2 MINOR, 2 NIT), all fixed.
+14 new regression tests in `test_v050_review_fixes.py`.
+
 ## v0.4.0 — Safety hardening complete, agent execution seam, release readiness
 
 The largest release so far, and the first where the safety model is enforceable

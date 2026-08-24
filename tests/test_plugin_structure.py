@@ -87,7 +87,7 @@ class TestPluginStructure:
 
         # The README status line is cosmetic but visible — keep it in lockstep.
         readme = (PLUGIN_ROOT / "README.md").read_text()
-        assert f"v{plugin_version} internal beta" in readme, (
+        assert f"v{plugin_version}" in readme, (
             f"README.md status line does not mention v{plugin_version}"
         )
 

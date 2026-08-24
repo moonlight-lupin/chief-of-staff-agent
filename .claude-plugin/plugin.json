@@ -1,7 +1,7 @@
 {
   "name": "chief-of-staff",
   "displayName": "Chief of Staff",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A private, approval-gated AI Chief of Staff for founders and small teams: briefings, deadlines, pipeline, documents, calendar, knowledge base, research, travel, bookkeeping, and signing — every consequential action reviewed before it runs.",
   "author": {
     "name": "moonlight-lupin"
