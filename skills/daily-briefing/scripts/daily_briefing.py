@@ -851,6 +851,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--summary", action="store_true", help="Text summary output")
     run_p.add_argument("--json", action="store_true", help="JSON output")
     run_p.add_argument("--markdown", action="store_true", help="Markdown output")
+    run_p.add_argument("--html", action="store_true", help="HTML output (self-contained, inline CSS)")
+    run_p.add_argument("--output", dest="output_path", help="Write output to file instead of stdout")
     run_p.add_argument("--since", type=int, default=24, help="Hours to look back for events (default: 24)")
     run_p.add_argument("--limit", type=int, default=50, help="Max events to include (default: 50)")
     run_p.add_argument("--dry-run", action="store_true", help="Do not record delivery")

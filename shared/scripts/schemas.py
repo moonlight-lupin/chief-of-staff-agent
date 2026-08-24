@@ -36,7 +36,8 @@ Record shapes (required fields, then optional fields):
   event:
     required: id (str), title (str), start (ISO 8601 str), end (ISO 8601 str)
     optional: attendees (list[str], default []), organizer (str),
-              location (str), conference_link (str), status (str), source (str)
+              location (str), conference_link (str), event_link (str),
+              status (str), source (str)
 
   file:
     required: id (str), name (str)
@@ -333,6 +334,37 @@ def normalize_workspace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         rec.setdefault("parents", [])
         cleaned["files"].append(rec)
     return cleaned
+
+
+# ── Individual record normalizers ─────────────────────────────────────────
+
+def normalize_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return a normalized message dict with defaults filled."""
+    validate_message(message)
+    rec = dict(message)
+    rec.setdefault("tags", [])
+    return rec
+
+
+def normalize_event(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return a normalized event dict with defaults filled.
+
+    Optional fields (attendees, organizer, location, conference_link,
+    event_link, status, source) are preserved if present; ``attendees``
+    defaults to ``[]``.
+    """
+    validate_event(event)
+    rec = dict(event)
+    rec.setdefault("attendees", [])
+    return rec
+
+
+def normalize_file(file_rec: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return a normalized file dict with defaults filled."""
+    validate_file(file_rec)
+    rec = dict(file_rec)
+    rec.setdefault("parents", [])
+    return rec
 
 
 def generate_id(prefix: str = "deal") -> str:

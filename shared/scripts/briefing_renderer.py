@@ -382,11 +382,250 @@ def render_json(briefing: dict[str, Any]) -> str:
     return json.dumps(briefing, indent=2, ensure_ascii=False, default=str)
 
 
+# ── HTML renderer ─────────────────────────────────────────────────────────
+
+_HTML_STYLE = """\
+:root{--red:#dc2626;--yellow:#f59e0b;--green:#16a34a;--bg:#f8fafc;--card:#fff;--border:#e2e8f0;--text:#1e293b;--muted:#64748b}
+@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;padding:16px}
+.container{max-width:800px;margin:0 auto}
+h1{font-size:1.4rem;margin-bottom:4px}
+.meta{color:var(--muted);font-size:.85rem;margin-bottom:16px}
+.summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:.8rem;font-weight:600}
+.badge-high{background:var(--red);color:#fff}
+.badge-medium{background:var(--yellow);color:#fff}
+.badge-low{background:var(--green);color:#fff}
+.badge-neutral{background:var(--border);color:var(--text)}
+details{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden}
+summary{padding:10px 14px;cursor:pointer;font-weight:600;font-size:.95rem;user-select:none}
+summary:hover{background:var(--border)}
+.body{padding:10px 14px}
+.item{padding:6px 0;border-bottom:1px solid var(--border)}
+.item:last-child{border-bottom:none}
+a{color:#2563eb;text-decoration:none}
+a:hover{text-decoration:underline}
+.btn-join{display:inline-block;padding:3px 10px;border-radius:6px;background:#2563eb;color:#fff!important;font-size:.8rem;margin-left:6px}
+.btn-event{display:inline-block;padding:3px 10px;border-radius:6px;background:var(--border);color:var(--text);font-size:.8rem;margin-left:6px}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font-weight:600}
+.ts{font-family:monospace;font-size:.8rem;color:var(--muted)}
+.footer{margin-top:16px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:.8rem;text-align:center}
+"""
+
+
+def _risk_badge(risk: str) -> str:
+    cls = {"high": "badge-high", "medium": "badge-medium", "low": "badge-low"}.get(risk, "badge-neutral")
+    label = risk.title() if risk else "Info"
+    return f'<span class="badge {cls}">{label}</span>'
+
+
+def _esc(text: str) -> str:
+    import html as _html
+    return _html.escape(str(text)) if text else ""
+
+
+def _link(href: str, label: str, cls: str = "") -> str:
+    if not href:
+        return ""
+    cls_attr = f' class="{cls}"' if cls else ""
+    return f'<a href="{_esc(href)}"{cls_attr}>{_esc(label)}</a>'
+
+
+def _html_needs_attention(items: list) -> str:
+    if not items:
+        return '<p class="muted">Nothing needs attention. All clear.</p>'
+    parts = []
+    for item in items:
+        risk = item.get("risk", "low")
+        title = item.get("title", item.get("summary", "Item"))
+        detail = item.get("detail", "")
+        link = item.get("link")
+        badge = _risk_badge(risk)
+        link_html = f' {_link(link, "Open", "btn-event")}' if link else ""
+        parts.append(f'<div class="item">{badge} <strong>{_esc(title)}</strong>'
+                     f'{" — " + _esc(detail) if detail else ""}{link_html}</div>')
+    return "".join(parts)
+
+
+def _html_pending_approvals(pa: dict) -> str:
+    if not pa:
+        return '<p class="muted">No pending approvals.</p>'
+    parts = []
+    for action_type, actions in pa.items():
+        for a in actions:
+            parts.append(f'<div class="item"><strong>{_esc(action_type)}</strong>: '
+                         f'{_esc(a.get("summary", a.get("id", "")))}</div>')
+    return "".join(parts) if parts else '<p class="muted">No pending approvals.</p>'
+
+
+def _html_calendar(events: list) -> str:
+    if not events:
+        return '<p class="muted">No events in the next 48 hours.</p>'
+    parts = []
+    for ev in events:
+        title = ev.get("title", ev.get("summary", "Event"))
+        start = ev.get("start", "")
+        end = ev.get("end", "")
+        conf = ev.get("conference_link")
+        ev_link = ev.get("event_link")
+        loc = ev.get("location", "")
+        links = ""
+        if ev_link:
+            links += f' {_link(ev_link, "View event", "btn-event")}'
+        if conf:
+            links += f' {_link(conf, "Join", "btn-join")}'
+        parts.append(
+            f'<div class="item"><strong>{_esc(title)}</strong>'
+            f'<br><span class="ts">{_esc(start)} — {_esc(end)}</span>'
+            f'{f"<br>📍 {_esc(loc)}" if loc else ""}'
+            f'{links}</div>'
+        )
+    return "".join(parts)
+
+
+def _html_table(items: list, columns: list[tuple[str, str]]) -> str:
+    if not items:
+        return '<p class="muted">None.</p>'
+    header = "".join(f"<th>{_esc(col)}</th>" for _, col in columns)
+    rows = []
+    for item in items:
+        cells = "".join(f"<td>{_esc(item.get(key, ''))}</td>" for key, _ in columns)
+        rows.append(f"<tr>{cells}</tr>")
+    return f'<table><thead><tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+
+
+def _html_suggestions(items: list) -> str:
+    if not items:
+        return '<p class="muted">No suggestions.</p>'
+    parts = []
+    for item in items:
+        parts.append(f'<div class="item">{_esc(item.get("type", ""))}: '
+                     f'{_esc(item.get("summary", ""))}</div>')
+    return "".join(parts)
+
+
+def _html_section(title: str, content: str, open_by_default: bool = False) -> str:
+    attr = " open" if open_by_default else ""
+    return f'<details{attr}><summary>{_esc(title)}</summary><div class="body">{content}</div></details>'
+
+
+def render_html(briefing: dict[str, Any]) -> str:
+    """Render briefing as a self-contained HTML document.
+
+    Inline CSS only — no external stylesheets or JavaScript.
+    Works in Telegram's in-app browser and any modern browser.
+    """
+    summary = briefing.get("summary", {})
+    sections = briefing.get("sections", {})
+    operator = briefing.get("operator", "Operator")
+    generated = briefing.get("generated_at", "")
+
+    # Summary badges
+    badges = []
+    na_count = summary.get("needs_attention", 0)
+    pa_count = summary.get("pending_approvals", 0)
+    sg_count = summary.get("suggestions", 0)
+    ce_count = summary.get("classified_emails", 0)
+    sw_count = summary.get("system_warnings", 0)
+    if na_count:
+        badges.append(f'<span class="badge badge-high">{na_count} need attention</span>')
+    if pa_count:
+        badges.append(f'<span class="badge badge-medium">{pa_count} pending approvals</span>')
+    if sg_count:
+        badges.append(f'<span class="badge badge-neutral">{sg_count} suggestions</span>')
+    if ce_count:
+        badges.append(f'<span class="badge badge-low">{ce_count} classified emails</span>')
+    if sw_count:
+        badges.append(f'<span class="badge badge-high">{sw_count} warnings</span>')
+    if not badges:
+        badges.append('<span class="badge badge-low">All clear</span>')
+
+    # Build sections
+    sections_html = []
+    na = sections.get("needs_attention", [])
+    if na or na_count:
+        sections_html.append(_html_section("Needs Attention", _html_needs_attention(na), open_by_default=True))
+
+    pa = sections.get("pending_approvals", {})
+    if pa or pa_count:
+        sections_html.append(_html_section("Pending Approvals", _html_pending_approvals(pa)))
+
+    cal = sections.get("calendar_deadlines", [])
+    if cal:
+        sections_html.append(_html_section("Calendar / Deadlines (48h)", _html_calendar(cal), open_by_default=True))
+
+    sna = sections.get("suggested_next_actions", [])
+    if sna or sg_count:
+        sections_html.append(_html_section("Suggested Next Actions", _html_suggestions(sna)))
+
+    eo = sections.get("email_organisation", {})
+    if eo:
+        eo_html = (f'<p>Classified: {eo.get("classified", 0)}'
+                   f'<br>Label suggestions: {eo.get("label_suggestions", 0)}</p>')
+        sections_html.append(_html_section("Email Organisation", eo_html))
+
+    bk = sections.get("bookkeeper", {})
+    if bk:
+        bk_parts = []
+        overdue = bk.get("overdue_ar", [])
+        if overdue:
+            bk_parts.append(_html_table(overdue, [("id", "Invoice"), ("client", "Client"),
+                                                  ("amount", "Amount"), ("currency", "Currency")]))
+        totals = bk.get("outstanding_ar_total", {})
+        if totals:
+            total_str = ", ".join(f"{cur} {amt}" for cur, amt in totals.items())
+            bk_parts.append(f'<p><strong>Outstanding AR:</strong> {_esc(total_str)}</p>')
+        sections_html.append(_html_section("Bookkeeper", "".join(bk_parts) or '<p class="muted">No overdue invoices.</p>'))
+
+    pl = sections.get("pipeline", {})
+    if pl:
+        stale = pl.get("stale_deals", [])
+        if stale:
+            sections_html.append(_html_section("Pipeline", _html_table(
+                stale, [("client_name", "Client"), ("stage", "Stage"), ("stale_days", "Days idle")])))
+        else:
+            sections_html.append(_html_section("Pipeline", '<p class="muted">No stale deals.</p>'))
+
+    sh = sections.get("system_health", {})
+    if sh and sh.get("warnings"):
+        sections_html.append(_html_section("System Health",
+                                           f'<p>{sh["warnings"]} warning(s)</p>'))
+
+    km = sections.get("knowledge_maintenance", {})
+    if km and (km.get("wiki_broken_links") or km.get("total_records")):
+        km_parts = []
+        if km.get("wiki_broken_links"):
+            km_parts.append(f'<p>Broken wiki links: {km["wiki_broken_links"]}</p>')
+        if km.get("total_records"):
+            km_parts.append(f'<p>Memory records: {km["total_records"]} total</p>')
+        sections_html.append(_html_section("Knowledge Maintenance", "".join(km_parts)))
+
+    return (
+        f'<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+        f'<meta charset="utf-8">\n'
+        f'<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        f'<title>Briefing — {_esc(operator)}</title>\n'
+        f'<style>{_HTML_STYLE}</style>\n'
+        f'</head>\n<body>\n<div class="container">\n'
+        f'<h1>Briefing — {_esc(operator)}</h1>\n'
+        f'<p class="meta">{_esc(generated)}</p>\n'
+        f'<div class="summary">{"".join(badges)}</div>\n'
+        f'{"".join(sections_html)}\n'
+        f'<div class="footer">Generated by Chief of Staff · No mutations performed</div>\n'
+        f'</div>\n</body>\n</html>'
+    )
+
+
 def render(briefing: dict[str, Any], fmt: str = "text") -> str:
     """Render briefing in the specified format."""
     if fmt == "json":
         return render_json(briefing)
     elif fmt == "markdown":
         return render_markdown(briefing)
+    elif fmt == "html":
+        return render_html(briefing)
     else:
         return render_text(briefing)

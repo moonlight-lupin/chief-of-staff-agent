@@ -646,6 +646,87 @@ def note_capture_reminder(response: str = "", context: dict = None, **kwargs) ->
     )
 
 
+# ── 10. Attachment Drive Suggestion (post_llm_call) ─────────────────────────
+
+_ATTACHMENT_CATEGORIES = {
+    ".pdf": "document",
+    ".doc": "document", ".docx": "document",
+    ".xls": "spreadsheet", ".xlsx": "spreadsheet",
+    ".ppt": "presentation", ".pptx": "presentation",
+    ".png": "image", ".jpg": "image", ".jpeg": "image",
+    ".webp": "image", ".gif": "image",
+    ".eml": "email export",
+    ".zip": "archive", ".tar": "archive", ".gz": "archive",
+    ".csv": "data",
+    ".txt": "text", ".md": "text",
+}
+
+
+def _classify_attachment(filename: str) -> str:
+    """Classify a file by its extension into a broad category."""
+    ext = Path(filename).suffix.lower() if filename else ""
+    return _ATTACHMENT_CATEGORIES.get(ext, "file")
+
+
+def attachment_drive_suggestion(response: str = "", context: dict = None, **kwargs) -> Optional[str]:
+    """Detect attachments in the conversation and suggest filing to Drive.
+
+    Read-only: never uploads. Returns a suggestion string asking the user
+    for confirmation. Returns None when no attachments are found or when
+    the feature is disabled in company.yaml.
+    """
+    if not context:
+        return None
+
+    # Check if attachment suggestions are enabled
+    config = _load_company_yaml()
+    if config:
+        hooks_cfg = config.get("hooks", {})
+        if hooks_cfg.get("attachment_suggestions") is False:
+            return None
+
+    # Detect attachments from context
+    attachments = context.get("attachments") or context.get("files") or []
+    if not attachments:
+        # Also check for MEDIA: references in the message
+        message = context.get("message", "") or ""
+        if "MEDIA:" not in message:
+            return None
+        # Extract MEDIA: paths
+        import re
+        media_paths = re.findall(r"MEDIA:([^\s]+)", message)
+        if not media_paths:
+            return None
+        attachments = [{"name": Path(p).name, "path": p} for p in media_paths]
+
+    if not attachments:
+        return None
+
+    # Build suggestion for each attachment
+    suggestions = []
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        name = att.get("name") or att.get("filename") or ""
+        if not name:
+            continue
+        category = _classify_attachment(name)
+        suggestions.append(f"  • {name} ({category})")
+
+    if not suggestions:
+        return None
+
+    lines = [
+        "I found the following attachment(s):",
+        *suggestions,
+        "",
+        "Would you like me to file any of these to Google Drive? "
+        "I can classify them and suggest the right folder. "
+        "Just confirm and I'll handle the upload.",
+    ]
+    return "\n".join(lines)
+
+
 # ── Registration helper ──────────────────────────────────────────────────────
 
 ALL_HOOKS = {
@@ -667,12 +748,13 @@ ALL_HOOKS = {
     "post_llm_call": [
         ("format_enforcer", format_enforcer),
         ("note_capture_reminder", note_capture_reminder),
+        ("attachment_drive_suggestion", attachment_drive_suggestion),
     ],
 }
 
 
 def register_all_hooks(ctx):
-    """Register all 9 hooks. Called from __init__.py."""
+    """Register all 10 hooks. Called from __init__.py."""
     for event, hooks in ALL_HOOKS.items():
         for name, callback in hooks:
             try:

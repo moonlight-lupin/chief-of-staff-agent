@@ -493,7 +493,7 @@ class TestHookRegistration:
     def test_all_hooks_defined(self):
         from hooks import ALL_HOOKS
         total = sum(len(hooks) for hooks in ALL_HOOKS.values())
-        assert total == 9
+        assert total == 10
 
     def test_all_events_covered(self):
         from hooks import ALL_HOOKS

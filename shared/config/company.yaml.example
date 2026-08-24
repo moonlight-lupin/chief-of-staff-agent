@@ -80,6 +80,11 @@ delivery:
   weekly_review_time: "17:00"
   timezone: "Asia/Singapore"
   use_client_codes: false      # set true if messages may be seen by others
+  default_format: text         # text | html (html sends as file attachment)
+
+# Hook toggles. Set to false to disable a specific hook.
+hooks:
+  attachment_suggestions: true  # suggest filing user-sent attachments to Drive
 
 # CRM pipeline stages used by Pipeline Manager. Keep names stable once data exists.
 sales_stages:
