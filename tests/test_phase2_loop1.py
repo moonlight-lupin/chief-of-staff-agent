@@ -248,10 +248,15 @@ class TestConcurrencyErrorRetry:
     """
 
     def test_mark_executed_retries_on_conflict(self, temp_project):
-        """mark_executed must retry when _save raises ConcurrencyError."""
+        """mark_executed must succeed via CAS when state matches expected.
+
+        Phase 5: the old _save retry loop is replaced by SQLite row-level
+        CAS (UPDATE ... WHERE id=? AND state=?).  This test now verifies
+        the happy path through the new architecture.
+        """
         from state_db import (
             create_pending_action, approve_pending_action,
-            mark_executing, mark_executed, get_pending_action,
+            mark_executing, mark_executed,
         )
         config, project = temp_project
 
@@ -261,25 +266,10 @@ class TestConcurrencyErrorRetry:
         approve_pending_action(config, action["id"])
         mark_executing(config, action["id"])
 
-        # Simulate a concurrent write that bumps the version between
-        # mark_executed's load and save by patching _save to fail once
-        from state_db import _save
-        original_save = _save
-        call_count = {"n": 0}
+        result = mark_executed(config, action["id"], {"success": True})
 
-        def flaky_save(cfg, data, expected_version=None):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                from state_db import ConcurrencyError
-                raise ConcurrencyError("Simulated concurrent write")
-            return original_save(cfg, data, expected_version=None)
-
-        with patch("state_db._save", side_effect=flaky_save):
-            result = mark_executed(config, action["id"], {"success": True})
-
-        assert result is not None, "mark_executed must retry and succeed"
+        assert result is not None, "mark_executed must succeed"
         assert result["state"] == "executed"
-        assert call_count["n"] >= 2, "Must have retried at least once"
 
     def test_mark_executed_gives_up_after_max_retries(self, temp_project):
         """mark_executed must stop retrying after 3 attempts and not crash."""

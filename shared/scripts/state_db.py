@@ -110,6 +110,32 @@ _PREVIOUS_STATES: dict[str, tuple[str, ...]] = {
     "failed": ("executing",),
 }
 
+# Column names that _cas_update may interpolate into SET clauses.
+_ALLOWED_CAS_COLUMNS: frozenset[str] = frozenset({
+    "type",
+    "provider",
+    "target",
+    "payload",
+    "summary",
+    "state",
+    "risk",
+    "approver",
+    "approval_reason",
+    "created_at",
+    "approved_at",
+    "executing_at",
+    "executed_at",
+    "cancelled_at",
+    "dismissed_at",
+    "expired_at",
+    "failed_at",
+    "cancel_reason",
+    "dismiss_reason",
+    "retry_count",
+    "last_error",
+    "result",
+})
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS kv_stores (
     store_name TEXT NOT NULL,
@@ -903,23 +929,38 @@ class StateDB:
         current = self.get_action(action_id)
         if current is None:
             return None
-        allowed = _PREVIOUS_STATES.get(new_state)
+        requested_state = new_state
+        allowed = _PREVIOUS_STATES.get(requested_state)
         if allowed is not None and current["state"] not in allowed:
             return None
 
-        if new_state == "approved" and current["state"] == "requested" and _is_expired(current):
+        if requested_state == "approved" and current["state"] == "requested" and _is_expired(current):
             self._cas_update(action_id, "requested", "expired", expired_at=_now())
             _audit_action(self.config, current, "expired")
             return None
 
-        if new_state == "executing" and _is_approval_lapsed(current):
+        if requested_state == "executing" and _is_approval_lapsed(current):
             self._cas_update(action_id, "approved", "expired", expired_at=_now())
             _audit_action(self.config, current, "expired", {"reason": "approval_lapsed"})
             return None
 
         extra: dict[str, Any] = {}
         now = _now()
-        if new_state == "approved":
+        if requested_state == "failed":
+            retry_count = int(current.get("retry_count") or 0) + 1
+            extra["retry_count"] = retry_count
+            if "last_error" in fields:
+                extra["last_error"] = fields["last_error"]
+            elif "error" in fields:
+                extra["last_error"] = fields["error"]
+            if retry_count >= MAX_RETRIES:
+                extra["failed_at"] = now
+                new_state = "failed"
+            else:
+                # Below the cap: return to approved for another attempt.
+                # Do not refresh approved_at — keep the original approval.
+                new_state = "approved"
+        elif new_state == "approved":
             extra["approved_at"] = now
             if "approver" in fields:
                 extra["approver"] = fields["approver"]
@@ -946,12 +987,6 @@ class StateDB:
             )
         elif new_state == "expired":
             extra["expired_at"] = now
-        elif new_state == "failed":
-            extra["failed_at"] = now
-            if "last_error" in fields:
-                extra["last_error"] = fields["last_error"]
-            if "retry_count" in fields:
-                extra["retry_count"] = fields["retry_count"]
 
         for key in ("last_error", "retry_count", "result", "executing_at"):
             if key in fields and key not in extra:
@@ -964,6 +999,8 @@ class StateDB:
         if new_state == "approved":
             audit_extra["approver"] = updated.get("approver") or ""
             audit_extra["approval_reason"] = updated.get("approval_reason") or ""
+            if requested_state == "failed":
+                audit_extra["error"] = updated.get("last_error") or ""
         elif new_state == "executed":
             result = updated.get("result") or {}
             audit_extra["result_success"] = result.get("success", False) if isinstance(result, dict) else False
@@ -984,6 +1021,16 @@ class StateDB:
                 action_type=updated.get("type"),
                 provider=updated.get("provider"),
             )
+        elif requested_state == "failed":
+            _log_event(
+                "action_failed",
+                level="warning",
+                component="pending_actions",
+                action_id=action_id,
+                action_type=updated.get("type"),
+                provider=updated.get("provider"),
+                error=updated.get("last_error") or "",
+            )
         return updated
 
     def _cas_update(self, action_id: str, expected_state: str, new_state: str, **fields: Any) -> dict | None:
@@ -991,6 +1038,8 @@ class StateDB:
         sets = ["state=?"]
         params: list[Any] = [new_state]
         for key, value in fields.items():
+            if key not in _ALLOWED_CAS_COLUMNS:
+                raise ValueError(f"Disallowed pending_actions column in CAS update: {key}")
             sets.append(f"{key}=?")
             if key in json_fields:
                 params.append(_dumps(value) if value is not None else None)
@@ -1666,6 +1715,16 @@ def _with_retry(config: Any, mutate_fn: Callable[[Any], T], max_attempts: int = 
     return None
 
 
+def _call_db(config: Any, fn: Callable[[StateDB], T]) -> T | None:
+    """Run ``fn`` against a StateDB, retrying on ConcurrencyError / SQLITE_BUSY."""
+
+    def _mutate(cfg: Any) -> T:
+        with _open_db(cfg) as db:
+            return fn(db)
+
+    return _with_retry(config, _mutate)
+
+
 def _load(config: Any) -> dict[str, Any]:
     """Load pending actions as the legacy ``{actions, _version}`` dict."""
     with _open_db(config) as db:
@@ -1757,60 +1816,18 @@ def create_pending_action(
     approver: str | None = None,
     reason: str | None = None,
 ) -> dict[str, Any] | None:
-    action_id = str(uuid.uuid4())[:12]
-    risk = None
-    if action_type in ("gmail.send", "mail.send"):
-        risk = classify_recipient_risk(target, config)
-    action = {
-        "id": action_id,
-        "type": action_type,
-        "provider": provider,
-        "target": target,
-        "payload": payload if payload is not None else {},
-        "summary": summary or f"{action_type} to {target}",
-        "state": "requested",
-        "created_at": _now(),
-        "approved_at": None,
-        "executing_at": None,
-        "executed_at": None,
-        "cancelled_at": None,
-        "dismissed_at": None,
-        "expired_at": None,
-        "failed_at": None,
-        "result": None,
-        "approver": None,
-        "approval_reason": None,
-        "risk": risk,
-        "retry_count": 0,
-        "last_error": None,
-        "cancel_reason": None,
-        "dismiss_reason": None,
-    }
-
-    def _mutate(cfg: Any) -> dict[str, Any]:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        data["actions"][action_id] = action
-        _save(cfg, data, expected_version=expected_version)
-        return action
-
-    result = _with_retry(config, _mutate)
-    if result is None:
-        return None
-    extra: dict[str, Any] = {"action_id": action_id}
-    if risk:
-        extra["risk_level"] = risk["level"]
-    _audit_action(config, action, "requested", extra)
-    _log_event(
-        "action_requested",
-        level="info",
-        component="pending_actions",
-        action_id=action_id,
-        action_type=action_type,
-        provider=provider,
-        target=target,
+    # approver/reason kept for API compatibility; create_action starts in 'requested'.
+    del approver, reason
+    return _call_db(
+        config,
+        lambda db: db.create_action(
+            type=action_type,
+            provider=provider,
+            target=target,
+            payload=payload,
+            summary=summary,
+        ),
     )
-    return result
 
 
 def list_pending_actions(
@@ -1846,32 +1863,10 @@ def approve_pending_action(
     approver: str | None = None,
     reason: str | None = None,
 ) -> dict[str, Any] | None:
-    def _mutate(cfg: Any) -> dict[str, Any] | None:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        action = data["actions"].get(action_id)
-        if not action or action["state"] != "requested":
-            return None
-        if _is_expired(action):
-            action["state"] = "expired"
-            action["expired_at"] = _now()
-            _save(cfg, data, expected_version=expected_version)
-            return None
-        action["state"] = "approved"
-        action["approved_at"] = _now()
-        action["approver"] = approver
-        action["approval_reason"] = reason
-        _save(cfg, data, expected_version=expected_version)
-        return action
-
-    action = _with_retry(config, _mutate)
-    if action is None:
-        return None
-    _audit_action(
-        config, action, "approved",
-        {"action_id": action_id, "approver": approver or "", "approval_reason": reason or ""},
+    return _call_db(
+        config,
+        lambda db: db.transition_action(action_id, "approved", approver=approver, reason=reason),
     )
-    return action
 
 
 def cancel_pending_action(
@@ -1879,24 +1874,10 @@ def cancel_pending_action(
     action_id: str,
     reason: str | None = None,
 ) -> dict[str, Any] | None:
-    def _mutate(cfg: Any) -> dict[str, Any] | None:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        action = data["actions"].get(action_id)
-        if not action or action["state"] in ("executed", "cancelled", "dismissed"):
-            return None
-        action["state"] = "cancelled"
-        action["cancelled_at"] = _now()
-        if reason:
-            action["cancel_reason"] = reason
-        _save(cfg, data, expected_version=expected_version)
-        return action
-
-    action = _with_retry(config, _mutate)
-    if action is None:
-        return None
-    _audit_action(config, action, "cancelled", {"action_id": action_id, "cancel_reason": reason or ""})
-    return action
+    return _call_db(
+        config,
+        lambda db: db.transition_action(action_id, "cancelled", reason=reason),
+    )
 
 
 def dismiss_pending_action(
@@ -1904,119 +1885,28 @@ def dismiss_pending_action(
     action_id: str,
     reason: str | None = None,
 ) -> dict[str, Any] | None:
-    def _mutate(cfg: Any) -> dict[str, Any] | None:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        action = data["actions"].get(action_id)
-        if not action or action["state"] not in ("requested", "approved", "expired"):
-            return None
-        dismiss_reason = reason if reason is not None else "No dismiss reason provided"
-        action["state"] = "dismissed"
-        action["dismissed_at"] = _now()
-        action["dismiss_reason"] = dismiss_reason
-        _save(cfg, data, expected_version=expected_version)
-        return action
-
-    action = _with_retry(config, _mutate)
-    if action is None:
-        return None
-    _audit_action(
-        config, action, "dismissed",
-        {"action_id": action_id, "dismiss_reason": action.get("dismiss_reason", ""), "reason_missing": reason is None},
+    return _call_db(
+        config,
+        lambda db: db.transition_action(action_id, "dismissed", reason=reason),
     )
-    return action
 
 
 def mark_executing(config: Any, action_id: str) -> dict[str, Any] | None:
-    def _mutate(cfg: Any) -> tuple[dict[str, Any], bool] | None:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        action = data["actions"].get(action_id)
-        if not action or action["state"] != "approved":
-            return None
-        if _is_approval_lapsed(action):
-            action["state"] = "expired"
-            action["expired_at"] = _now()
-            _save(cfg, data, expected_version=expected_version)
-            return action, True
-        action["state"] = "executing"
-        action["executing_at"] = _now()
-        _save(cfg, data, expected_version=expected_version)
-        return action, False
-
-    result = _with_retry(config, _mutate)
-    if result is None:
-        return None
-    action, lapsed = result
-    if lapsed:
-        _audit_action(config, action, "expired", {"action_id": action_id, "reason": "approval_lapsed"})
-        return None
-    _audit_action(config, action, "executing", {"action_id": action_id})
-    return action
+    return _call_db(config, lambda db: db.transition_action(action_id, "executing"))
 
 
 def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
-    def _mutate(cfg: Any) -> dict[str, Any] | None:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        action = data["actions"].get(action_id)
-        if not action or action["state"] != "executing":
-            return None
-        action["state"] = "executed"
-        action["executed_at"] = _now()
-        action["result"] = result
-        _save(cfg, data, expected_version=expected_version)
-        return action
-
-    action = _with_retry(config, _mutate)
-    if action is None:
-        return None
-    _audit_action(
-        config, action, "executed",
-        {"action_id": action_id, "result_success": result.get("success", False), "approver": action.get("approver", "")},
+    return _call_db(
+        config,
+        lambda db: db.transition_action(action_id, "executed", result=result),
     )
-    _log_event(
-        "action_executed",
-        level="info",
-        component="pending_actions",
-        action_id=action_id,
-        action_type=action["type"],
-        provider=action["provider"],
-    )
-    return action
 
 
 def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | None:
-    def _mutate(cfg: Any) -> dict[str, Any] | None:
-        data = _load(cfg)
-        expected_version = data.get("_version", 0)
-        action = data["actions"].get(action_id)
-        if not action or action["state"] != "executing":
-            return None
-        action["retry_count"] = action.get("retry_count", 0) + 1
-        if action["retry_count"] >= MAX_RETRIES:
-            action["state"] = "failed"
-            action["failed_at"] = _now()
-        else:
-            action["state"] = "approved"
-        action["last_error"] = error
-        _save(cfg, data, expected_version=expected_version)
-        return action
-
-    action = _with_retry(config, _mutate)
-    if action is None:
-        return None
-    _audit_action(config, action, "failed", {"action_id": action_id, "error": error})
-    _log_event(
-        "action_failed",
-        level="warning",
-        component="pending_actions",
-        action_id=action_id,
-        action_type=action["type"],
-        provider=action["provider"],
-        error=error,
+    return _call_db(
+        config,
+        lambda db: db.transition_action(action_id, "failed", last_error=error),
     )
-    return action
 
 
 def find_stuck_actions(config: Any, max_minutes: int = 15) -> list[dict[str, Any]]:

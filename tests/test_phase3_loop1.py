@@ -62,49 +62,41 @@ class TestRetryOnAllMutators:
     """
 
     def test_mark_executing_returns_none_on_conflict(self, temp_project):
-        """mark_executing must return None (not raise) on ConcurrencyError."""
+        """mark_executing must return None when CAS fails (state mismatch).
+
+        Phase 5: concurrency is handled by SQLite row-level CAS.
+        If the action state was already changed by another worker,
+        the UPDATE WHERE state=? matches 0 rows and returns None.
+        """
         from state_db import (
             create_pending_action, approve_pending_action,
-            mark_executing, ConcurrencyError,
+            mark_executing,
         )
         config, project = temp_project
 
         action = create_pending_action(
             config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
         )
-        approve_pending_action(config, action["id"])
-
-        with patch("state_db._save",
-                   side_effect=ConcurrencyError("Always fail")):
-            try:
-                result = mark_executing(config, action["id"])
-                # Must return None, not raise
-                assert result is None, "mark_executing must return None on conflict, not raise"
-            except ConcurrencyError:
-                pytest.fail("mark_executing must not propagate ConcurrencyError")
+        # Don't approve — mark_executing expects state='approved', so
+        # CAS will not match and return None.
+        result = mark_executing(config, action["id"])
+        assert result is None, "mark_executing must return None on state mismatch"
 
     def test_create_pending_action_retries_on_conflict(self, temp_project):
-        """create_pending_action must retry on ConcurrencyError."""
-        from state_db import create_pending_action, ConcurrencyError, _save
+        """create_pending_action must succeed under the new CAS architecture.
+
+        Phase 5: create_action uses INSERT (no CAS needed for creation).
+        The old _save retry loop is replaced by direct SQLite INSERT.
+        """
+        from state_db import create_pending_action
         config, project = temp_project
 
-        original_save = _save
-        call_count = {"n": 0}
-
-        def flaky_save(cfg, data, expected_version=None):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise ConcurrencyError("Simulated conflict")
-            return original_save(cfg, data, expected_version=None)
-
-        with patch("state_db._save", side_effect=flaky_save):
-            action = create_pending_action(
-                config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
-            )
+        action = create_pending_action(
+            config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
+        )
 
         assert action is not None
         assert action["state"] == "requested"
-        assert call_count["n"] >= 2
 
     def test_approve_returns_none_on_persistent_conflict(self, temp_project):
         """approve_pending_action must not raise on persistent ConcurrencyError."""

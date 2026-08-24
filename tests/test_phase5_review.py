@@ -411,8 +411,10 @@ def test_cleanup_old_actions_includes_dismissed_and_failed(tmp_path):
 
     failed = db.create_action(type="mail.send", provider="google", target="b@x.com", payload={})
     db.transition_action(failed["id"], "approved", approver="MH")
-    db.transition_action(failed["id"], "executing")
-    db.transition_action(failed["id"], "failed", last_error="boom")
+    # Hit MAX_RETRIES (3) so the action actually reaches "failed" state
+    for _ in range(3):
+        db.transition_action(failed["id"], "executing")
+        db.transition_action(failed["id"], "failed", last_error="boom")
     db.conn.execute(
         "UPDATE pending_actions SET failed_at=? WHERE id=?",
         ("2020-01-01T00:00:00+00:00", failed["id"]),
