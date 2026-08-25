@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.5.1 — Workspace provider routing in context primer
+
+The CoS `company_context_primer` hook now injects a credential routing line
+into every LLM call, scoped to the CoS assistant name and company. This tells
+the agent which workspace provider and credential set to use for CoS work,
+preventing it from defaulting to a personal OAuth token when the service
+account or another provider is the correct one.
+
+### Changes
+
+- **New `_workspace_routing()` function** in `hooks.py` — reads `company.yaml`
+  and builds a provider-specific routing hint:
+  - `google_api`: prefers explicit `google.account_alias`, falls back to SA
+    filename derivation using suffix removal (`removesuffix`-style)
+  - `composio`: uses canonical `_resolve_composio_family()` from
+    `composio_family.py` (handles `one_drive`, `share_point`, `sharepoint`)
+  - `m365`: emits `user_principal` from config
+- **Fixed `_cos_skills_loaded()` guard** — when the runtime does not provide
+  `loaded_skills` (common case), falls back to `_cos_configured()` which checks
+  `company.yaml` for `delegate_email` or `integrations.workspace`. Previously
+  returned `False`, suppressing the primer entirely.
+- **Routing line scoped** to assistant name + company to prevent bleeding into
+  personal-account work. No instance-specific data in code or tests.
+- **16 new tests** — explicit alias, filename derivation, hyphenated suffix,
+  composio underscore toolkits, `company: null` edge case, delegate-only,
+  primer integration, isolated `_cos_configured`, integrations fallback.
+
+### Review
+
+Reviewed by Codex (GPT-5.6 Sol) and Claude Code (Opus) in parallel. All
+BLOCKING and MAJOR findings fixed before merge:
+
+- `account_alias` config field now takes precedence over filename derivation
+- Composio family inference uses canonical resolver (not duplicated logic)
+- `test_cos_configured_true` isolated from gitignored `company.yaml`
+- `company: null` handled with Mapping validation
+- Filename suffix removal uses `endswith()` + slice, not `.replace()`
+- `Mapping` import moved to module level
+
+**Tests:** 58 hook tests pass, 2096 total plugin tests pass.
+**CI:** green on push.
+
 ## v0.5.0 Beta — SQLite WAL state store, HTML briefing, attachment-to-Drive hook
 
 The first release with transactional state persistence and rich-format

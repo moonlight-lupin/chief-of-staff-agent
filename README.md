@@ -8,9 +8,19 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.5.0 beta  
+> **Status:** v0.5.1 
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
+
+---
+
+## 🆕 What's new in v0.5.1
+
+**Workspace provider routing in the context primer.** The CoS hook now injects a credential routing line into every LLM call, scoped to the CoS assistant name and company. This tells the agent which workspace provider and credential set to use for CoS work — preventing it from defaulting to a personal OAuth token when the service account or another provider is the correct one.
+
+- Supports all three providers: `google_api` (prefers `account_alias` config, falls back to SA filename), `composio` (uses canonical family resolver), `m365` (`user_principal`)
+- Fixed the `_cos_skills_loaded` guard to fire the primer when the runtime doesn't provide `loaded_skills` (the common case)
+- No instance-specific data in the injected line — all values derived from `company.yaml`
 
 ---
 
