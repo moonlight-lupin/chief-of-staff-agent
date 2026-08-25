@@ -17,6 +17,7 @@ import yaml
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
+from collections.abc import Mapping as _Mapping
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,15 +66,21 @@ def _cos_skills_loaded(context: dict) -> bool:
     """Check if any chief-of-staff skills are loaded in this session.
 
     The Hermes runtime does not currently pass ``loaded_skills`` to plugin
-    hooks, so this is best-effort: when we genuinely cannot tell (no context,
-    or no ``loaded_skills`` key), default to ``False`` so the CoS persona and
-    context banner are only injected when a CoS skill is confirmed loaded —
-    not on every casual conversation.
+    hooks, so this is best-effort. When ``loaded_skills`` is genuinely absent
+    (not an empty list), fall back to checking whether a company.yaml with a
+    delegate_email exists — if it does, the CoS is configured and the primer
+    should fire. An empty list means the runtime explicitly says no skills are
+    loaded, so we return False as before.
     """
     if not context:
-        return False
-    loaded = context.get("loaded_skills", [])
+        # No context at all — fall back to company.yaml presence
+        return _cos_configured()
+    loaded = context.get("loaded_skills")
+    if loaded is None:
+        # Runtime did not provide loaded_skills — fall back to config
+        return _cos_configured()
     if not loaded:
+        # Explicitly empty list — runtime says no skills loaded
         return False
     cos_skills = {
         "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
@@ -85,6 +92,24 @@ def _cos_skills_loaded(context: dict) -> bool:
         "chief-of-staff:todo-list", "chief-of-staff:calendar-manager",
     }
     return any(s in cos_skills for s in loaded)
+
+
+def _cos_configured() -> bool:
+    """Check if a CoS company.yaml with a delegate_email is configured.
+
+    Used as a fallback when the runtime does not pass ``loaded_skills``.
+    """
+    config = _load_company_yaml()
+    if not config:
+        return False
+    google_cfg = config.get("google", {})
+    if isinstance(google_cfg, dict) and google_cfg.get("delegate_email"):
+        return True
+    # Also accept composio or m365 config as evidence CoS is set up
+    integrations = config.get("integrations", {})
+    if isinstance(integrations, dict) and integrations.get("workspace"):
+        return True
+    return False
 
 
 _CONTEXT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._&'()+,/-]{0,63}$")
@@ -175,6 +200,14 @@ def company_context_primer(context: dict = None, **kwargs) -> Optional[str]:
                 ccy = config.get("company", {}).get("currency", "SGD")
                 parts.append(f"AR outstanding: {ccy} {total:,.0f}")
 
+    # Workspace provider routing — tell the agent which credential set to use
+    # for CoS/company work, scoped to this CoS and company only. This prevents
+    # the agent from defaulting to personal OAuth tokens when the CoS service
+    # account or another provider is the correct one.
+    routing = _workspace_routing(config)
+    if routing:
+        parts.append(routing)
+
     if parts:
         strip = f"[CoS Context] {' | '.join(parts)}"
         # If the operator has configured a distinctive assistant name, lead with
@@ -185,6 +218,91 @@ def company_context_primer(context: dict = None, **kwargs) -> Optional[str]:
         if aname and not is_default_assistant_name(aname):
             strip = f"You are {aname}, the operator's Chief of Staff. {strip}"
         return strip
+    return None
+
+
+def _workspace_routing(config: dict) -> Optional[str]:
+    """Build a provider-specific routing hint from company.yaml.
+
+    Returns a short string that tells the agent which credential set to use
+    for this CoS/company's workspace operations. Scoped to the CoS assistant
+    name and company so it does not bleed into personal-account work.
+
+    Supports all three providers:
+      - google_api: ``google_api.py --account <alias> --as <delegate_email>``
+      - composio:   MCP toolkit family (google/microsoft)
+      - m365:       user_principal
+    """
+    # Determine active provider (defaults to google_api)
+    integrations = config.get("integrations", {})
+    if not isinstance(integrations, _Mapping):
+        integrations = {}
+    workspace_cfg = integrations.get("workspace", {})
+    if not isinstance(workspace_cfg, _Mapping):
+        workspace_cfg = {}
+    provider = str(workspace_cfg.get("provider", "google_api") or "google_api")
+
+    # Assistant name and company for scoping
+    assistant = config.get("assistant", {})
+    aname = ""
+    if isinstance(assistant, dict):
+        aname = _safe_context_name(assistant.get("name")) or ""
+    company_cfg = config.get("company", {})
+    company_name = ""
+    if isinstance(company_cfg, _Mapping):
+        company_name = str(company_cfg.get("name", "") or "")
+    if aname and company_name:
+        scope_label = f"{aname} ({company_name})"
+    elif aname:
+        scope_label = aname
+    else:
+        scope_label = company_name
+
+    if provider == "google_api":
+        google_cfg = config.get("google", {})
+        if not isinstance(google_cfg, _Mapping):
+            return None
+        delegate = str(google_cfg.get("delegate_email", "")).strip()
+        sa_path = str(google_cfg.get("service_account_path", ""))
+        # Prefer explicit account_alias from config (matches google_workspace.py).
+        # Fall back to deriving from the SA filename stem.
+        account = str(google_cfg.get("account_alias", "")).strip()
+        if not account and sa_path:
+            sa_stem = Path(sa_path).stem.lower()
+            for suffix in ("_service_account", "-service-account", "-service_account", "_service-account"):
+                if sa_stem.endswith(suffix):
+                    sa_stem = sa_stem[: -len(suffix)]
+                    break
+            if sa_stem and sa_stem != "service_account" and sa_stem != "service-account":
+                account = sa_stem
+        if account and delegate:
+            return (f"Workspace(google_api): for {scope_label}, "
+                    f"use google_api.py --account {account} --as {delegate}")
+        elif delegate:
+            return (f"Workspace(google_api): for {scope_label}, "
+                    f"delegate={delegate}")
+        return None
+
+    elif provider == "composio":
+        try:
+            from composio_family import _resolve_composio_family
+            family = _resolve_composio_family(workspace_cfg, warn=False)
+        except ImportError:
+            # Fallback if composio_family module is unavailable
+            family = str(workspace_cfg.get("family", "")) or "google"
+        return (f"Workspace(composio): for {scope_label}, "
+                f"family={family}")
+
+    elif provider == "m365":
+        m365_cfg = config.get("m365", {})
+        if not isinstance(m365_cfg, _Mapping):
+            return None
+        upn = str(m365_cfg.get("user_principal", "")).strip()
+        if upn:
+            return (f"Workspace(m365): for {scope_label}, "
+                    f"user_principal={upn}")
+        return None
+
     return None
 
 

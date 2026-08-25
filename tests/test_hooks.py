@@ -473,8 +473,11 @@ class TestHelpers:
     def test_cos_skills_loaded_without_cos_skill(self, no_cos_context):
         assert _cos_skills_loaded(no_cos_context) is False
 
-    def test_cos_skills_loaded_empty_context(self, empty_context):
-        # Empty context defaults to False — persona only when CoS skill confirmed
+    def test_cos_skills_loaded_empty_context(self, empty_context, monkeypatch):
+        # Empty context falls back to company.yaml presence.
+        # With a configured delegate_email the primer should fire.
+        # Without company.yaml it returns False.
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", "/nonexistent/path/company.yaml")
         assert _cos_skills_loaded(empty_context) is False
 
     def test_load_company_yaml_returns_dict(self, tmp_config):
@@ -485,6 +488,194 @@ class TestHelpers:
     def test_load_company_yaml_missing_returns_none(self, monkeypatch):
         monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", "/nonexistent.yaml")
         assert _load_company_yaml() is None
+
+    def test_workspace_routing_google_api_explicit_alias(self):
+        """Explicit account_alias takes precedence over filename derivation."""
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "google": {
+                "service_account_path": "~/.hermes/secrets/acme_service_account.json",
+                "delegate_email": "user@test.com",
+                "account_alias": "acme-advisory"
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "--account acme-advisory" in result
+        assert "--as user@test.com" in result
+
+    def test_workspace_routing_google_api_derives_alias_from_filename(self):
+        """When account_alias is absent, derive from SA filename stem."""
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "google": {
+                "service_account_path": "~/.hermes/secrets/acme_service_account.json",
+                "delegate_email": "user@test.com"
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "--account acme" in result
+        assert "--as user@test.com" in result
+
+    def test_workspace_routing_google_api_hyphenated_suffix(self):
+        """Hyphenated SA filename (acme-google-service-account.json) derives correctly."""
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "google": {
+                "service_account_path": "~/.hermes/secrets/acme-google-service-account.json",
+                "delegate_email": "user@test.com"
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "--account acme-google" in result
+
+    def test_workspace_routing_composio_google(self):
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "integrations": {
+                "workspace": {
+                    "provider": "composio",
+                    "toolkits": ["gmail", "googlecalendar"]
+                }
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "composio" in result
+        assert "family=google" in result
+
+    def test_workspace_routing_composio_microsoft(self):
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "integrations": {
+                "workspace": {
+                    "provider": "composio",
+                    "toolkits": ["outlook", "onedrive"]
+                }
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "composio" in result
+        assert "family=microsoft" in result
+
+    def test_workspace_routing_composio_microsoft_underscore(self):
+        """Canonical Microsoft toolkit names (one_drive, share_point) are detected."""
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "integrations": {
+                "workspace": {
+                    "provider": "composio",
+                    "toolkits": ["one_drive", "share_point"]
+                }
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "family=microsoft" in result
+
+    def test_workspace_routing_m365(self):
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "m365": {"user_principal": "user@test.com"},
+            "integrations": {"workspace": {"provider": "m365"}}
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "m365" in result
+        assert "user@test.com" in result
+
+    def test_workspace_routing_none_when_no_config(self):
+        from hooks import _workspace_routing
+        result = _workspace_routing({})
+        assert result is None
+
+    def test_workspace_routing_company_null(self):
+        """company: null in YAML should not raise — returns routing without company name."""
+        from hooks import _workspace_routing
+        config = {
+            "company": None,
+            "assistant": {"name": "Bot"},
+            "google": {
+                "service_account_path": "~/.hermes/secrets/acme_service_account.json",
+                "delegate_email": "user@test.com"
+            }
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "user@test.com" in result
+
+    def test_workspace_routing_delegate_only(self):
+        """Google config with delegate but no SA path emits delegate-only form."""
+        from hooks import _workspace_routing
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "google": {"delegate_email": "user@test.com"}
+        }
+        result = _workspace_routing(config)
+        assert result is not None
+        assert "delegate=user@test.com" in result
+
+    def test_workspace_routing_in_primer_output(self):
+        """Routing line appears in company_context_primer output."""
+        from hooks import _workspace_routing, company_context_primer
+        # Use tmp_config fixture path via monkeypatch
+        config = {
+            "company": {"name": "Test Co"},
+            "assistant": {"name": "Bot"},
+            "google": {
+                "service_account_path": "~/.hermes/secrets/acme_service_account.json",
+                "delegate_email": "user@test.com"
+            },
+            "paths": {"project_root": "/nonexistent"}
+        }
+        routing = _workspace_routing(config)
+        assert routing is not None
+        assert "Workspace(google_api)" in routing
+
+    def test_cos_configured_true(self, tmp_path, monkeypatch):
+        """Isolated test — does not depend on live company.yaml."""
+        from hooks import _cos_configured
+        config = tmp_path / "company.yaml"
+        config.write_text(
+            "company:\n  name: Test Co\n"
+            "google:\n  delegate_email: user@test.com\n"
+        )
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config))
+        assert _cos_configured() is True
+
+    def test_cos_configured_false(self, monkeypatch):
+        from hooks import _cos_configured
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", "/nonexistent.yaml")
+        assert _cos_configured() is False
+
+    def test_cos_configured_via_integrations(self, tmp_path, monkeypatch):
+        """CoS is configured when integrations.workspace exists (composio/m365)."""
+        from hooks import _cos_configured
+        config = tmp_path / "company.yaml"
+        config.write_text(
+            "company:\n  name: Test Co\n"
+            "integrations:\n  workspace:\n    provider: composio\n"
+        )
+        monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(config))
+        assert _cos_configured() is True
 
 
 # ── Registration test ────────────────────────────────────────────────────────
