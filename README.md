@@ -14,30 +14,6 @@ It watches, prioritises, prepares, and proposes. **You approve. It executes. Eve
 
 ---
 
-## 🆕 What's new in v0.5.4
-
-**Wiki bootstrap passes its own lint, and headless runs stop half-running.** Two items from the live deployment: a fresh onboarding seeded the wiki with files that `wiki_curator lint` immediately rejected — every new install started at 3 ERRORs and daily briefings showed `wiki: error=3` until hand-fixed — and cron-driven agents resolved bare `python` to system Python, producing false "missing dependency" doctor findings while all packages sat in the plugin's own `.venv`.
-
-- **Lint-clean seeds** — `purpose.md` and `SCHEMA.md` now carry frontmatter and onboarding writes an `index.md`; a fresh install reports `OK: no wiki structure issues found`. Titles are JSON-quoted, so company names with `:`, `#`, or quotes round-trip safely (adversarial regression tests included)
-- **`run.sh` entrypoint** — schedulers exec `.venv/bin/python` unambiguously; if the venv is missing it exits 127 with a remediation line instead of half-running under system Python
-- **Scheduled-run orientation** — new `CLAUDE.md` section: cron runs read `capabilities` + the relevant skill doc only, skip doctor/CHANGELOG re-reads when provider state is unchanged (~45s saved per briefing cycle on the live Pi 5 install)
-- Audited end-to-end: red contract tests → two-lane review (Codex GPT-5.6 Sol + Cursor Grok 4.6; one BLOCKING YAML-quoting bug found and fixed), 2118 tests passing
-
----
-
-## 🆕 What's new in v0.5.3
-
-**Field-tested Composio hardening — larger mail searches stop failing as "malformed".** A live deployment hit a deterministic failure: with Composio's default verbose payload mode, bigger Gmail search result sets get their body offloaded to a side channel, which the strict-response adapter refuses as malformed rather than fabricating an empty mailbox. CoS now reads mail with lean metadata arguments (snippets, never full MIME), so the offload never triggers — and if a provider change ever does offload a response, the error names the exact cause and the refetch fix instead of a generic malformation.
-
-- **Lean reads by default** — `mail_search` pins `include_payload=false, verbose=false` on the Google family; larger result sets stay inline
-- **Named offload error** — an offloaded response raises an error that says "offloaded to data_preview … refetch with leaner args", not a generic malformed-response message
-- **Direct-slug reads documented** — the workspace access ladder now says: known slugs call `COMPOSIO_MULTI_EXECUTE_TOOL` directly (batched); `COMPOSIO_SEARCH_TOOLS` discovery is a fallback for unknown/renamed slugs
-- **Source-trust rule** — when the daily pipeline marks a source `unavailable` but a direct read of the same source succeeds, trust the records and disclose the gap rather than failing closed
-- **Hermetic tests** — the no-key subprocess tests can no longer silently pass through a production API key loaded from `.env`
-- Audited end-to-end: red contract tests → Codex 2-round review (2 MAJOR fixed, re-verified RESOLVED), 2107 tests passing, CI green on Python 3.11 + 3.12
-
----
-
 ## 🤖 Easiest install: ask your agent
 
 Chief of Staff is built to be agent-operated — every setup step is a CLI with machine-readable output, a readiness go/no-go, and self-diagnosis on failure. So the simplest install is to paste this to your agent (Hermes, OpenClaw, Claude Code, …):
