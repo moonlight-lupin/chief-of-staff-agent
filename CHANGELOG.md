@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.5.2 — Meet-link creation + follow-up invite email on calendar.create
+
+`calendar.create` under the `google_api` provider now runs entirely through
+the service-account REST API: the event is inserted with
+`conferenceDataVersion=1` so Google generates a Meet link, and a follow-up
+invite email is sent to every attendee with the event details and Meet URL.
+Service-account-created calendar events do not reliably email invitations,
+so the explicit follow-up is the dependable path — the email lands in the
+organizer's Gmail Sent folder and is verified there.
+
+### Changes
+
+- **REST-based insert** — `calendar_create` replaces the `google_api.py` CLI
+  subprocess with a direct Calendar API `events.insert` (SA + domain-wide
+  delegation), requesting `conferenceDataVersion=1` and reading back
+  `hangoutLink`.
+- **Follow-up invite email** — after a confirmed insert, a MIME invite
+  (event title, time range, Meet link) is sent from the delegate address to
+  each attendee via `users.messages.send`. Partial failure (some attendee
+  emails delivered, some not) returns a success result carrying the error,
+  never raises past the event insert.
+- **Typeahead for failure** — attendee and delegate addresses are validated
+  with `email.utils.parseaddr` and titles/delegates/attendees are rejected
+  when they contain CR/LF (header-injection guard) BEFORE the calendar
+  insert happens; naive datetime strings (a `T` with no `Z`/offset) are
+  rejected with a clear message; date-only strings keep the existing
+  10:00 UTC default.
+- **`CalendarInsertError`** — a typed `RuntimeError` subclass raised for all
+  insert-path failures (HTTP ≥ 400, credential, network) so callers can
+  catch precisely. `calendar_actions.py` catches it and prints a structured
+  failure JSON with exit 1 instead of a traceback.
+- **Pending-conference guard** — if the insert response reports
+  `statusCode: pending` for the Meet-link creation request and no
+  `hangoutLink` is present, the invite email is skipped and the result
+  records the reason (partial success).
+- **Exception propagation without shared state** — the guarded contract
+  wrapper re-raises from the result's error prefix, with an
+  `action_blocked` passthrough for guardrail refusals; the earlier
+  instance-attribute stash design (from mid-development) was removed after
+  re-review found it race-prone (two overlapping calls could consume each
+  other's stored exception, and a stale error could poison the next call).
+- **Tests** — 5 contract tests (Meet link generated, invite sent, partial
+  failure, no-attendee skip, 403 propagation) written red-first and kept
+  green across every subsequent refactor; 2 stale mocks updated; regression
+  test pinning the blocked-then-succeed sequence (no stale error leakage);
+  full suite 2104 passing.
+
+### Review
+
+Three Codex (GPT-5.6 Sol) review-fix rounds before ship:
+
+| Round | Findings | Outcome |
+|---|---|---|
+| R1 | 1 BLOCKING + 7 MAJOR + 3 MINOR | all fixed |
+| R2 | 1 MAJOR (shared-mutable exception stash) | removed, regression test added |
+| R3 | — | **APPROVE** |
+
+CI green on Python 3.11 + 3.12; installed plugin synced and doctor-clean.
+
 ## v0.5.1 — Workspace provider routing in context primer
 
 The CoS `company_context_primer` hook now injects a credential routing line
