@@ -212,7 +212,16 @@ class TestGoogleFamilyByteForByte:
         assert len(result) == 1 and result[0]["subject"] == "T"  # raw passthrough, NOT normalized
         tools = mock.call_tool.call_args[0][1]["tools"]
         assert tools[0]["tool_slug"] == "GMAIL_FETCH_EMAILS"
-        assert tools[0]["arguments"] == {"query": "is:unread", "max_results": 5}
+        # Lean args are a contract (field briefing 2026-08-29): with Composio's
+        # default include_payload=true/verbose=true, larger result sets get the
+        # body offloaded to data_preview (data=None), which _validate_read_payload
+        # rejects as malformed. Briefing/triage needs metadata + snippets only.
+        assert tools[0]["arguments"] == {
+            "query": "is:unread",
+            "max_results": 5,
+            "include_payload": False,
+            "verbose": False,
+        }
 
     def test_calendar_create_uses_google_args(self, mcp_key, tmp_project):
         client = self._client()

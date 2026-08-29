@@ -154,6 +154,17 @@ class TestComposioMCPGmail:
         assert len(result) == 1
         mock_mcp.call_tool.assert_called_once()
         assert mock_mcp.call_tool.call_args[0][0] == "COMPOSIO_MULTI_EXECUTE_TOOL"
+        # Lean args are a contract (field briefing 2026-08-29): with Composio's
+        # default include_payload=true/verbose=true, larger result sets get the
+        # body offloaded to data_preview (data=None), which _validate_read_payload
+        # rejects as malformed. Briefing/triage needs metadata + snippets only.
+        tools_arg = mock_mcp.call_tool.call_args[0][1]["tools"]
+        assert tools_arg[0]["arguments"] == {
+            "query": "is:unread",
+            "max_results": 5,
+            "include_payload": False,
+            "verbose": False,
+        }
 
     def test_gmail_search_raises_composio_read_error_on_failure(
         self, composio_config, mcp_key, tmp_project_dir,

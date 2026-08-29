@@ -26,6 +26,28 @@ def run_connect(*args, config_path=None):
     return result.returncode, result.stdout, result.stderr
 
 
+def run_connect_hermetic(*args, config_path=None, env_overrides=None):
+    """Run connect_workspace.py in a subprocess with COMPOSIO_MCP_KEY scrubbed.
+
+    Field briefing 2026-08-29: connect_workspace.py auto-loads the plugin-root
+    .env, so on any deployment where COMPOSIO_MCP_KEY is legitimately set (the
+    normal configured state) the "missing-key" tests silently pass through the
+    production key path and assert the wrong branch. This runner deletes the
+    variable from the subprocess environment so the no-key branch is exercised
+    hermetically, regardless of the operator's local configuration.
+    """
+    cmd = [sys.executable, str(SCRIPT), *args]
+    if config_path:
+        cmd += ["--config", str(config_path)]
+    env = os.environ.copy()
+    env.pop("COMPOSIO_MCP_KEY", None)
+    env.pop("COMPOSIO_API_KEY", None)
+    if env_overrides:
+        env.update(env_overrides)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+    return result.returncode, result.stdout, result.stderr
+
+
 @pytest.fixture
 def composio_config_file():
     with tempfile.TemporaryDirectory() as d:
@@ -137,3 +159,45 @@ class TestConnectWorkspaceComposio:
         # Should fail since no session exists
         assert rc == 1
         assert "session" in out.lower() or "connect" in out.lower()
+
+    def test_connect_gmail_without_api_key_hermetic(self, composio_config_file):
+        """No-key branch must hold even when the operator's .env sets the key.
+
+        Field briefing 2026-08-29: connect_workspace.py auto-loads the
+        plugin-root .env. When COMPOSIO_MCP_KEY is set there (normal
+        configured state), the non-hermetic variant of this test passes
+        through the production key path and asserts the wrong branch.
+        This variant scrubs the key from the subprocess env AND points the
+        config at a guaranteed-unset key_env, so the missing-key refusal is
+        what is actually under test.
+        """
+        hermetic_cfg = composio_config_file.with_name("company_hermetic.yaml")
+        hermetic_cfg.write_text(
+            composio_config_file.read_text().replace(
+                "COMPOSIO_MCP_KEY", "COMPOSIO_TEST_KEY_NOT_SET"
+            )
+        )
+        rc, out, err = run_connect_hermetic(
+            "--provider", "composio", "--connect", "gmail", config_path=hermetic_cfg
+        )
+        assert rc == 1
+        assert "COMPOSIO_TEST_KEY_NOT_SET" in out
+
+    def test_mcp_url_without_session_hermetic(self, composio_config_file):
+        """--mcp-url with no key available must refuse with the key env named.
+
+        Same hermeticity concern as above: without scrubbing, a production
+        key in .env lets --mcp-url proceed to initialize() and the test
+        asserts the wrong branch.
+        """
+        hermetic_cfg = composio_config_file.with_name("company_hermetic.yaml")
+        hermetic_cfg.write_text(
+            composio_config_file.read_text().replace(
+                "COMPOSIO_MCP_KEY", "COMPOSIO_TEST_KEY_NOT_SET"
+            )
+        )
+        rc, out, err = run_connect_hermetic(
+            "--provider", "composio", "--mcp-url", config_path=hermetic_cfg
+        )
+        assert rc == 1
+        assert "COMPOSIO_TEST_KEY_NOT_SET" in out
