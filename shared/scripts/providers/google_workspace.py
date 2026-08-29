@@ -50,7 +50,7 @@ _DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 
 
 class CalendarInsertError(RuntimeError):
-    """Raised when Calendar events.insert (or a prerequisite) fails."""
+    """Insert-path failure inside calendar_create (REST/credential/validation)."""
 
 
 def _reject_crlf(value: str, kind: str) -> str:
@@ -96,7 +96,8 @@ def _raise_if_naive_datetimelike(value: str, arg_name: str) -> None:
         return
     if parsed.tzinfo is None:
         raise CalendarInsertError(
-            f"{arg_name}={text!r} must include a UTC offset or Z"
+            f"Calendar events.insert failed: naive datetime {arg_name!r} "
+            f"{text!r} requires a UTC offset or Z"
         )
 
 
@@ -409,15 +410,13 @@ def _calendar_create_contract(fn):
         result = fn(self, *args, **kwargs)
         if not isinstance(result, dict):
             return result
-        stored = getattr(self, "_pending_calendar_insert_error", None)
-        if stored is not None:
-            self._pending_calendar_insert_error = None
         err = result.get("error") or ""
-        if result.get("success") is False:
-            if isinstance(stored, CalendarInsertError):
-                raise stored
-            if "Calendar events.insert failed" in err:
-                raise CalendarInsertError(err)
+        # Re-raise insert-path failures only. Guardrail blocks
+        # ("cancelled by guardrail ...") are not insert failures.
+        if result.get("success") is False and err.startswith(
+            "Calendar events.insert failed"
+        ):
+            raise CalendarInsertError(err)
         data = result.get("data")
         if (
             result.get("success") is True
@@ -646,12 +645,8 @@ class GoogleWorkspaceClient(WorkspaceClient):
             start = f"{start}T10:00:00Z"
         if "T" not in end:
             end = f"{end}T11:00:00Z"
-        try:
-            _raise_if_naive_datetimelike(start, "start")
-            _raise_if_naive_datetimelike(end, "end")
-        except CalendarInsertError as exc:
-            self._pending_calendar_insert_error = exc
-            raise
+        _raise_if_naive_datetimelike(start, "start")
+        _raise_if_naive_datetimelike(end, "end")
         google_cfg = (
             self.config.get("google", {})
             if isinstance(self.config, Mapping)
@@ -678,15 +673,14 @@ class GoogleWorkspaceClient(WorkspaceClient):
                 attendees=attendees,
                 description=description,
             )
-        except CalendarInsertError as exc:
-            self._pending_calendar_insert_error = exc
+        except CalendarInsertError:
             raise
         except RuntimeError:
             raise
         except Exception as exc:
-            wrapped = CalendarInsertError(f"Calendar events.insert failed: {exc}")
-            self._pending_calendar_insert_error = wrapped
-            raise wrapped from exc
+            raise CalendarInsertError(
+                f"Calendar events.insert failed: {exc}"
+            ) from exc
 
     @guarded("calendar.update", target_arg="event_id", audit_provider="google_api")
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:

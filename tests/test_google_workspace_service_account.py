@@ -184,6 +184,45 @@ class TestWriteGuardrails:
         assert result["success"] is False
         mock_create.assert_not_called()
 
+    def test_blocked_calendar_create_does_not_stale_insert_error(self, google_client):
+        """A guardrail block is not an insert failure: it must return
+        success=False without raising, and a later successful create on the
+        same client must not raise a stale CalendarInsertError."""
+        from providers.google_workspace import CalendarInsertError
+
+        with patch("workspace_guardrails.confirm_action", return_value=False), patch(
+            "providers.google_workspace._calendar_create_via_service_account"
+        ) as mock_create:
+            try:
+                result = google_client.calendar_create(
+                    "Sync", "2026-07-10", "2026-07-10"
+                )
+            except CalendarInsertError:
+                pytest.fail(
+                    "blocked calendar_create must not raise CalendarInsertError"
+                )
+        assert result["success"] is False
+        assert not (result.get("error") or "").startswith("Calendar events.insert failed")
+        mock_create.assert_not_called()
+        assert not hasattr(google_client, "_pending_calendar_insert_error")
+
+        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account",
+            return_value={"id": "e1", "hangoutLink": None},
+        ):
+            try:
+                result = google_client.calendar_create(
+                    "Sync", "2026-07-10", "2026-07-10"
+                )
+            except CalendarInsertError:
+                pytest.fail(
+                    "successful calendar_create must not raise a stale "
+                    "CalendarInsertError"
+                )
+        assert result["success"] is True
+        assert result["action"] == "calendar.create"
+
     def test_calendar_create_proceeds_with_auto_approve(self, google_client):
         """calendar.create goes through SA REST (events.insert + invite), not
         the google_api.py CLI _run path — patch the REST helper like the
