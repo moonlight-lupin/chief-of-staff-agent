@@ -21,7 +21,7 @@ organizer's Gmail Sent folder and is verified there.
   each attendee via `users.messages.send`. Partial failure (some attendee
   emails delivered, some not) returns a success result carrying the error,
   never raises past the event insert.
-- **Typeahead for failure** — attendee and delegate addresses are validated
+- **Fail-fast validation** — attendee and delegate addresses are validated
   with `email.utils.parseaddr` and titles/delegates/attendees are rejected
   when they contain CR/LF (header-injection guard) BEFORE the calendar
   insert happens; naive datetime strings (a `T` with no `Z`/offset) are

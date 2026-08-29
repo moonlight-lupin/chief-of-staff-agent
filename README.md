@@ -19,7 +19,7 @@ It watches, prioritises, prepares, and proposes. **You approve. It executes. Eve
 **Calendar events with Meet links — and the invite email that actually arrives.** `calendar.create` under the `google_api` provider now inserts events through the service-account REST API with Google Meet conferencing auto-generated, then follows up by sending each attendee an invite email with the event details and Meet URL. Service-account events don't reliably email invitations on their own; CoS now does it explicitly, so the invite lands in attendees' inboxes and a copy sits in the organizer's Gmail Sent folder where you can see it.
 
 - **Meet links by default** — `conferenceDataVersion=1` on insert, `hangoutLink` read back and included in the result
-- **Failure typeahead** — attendee emails, delegate, and title are validated (format + header-injection) *before* anything is created; naive datetimes (`T` without an offset) are rejected with a clear message
+- **Fail-fast validation** — attendee emails, delegate, and title are validated (format + header-injection) *before* anything is created; naive datetimes (`T` without an offset) are rejected with a clear message
 - **Typed errors** — insert-path failures raise `CalendarInsertError` (a `RuntimeError` subclass); the `calendar` CLI prints structured failure JSON and exits 1 instead of a traceback; guardrail refusals pass through untouched
 - **Pending-conference guard** — if Google is still creating the Meet link, the invite email is skipped and the reason returned (partial success, event still created)
 - Audited end-to-end: 3 Codex review rounds (1 BLOCKING + 8 MAJOR fixed), 2104 tests passing, CI green on Python 3.11 + 3.12
