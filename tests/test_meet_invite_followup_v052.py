@@ -131,7 +131,7 @@ class TestMeetInviteFollowUp:
 
         send_calls = [c for c in calls if c["url"] == GMAIL_SEND_URL]
         assert len(send_calls) == 1
-        raw = send_calls[0]["json"]["message"]["raw"]
+        raw = send_calls[0]["json"]["raw"]  # messages.send takes the Message resource directly
         mime_text = _decode_raw(raw)
         assert "https://meet.google.com/abc-defg-hij" in mime_text
         assert "cliftonteo@example.com" in mime_text
@@ -233,7 +233,7 @@ class TestMeetInviteFollowUp:
             )
         send_calls = [c for c in calls if c["url"] == GMAIL_SEND_URL]
         assert len(send_calls) == 1
-        raw = send_calls[0]["json"]["message"]["raw"]
+        raw = send_calls[0]["json"]["raw"]  # messages.send takes the Message resource directly
         body = _decode_raw(raw)
         assert "Spec review" in body
         assert "https://meet.google.com/bdy-link-x1" in body
