@@ -8,9 +8,20 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.5.3 
+> **Status:** v0.5.4
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
+
+---
+
+## 🆕 What's new in v0.5.4
+
+**Wiki bootstrap passes its own lint, and headless runs stop half-running.** Two items from the live deployment: a fresh onboarding seeded the wiki with files that `wiki_curator lint` immediately rejected — every new install started at 3 ERRORs and daily briefings showed `wiki: error=3` until hand-fixed — and cron-driven agents resolved bare `python` to system Python, producing false "missing dependency" doctor findings while all packages sat in the plugin's own `.venv`.
+
+- **Lint-clean seeds** — `purpose.md` and `SCHEMA.md` now carry frontmatter and onboarding writes an `index.md`; a fresh install reports `OK: no wiki structure issues found`. Titles are JSON-quoted, so company names with `:`, `#`, or quotes round-trip safely (adversarial regression tests included)
+- **`run.sh` entrypoint** — schedulers exec `.venv/bin/python` unambiguously; if the venv is missing it exits 127 with a remediation line instead of half-running under system Python
+- **Scheduled-run orientation** — new `CLAUDE.md` section: cron runs read `capabilities` + the relevant skill doc only, skip doctor/CHANGELOG re-reads when provider state is unchanged (~45s saved per briefing cycle on the live Pi 5 install)
+- Audited end-to-end: red contract tests → two-lane review (Codex GPT-5.6 Sol + Cursor Grok 4.6; one BLOCKING YAML-quoting bug found and fixed), 2118 tests passing
 
 ---
 
