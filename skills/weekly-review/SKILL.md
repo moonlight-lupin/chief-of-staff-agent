@@ -63,10 +63,10 @@ Minimum required local files are resolved from `shared/config/company.yaml`:
 Google Calendar and Drive access go through the shared `WorkspaceClient` layer:
 
 ```bash
-python skills/weekly-review/scripts/workspace_collect.py all --week-start 2026-07-06
-python skills/weekly-review/scripts/workspace_collect.py gmail --query "is:unread"
-python skills/weekly-review/scripts/workspace_collect.py calendar --start 2026-07-06 --end 2026-07-10
-python skills/weekly-review/scripts/workspace_collect.py drive --query ""
+.venv/bin/python skills/weekly-review/scripts/workspace_collect.py all --week-start 2026-07-06
+.venv/bin/python skills/weekly-review/scripts/workspace_collect.py gmail --query "is:unread"
+.venv/bin/python skills/weekly-review/scripts/workspace_collect.py calendar --start 2026-07-06 --end 2026-07-10
+.venv/bin/python skills/weekly-review/scripts/workspace_collect.py drive --query ""
 ```
 
 `WorkspaceClient` routes to the workspace provider selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); calendar and file methods are provider-neutral, so the same commands work on Google or Microsoft 365. All operations are read-only.

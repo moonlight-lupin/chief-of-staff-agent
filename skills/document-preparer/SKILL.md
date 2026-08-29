@@ -17,9 +17,9 @@ metadata:
 Document Preparer creates business documents from `.docx` templates and turns existing `.docx` files into reusable templates. Phase 1 deliberately supports `.docx` only. Google Docs support is deferred; when a Google Doc is involved, export it to DOCX, process locally, then upload/file the result through `WorkspaceClient`:
 
 ```bash
-python skills/document-preparer/scripts/document_actions.py upload --file /tmp/generated.docx --parent <folder_id>
-python skills/document-preparer/scripts/document_actions.py search --query "NDA" --max 5
-python skills/document-preparer/scripts/document_actions.py draft-email --to client@test.com --subject "NDA for review" --body "Please find attached..."
+.venv/bin/python skills/document-preparer/scripts/document_actions.py upload --file /tmp/generated.docx --parent <folder_id>
+.venv/bin/python skills/document-preparer/scripts/document_actions.py search --query "NDA" --max 5
+.venv/bin/python skills/document-preparer/scripts/document_actions.py draft-email --to client@test.com --subject "NDA for review" --body "Please find attached..."
 ```
 
 `WorkspaceClient` routes to Google API or Composio MCP. Upload and draft creation use guardrails and return `ActionResult` objects.
@@ -79,7 +79,7 @@ Never invent legal or commercial terms. If a required token cannot be resolved f
 2. Extract tokens:
 
 ```bash
-python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc_utils.py \
+.venv/bin/python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc_utils.py \
   extract --template /path/to/template.docx
 ```
 
@@ -88,7 +88,7 @@ python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc
 5. Fill the template:
 
 ```bash
-python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc_utils.py \
+.venv/bin/python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc_utils.py \
   fill --template /path/to/template.docx \
   --output /path/to/output.docx \
   --tokens '{"client_name":"Acme Corp","date":"2026-07-09"}'
@@ -119,7 +119,7 @@ Completion criterion: generated `.docx` exists and all placeholders were either 
 4. Create the template:
 
 ```bash
-python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc_utils.py \
+.venv/bin/python /root/.hermes/plugins/chief-of-staff/skills/document-preparer/scripts/doc_utils.py \
   template --doc /path/to/source.docx \
   --output /root/.hermes/plugins/chief-of-staff/shared/templates/SOW_standard.docx \
   --mappings '{"Acme Corp":"client_name","SGD 4,500":"amount"}'
@@ -143,9 +143,9 @@ The script exposes:
 CLI examples:
 
 ```bash
-python doc_utils.py fill --template X.docx --output Y.docx --tokens '{"client_name":"Acme"}'
-python doc_utils.py extract --template X.docx
-python doc_utils.py register --name "NDA Mutual" --file shared/templates/NDA_mutual.docx --tokens client_name date jurisdiction --category legal
+.venv/bin/python doc_utils.py fill --template X.docx --output Y.docx --tokens '{"client_name":"Acme"}'
+.venv/bin/python doc_utils.py extract --template X.docx
+.venv/bin/python doc_utils.py register --name "NDA Mutual" --file shared/templates/NDA_mutual.docx --tokens client_name date jurisdiction --category legal
 ```
 
 ## Integrations

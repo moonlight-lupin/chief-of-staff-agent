@@ -242,7 +242,7 @@ Daily Briefing is normally installed as a Hermes cron job using `delivery.briefi
 ### 1. Read Config
 
 ```bash
-python - <<'PY'
+.venv/bin/python - <<'PY'
 import yaml, pathlib
 cfg = yaml.safe_load(pathlib.Path('/root/.hermes/plugins/chief-of-staff/shared/config/company.yaml').read_text())
 print(cfg['delivery']['briefing_time'], cfg['delivery']['timezone'], cfg['delivery']['channel'])

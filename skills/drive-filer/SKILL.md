@@ -19,9 +19,9 @@ Drive Filer keeps the company Google Drive clean by filing incoming attachments,
 All Google Drive calls go through the shared `WorkspaceClient` layer:
 
 ```bash
-python skills/drive-filer/scripts/drive_file.py search --query "NDA" --max 10
-python skills/drive-filer/scripts/drive_file.py upload --file /tmp/report.pdf --parent <folder_id>
-python skills/drive-filer/scripts/drive_file.py download --file-id <id> --output /tmp/downloaded.pdf
+.venv/bin/python skills/drive-filer/scripts/drive_file.py search --query "NDA" --max 10
+.venv/bin/python skills/drive-filer/scripts/drive_file.py upload --file /tmp/report.pdf --parent <folder_id>
+.venv/bin/python skills/drive-filer/scripts/drive_file.py download --file-id <id> --output /tmp/downloaded.pdf
 ```
 
 `WorkspaceClient` routes to the workspace provider selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); the file methods (`files_search`, `files_upload`, `files_download`, `files_trash`) are provider-neutral, so the same commands file into Google Drive or Microsoft 365 (OneDrive / SharePoint). Upload/download use guardrails and return `ActionResult` objects. Filing rules are still resolved by `drive_map.py` which uses config-driven pattern matching.
@@ -184,7 +184,7 @@ To fetch a mail attachment before filing, obtain it through an approved mail acc
      result = gmail.download_attachment(msg_id, filename="report.pdf")       # auto staging dir
      result = gmail.download_attachment(msg_id, attachment_id="ANGjd...", output_dir=staging)
      ```
-     Or via CLI: `python google_api.py --account <account> --as <email> gmail attachment-download <msg_id> --filename X.zip --output-dir "$(mktemp -d)"`
+     Or via CLI: `.venv/bin/python google_api.py --account <account> --as <email> gmail attachment-download <msg_id> --filename X.zip --output-dir "$(mktemp -d)"`
    - **Other providers (m365, composio)**: attachment download is not yet exposed on the neutral `workspace_client` surface — use the native connector path above, or fetch via the provider's own tooling.
 4. Build filing context:
    - filename,

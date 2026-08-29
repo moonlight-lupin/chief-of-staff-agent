@@ -49,10 +49,10 @@ Configuration comes from `shared/config/company.yaml`; use `paths.project_root`,
 Meeting Prep is read-only. It needs recent mail with attendees, the calendar event/context, and optional related files. Prefer the `workspace_actions.py` wrapper — it routes through `WorkspaceClient`:
 
 ```bash
-python skills/meeting-prep/scripts/workspace_actions.py gather --event-id <id> --attendees a@x.com,b@y.com
-python skills/meeting-prep/scripts/workspace_actions.py gmail-context --query "from:a@x.com" --max 5
-python skills/meeting-prep/scripts/workspace_actions.py calendar-context --start 2026-07-09 --end 2026-07-16
-python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "meeting notes" --max 5
+.venv/bin/python skills/meeting-prep/scripts/workspace_actions.py gather --event-id <id> --attendees a@x.com,b@y.com
+.venv/bin/python skills/meeting-prep/scripts/workspace_actions.py gmail-context --query "from:a@x.com" --max 5
+.venv/bin/python skills/meeting-prep/scripts/workspace_actions.py calendar-context --start 2026-07-09 --end 2026-07-16
+.venv/bin/python skills/meeting-prep/scripts/workspace_actions.py drive-context --query "meeting notes" --max 5
 ```
 
 Obtain workspace data through an approved workspace access path — see `shared/docs/workspace-access.md`. Normalize to canonical shapes in `shared/scripts/schemas.py`.

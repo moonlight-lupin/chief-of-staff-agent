@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.5.4 — Wiki bootstrap/lint contract + headless-scheduler hardening
+
+Field follow-up #2 from the live deployment (Battery Road Collective,
+composio:mcp provider, Raspberry Pi 5). Two operator-reported items, one bug
+and one doc gap, plus a scheduled-run orientation note. Suite at 2118 passing.
+
+### Changes
+
+- **Wiki seeds now pass wiki_curator lint out of the box** — a fresh
+  `initialize_wiki()` seeded `purpose.md` and `SCHEMA.md` with no YAML
+  frontmatter and no `index.md`, while `wiki_curator.py lint` treats all three
+  as ERRORs. Result: every fresh install started at 3 lint ERRORs and daily
+  briefings showed `wiki: error=3` until the operator hand-fixed the seeds.
+  Both templates now emit frontmatter (`title`, `type: reference`, `updated`)
+  and `initialize_wiki()` seeds an `index.md` (`type: index`) listing both
+  seed pages, in the same shape `wiki_curator refresh` writes. Titles are
+  serialized with `json.dumps(ensure_ascii=False)` — a JSON string is valid
+  YAML, so company names containing `:`, `#`, quotes, or unicode safely
+  survive the round-trip (regression-tested with 5 adversarial names).
+  `force=False` semantics unchanged: operator-edited seeds are kept, and the
+  existing `Kept existing wiki file` output now also covers `index.md`.
+- **`run.sh` stable entrypoint** — new executable POSIX-sh wrapper at the
+  plugin root: `./run.sh <args>` execs `.venv/bin/python <args>` with `exec`
+  (correct exit-code propagation, args verbatim). If `.venv/bin/python` is
+  absent it prints one remediation line to stderr and exits 127 — it
+  deliberately does NOT fall back to system Python, which is the failure mode
+  that produced false doctor findings.
+- **Docs: venv interpreter everywhere agents run commands** — `CLAUDE.md`
+  states the rule (run every plugin command with `.venv/bin/python`, not bare
+  `python`) and its "Start here" + envelope-path examples use it; 12
+  `skills/*/SKILL.md` files converted from bare `python` to
+  `.venv/bin/python`. Headless runners (cron, CI) that don't activate the
+  venv no longer half-run under system Python.
+- **"Scheduled / headless runs" section in `CLAUDE.md`** — a scheduled run
+  reads `capabilities` output plus the relevant `skills/<name>/SKILL.md`
+  only, and skips doctor/CHANGELOG/full-CLAUDE.md re-reads when
+  `capabilities` provider/state lines are unchanged from the last run.
+  Addresses ~45s of over-orientation per 5-minute briefing cycle measured on
+  the live install.
+
+### Review
+
+Two-lane review (Codex GPT-5.6 Sol + Cursor Grok 4.6-medium; Opus lane
+unavailable — CLI OAuth expired). Key findings fixed: unquoted company names
+in f-string YAML frontmatter (BLOCKING — reproduced with a colon-bearing
+name, fix = JSON-quoted titles + adversarial-name regression tests);
+force=False overwrite-risk tested explicitly (operator edits preserved);
+`safe_dump` line-wrap regression caught by test before release (`...`
+document marker breaking frontmatter) — replaced with `json.dumps`.
+Accepted non-goals: pre-0.5.4 wikis seeded without frontmatter still lint
+dirty until the operator re-runs onboarding with `--force` or hand-adds
+frontmatter (auto-overwriting operator content was judged worse than a
+documented one-time fix); remaining bare-`python` mentions in README/
+CONTRIBUTING/docs/ are developer-facing, not agent-runtime-facing.
+
 ## v0.5.3 — Composio hardening from the field (mail_search + test hermeticity)
 
 Upstream fixes found in a live deployment (composio:mcp provider, Google

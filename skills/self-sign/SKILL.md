@@ -66,7 +66,7 @@ Defaults:
 Use the bundled detector:
 
 ```bash
-python /root/.hermes/plugins/chief-of-staff/skills/self-sign/scripts/sign_detector.py \
+.venv/bin/python /root/.hermes/plugins/chief-of-staff/skills/self-sign/scripts/sign_detector.py \
   /path/to/document.pdf --format json \
   --company "{company.name}" --alias "Service Provider" --alias "Consultant"
 ```

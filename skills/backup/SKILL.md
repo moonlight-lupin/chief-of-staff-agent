@@ -19,7 +19,7 @@ Backup protects the user's Hermes and Chief of Staff data by creating a timestam
 The `backup.py` script uploads and prunes archives through the file store. Today it drives the `google-workspace` skill's `google_api.py` wrapper directly (the Google/Drive dialect shown below); the same intent — upload archive, list backups, delete old archives — maps onto any workspace provider (`google_api` | `composio` | `m365`) or an equivalent native file connector when configured.
 
 ```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
   --account {account} --as {delegate} drive {command}
 ```
 
@@ -122,11 +122,11 @@ chief-of-staff-{company_slug}-{YYYYMMDD-HHMMSS}.tar.gz
 ## Script Usage
 
 ```bash
-python /root/.hermes/plugins/chief-of-staff/skills/backup/scripts/backup.py \
+.venv/bin/python /root/.hermes/plugins/chief-of-staff/skills/backup/scripts/backup.py \
   --config /root/.hermes/plugins/chief-of-staff/shared/config/company.yaml
 
 # Preview without writing archive/uploading/pruning
-python /root/.hermes/plugins/chief-of-staff/skills/backup/scripts/backup.py \
+.venv/bin/python /root/.hermes/plugins/chief-of-staff/skills/backup/scripts/backup.py \
   --config company.yaml --dry-run
 ```
 
@@ -155,15 +155,15 @@ The cron prompt must be self-contained and must not rely on prior conversation h
 The script uses command shapes like:
 
 ```bash
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
   --account {account} --as {delegate} drive upload \
   --file {archive_path} --parent-id {drive_folder_id}
 
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
   --account {account} --as {delegate} drive list \
   --folder-id {drive_folder_id}
 
-python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
   --account {account} --as {delegate} drive delete \
   --file-id {file_id}
 ```

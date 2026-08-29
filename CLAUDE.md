@@ -30,9 +30,11 @@ below. Reads with your own tools are expected and encouraged; writes are not.
 
 ## Start here
 
+Run every plugin command with the plugin venv interpreter (`.venv/bin/python`), not bare `python`.
+
 ```bash
-python shared/scripts/chief_of_staff.py capabilities   # what may I do here?
-python shared/scripts/chief_of_staff.py doctor --summary
+.venv/bin/python shared/scripts/chief_of_staff.py capabilities   # what may I do here?
+.venv/bin/python shared/scripts/chief_of_staff.py doctor --summary
 ```
 
 `capabilities` is the one call that tells you your operating envelope: the
@@ -55,6 +57,14 @@ remediation command.
 | `paths.project_root` | The user's data: `pipeline.yaml`, `invoices.yaml`, `expenses.yaml`, `todos.yaml`, `wiki/`. Plain YAML and Markdown. |
 | `shared/scripts/` | Shared machinery — guardrails, state, providers, audit. |
 | `skills/<name>/` | The nineteen skills, each with `SKILL.md` and its own `scripts/`. |
+
+## Scheduled / headless runs
+
+A scheduled run should read `capabilities` output (from its own invocation; cached from the previous run if unchanged is fine to trust) and the relevant `skills/<name>/SKILL.md` only.
+
+Do not re-read doctor output, CHANGELOG.md, or the full CLAUDE.md on every run. `doctor` is for interactive troubleshooting or when a command fails.
+
+If `capabilities` provider/state lines are unchanged from the last recorded run, skip re-orientation and go straight to the scheduled work.
 
 ## Commands
 
@@ -87,7 +97,7 @@ OneDrive), normalize the records to the shapes in
 `shared/scripts/schemas.py`, write a JSON envelope, and pass it in:
 
 ```bash
-python skills/daily-briefing/scripts/daily_briefing.py --input /path/to/envelope.json
+.venv/bin/python skills/daily-briefing/scripts/daily_briefing.py --input /path/to/envelope.json
 ```
 
 The same `--input` path works for weekly-review and meeting-prep. Under the

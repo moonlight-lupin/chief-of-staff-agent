@@ -138,15 +138,15 @@ After template creation, GET the template to obtain `attachment_uuid` and the de
 
 ```bash
 # Load config values
-BASE_URL=$(python3 -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['url'])")
-PROVIDER_ROLE=$(python3 -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['provider_role'])")
-CLIENT_ROLE=$(python3 -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['client_role'])")
+BASE_URL=$(.venv/bin/python -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['url'])")
+PROVIDER_ROLE=$(.venv/bin/python -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['provider_role'])")
+CLIENT_ROLE=$(.venv/bin/python -c "import yaml; print(yaml.safe_load(open('shared/config/company.yaml'))['esign']['client_role'])")
 
 # Step A: GET template to extract attachment_uuid and existing submitter UUID
 TEMPLATE_JSON=$(curl -s "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
   -H "X-Auth-Token: ${DOCUSEAL_API_KEY}")
 
-ATTACHMENT_UUID=$(echo "$TEMPLATE_JSON" | python3 -c "
+ATTACHMENT_UUID=$(echo "$TEMPLATE_JSON" | .venv/bin/python -c "
 import sys, json
 d = json.load(sys.stdin)
 print(d['schema'][0]['attachment_uuid'])
@@ -154,8 +154,8 @@ print(d['schema'][0]['attachment_uuid'])
 
 # The default submitter from MCP create_template is 'First Party' — we need two submitters.
 # Generate UUIDs for both provider and client submitters.
-PROVIDER_UUID=$(python3 -c 'import uuid; print(uuid.uuid4())')
-CLIENT_UUID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+PROVIDER_UUID=$(.venv/bin/python -c 'import uuid; print(uuid.uuid4())')
+CLIENT_UUID=$(.venv/bin/python -c 'import uuid; print(uuid.uuid4())')
 
 # Step B: PATCH fields with coordinates — send ALL submitters and ALL fields
 # (PATCH is full replacement, NOT append — Rule #6)
@@ -166,7 +166,7 @@ curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
     \"name\": \"NDA - Client Name\",
     \"fields\": [
       {
-        \"uuid\": \"$(python3 -c 'import uuid; print(uuid.uuid4())')\",
+        \"uuid\": \"$(.venv/bin/python -c 'import uuid; print(uuid.uuid4())')\",
         \"name\": \"${PROVIDER_ROLE} Signature\",
         \"type\": \"signature\",
         \"required\": true,
@@ -178,7 +178,7 @@ curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
         }]
       },
       {
-        \"uuid\": \"$(python3 -c 'import uuid; print(uuid.uuid4())')\",
+        \"uuid\": \"$(.venv/bin/python -c 'import uuid; print(uuid.uuid4())')\",
         \"name\": \"${CLIENT_ROLE} Signature\",
         \"type\": \"signature\",
         \"required\": true,
@@ -201,7 +201,7 @@ curl -s -X PATCH "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
 
 ```bash
 curl -s "${BASE_URL}/api/templates/${TEMPLATE_ID}" \
-  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" | python3 -c "
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" | .venv/bin/python -c "
 import sys, json
 d = json.load(sys.stdin)
 fields = d.get('fields', [])
@@ -257,7 +257,7 @@ Statuses: `pending`, `completed`, `declined`, `expired`.
 
 ```bash
 curl -s "${BASE_URL}/api/submissions/${SUBMISSION_ID}/documents" \
-  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" | python3 -c "
+  -H "X-Auth-Token: ${DOCUSEAL_API_KEY}" | .venv/bin/python -c "
 import sys, json
 d = json.load(sys.stdin)
 for doc in d.get('documents', []):
@@ -288,7 +288,7 @@ Signature field coordinates must be extracted per-document — the signature tab
 Use `self-sign/scripts/sign_detector.py` for all detection. It finds signature and date locations in PDFs and DOCX by scanning for patterns, underscore runs, and party labels.
 
 ```bash
-python skills/self-sign/scripts/sign_detector.py \
+.venv/bin/python skills/self-sign/scripts/sign_detector.py \
   /path/to/document.pdf --format json \
   --company "Your Company Pte Ltd" \
   --alias "Service Provider" --alias "Consultant" \

@@ -83,7 +83,7 @@ skills/deadline-tracker/scripts/scan_deadlines.py
 Interface contract:
 
 ```bash
-python scan_deadlines.py --config shared/config/company.yaml \
+.venv/bin/python scan_deadlines.py --config shared/config/company.yaml \
   --jurisdiction-dir shared/config/jurisdictions/ \
   [--full] [--json]
 ```

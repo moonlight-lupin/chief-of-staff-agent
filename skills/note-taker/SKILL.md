@@ -307,7 +307,7 @@ For a compounding knowledge base, run the wiki curator on a daily schedule.
 # Run at 6 AM daily — lint checks structure, links, and frontmatter.
 # Replace PROJECT_ROOT with your configured project root path.
 0 6 * * * cd ~/.hermes/plugins/chief-of-staff && \
-  python skills/note-taker/scripts/wiki_curator.py lint --summary \
+  .venv/bin/python skills/note-taker/scripts/wiki_curator.py lint --summary \
   --wiki ~/.hermes/projects/default/wiki >> \
   ~/.hermes/projects/default/wiki/.curator.log 2>&1
 ```
@@ -317,9 +317,9 @@ For a compounding knowledge base, run the wiki curator on a daily schedule.
 ```bash
 # Sunday 5 AM — validate (stricter than lint) + lint summary
 0 5 * * 0 cd ~/.hermes/plugins/chief-of-staff && \
-  python skills/note-taker/scripts/wiki_curator.py validate \
+  .venv/bin/python skills/note-taker/scripts/wiki_curator.py validate \
   --wiki ~/.hermes/projects/default/wiki && \
-  python skills/note-taker/scripts/wiki_curator.py lint --summary \
+  .venv/bin/python skills/note-taker/scripts/wiki_curator.py lint --summary \
   --wiki ~/.hermes/projects/default/wiki
 ```
 

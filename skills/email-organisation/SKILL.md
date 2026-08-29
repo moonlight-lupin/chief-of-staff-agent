@@ -46,20 +46,20 @@ repeated, unmet need (with approval).
 
 ```bash
 # Discover existing labels/categories and show structure
-python skills/email-organisation/scripts/email_organisation.py inspect-labels --summary
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py inspect-labels --summary
 
 # Generate a proposed policy from existing labels/categories
-python skills/email-organisation/scripts/email_organisation.py propose-policy --summary
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py propose-policy --summary
 
 # Show current approved policy
-python skills/email-organisation/scripts/email_organisation.py show-policy --summary
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py show-policy --summary
 
 # Save a proposal as an approved policy
-python skills/email-organisation/scripts/email_organisation.py save-policy \
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py save-policy \
   --from .email_organisation_policy.proposal.json --approved-by "MH"
 
 # Validate a policy file
-python skills/email-organisation/scripts/email_organisation.py validate-policy
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py validate-policy
 ```
 
 ### Composio Microsoft (Outlook categories) — Phase 4
@@ -67,10 +67,10 @@ python skills/email-organisation/scripts/email_organisation.py validate-policy
 With `integrations.workspace.family: microsoft` (and Outlook connected):
 
 ```bash
-python skills/email-organisation/scripts/email_organisation.py \
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py \
   --config shared/config/company.yaml --summary inspect-labels
 
-python skills/email-organisation/scripts/email_organisation.py \
+.venv/bin/python skills/email-organisation/scripts/email_organisation.py \
   --config shared/config/company.yaml --summary propose-policy
 ```
 

@@ -140,7 +140,7 @@ skills/bookkeeper/scripts/pl_report.py
 Usage:
 
 ```bash
-python3 skills/bookkeeper/scripts/pl_report.py --config shared/config/company.yaml --month 2026-07
+.venv/bin/python skills/bookkeeper/scripts/pl_report.py --config shared/config/company.yaml --month 2026-07
 ```
 
 Output is a formatted text report suitable for Daily Briefing, Weekly Review, or direct user replies.
