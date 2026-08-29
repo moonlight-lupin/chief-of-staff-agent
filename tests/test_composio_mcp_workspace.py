@@ -225,3 +225,23 @@ class TestComposioMCPKeyNotStored:
         assert "api_key" not in meta
         assert meta.get("key_env") == "COMPOSIO_MCP_KEY"  # env var name is OK, actual key is NOT stored
         assert "test-key" not in str(meta)  # the actual key value must never appear
+
+
+class TestValidateReadPayloadOffload:
+    """Field briefing 2026-08-29: Composio tool-router offloads large
+    mail_search payloads to data_preview (data=None). Name that offload
+    instead of the generic malformed-response text so callers can refetch
+    with leaner args.
+    """
+
+    def test_mail_search_data_preview_offload_is_named(self):
+        from providers.composio_mcp_workspace import _validate_read_payload
+
+        client = MagicMock()
+        client.family = "google"
+        data = {
+            "data": None,
+            "data_preview": {"messages": [{"id": "m1", "subject": "Offloaded"}]},
+        }
+        with pytest.raises(ValueError, match="offloaded the mail_search response to data_preview"):
+            _validate_read_payload(client, "mail_search", "GMAIL_FETCH_EMAILS", data)

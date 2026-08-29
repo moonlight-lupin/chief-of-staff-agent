@@ -70,6 +70,17 @@ def _validate_read_payload(client: Any, operation: str, slug: str, data: Any) ->
         expected = ("files", "items")
 
     if expected and not _mapping_has_list(data, expected):
+        if operation == "mail_search" and isinstance(data, Mapping):
+            preview = data.get("data_preview")
+            preview_messages = (
+                preview.get("messages") if isinstance(preview, Mapping) else None
+            )
+            if preview or (isinstance(preview_messages, list) and preview_messages):
+                raise ValueError(
+                    "Composio offloaded the mail_search response to data_preview "
+                    "(result set too large for inline payload); refetch with leaner "
+                    "args (include_payload=False, verbose=False)"
+                )
         raise ValueError(
             f"malformed Composio Google response for {operation} via {slug!r}: "
             f"expected a recognised record list"

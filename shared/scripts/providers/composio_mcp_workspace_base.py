@@ -779,7 +779,16 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 args, meta = self._ms_mail_search_args(query, max_results)
                 self.last_mail_search_meta = meta
             else:
-                args = {"query": query, "max_results": max_results}
+                # Lean metadata args (field briefing 2026-08-29): Composio's tool-router
+                # offloads large full-payload results to data_preview (data=None), which
+                # _validate_read_payload rejects as malformed. Briefing/triage needs
+                # metadata + snippets, never full MIME.
+                args = {
+                    "query": query,
+                    "max_results": max_results,
+                    "include_payload": False,
+                    "verbose": False,
+                }
             data = self._execute_composio_tool(slug, args, operation="mail_search")
             return self._normalize_records("mail_search", slug, data)
         except (ComposioConnectionError, ComposioToolError):
