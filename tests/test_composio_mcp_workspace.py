@@ -245,3 +245,41 @@ class TestValidateReadPayloadOffload:
         }
         with pytest.raises(ValueError, match="offloaded the mail_search response to data_preview"):
             _validate_read_payload(client, "mail_search", "GMAIL_FETCH_EMAILS", data)
+
+    def test_mail_search_offload_envelope_raises_composio_read_error(
+        self, mcp_config, mcp_key, tmp_project,
+    ):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
+        client = ComposioMCPWorkspaceClient(mcp_config)
+
+        mock_mcp = MagicMock()
+        mock_mcp.call_tool.return_value = {
+            "data": {"results": [{"response": {"successful": True, "data": None,
+               "data_preview": {"messages": [{"id": "m1"}]}}}]},
+        }
+        client._mcp_client = mock_mcp
+
+        with pytest.raises(ComposioReadError, match="data_preview") as ei:
+            client.mail_search("is:unread")
+        assert "include_payload=False" in str(ei.value)
+        assert "verbose=False" in str(ei.value)
+
+    def test_mail_search_empty_preview_stays_malformed(
+        self, mcp_config, mcp_key, tmp_project,
+    ):
+        from providers.composio_mcp_workspace import (
+            ComposioMCPWorkspaceClient, ComposioReadError,
+        )
+        client = ComposioMCPWorkspaceClient(mcp_config)
+
+        mock_mcp = MagicMock()
+        mock_mcp.call_tool.return_value = {
+            "data": {"results": [{"response": {"successful": True, "data": None,
+               "data_preview": {}}}]},
+        }
+        client._mcp_client = mock_mcp
+
+        with pytest.raises(ComposioReadError, match="malformed"):
+            client.mail_search("is:unread")

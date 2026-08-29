@@ -646,7 +646,22 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             first = results[0] if isinstance(results[0], Mapping) else {}
             resp = first.get("response", {})
             if isinstance(resp, Mapping) and resp.get("successful"):
-                return resp.get("data", {})
+                # Composio's tool-router offloads large full-payload results to
+                # data_preview (data=None). Raise a named error so callers can
+                # refetch with leaner args instead of hitting the generic
+                # malformed-response path in _validate_read_payload.
+                data = resp.get("data")
+                if data is None:
+                    preview = resp.get("data_preview")
+                    if (isinstance(preview, Mapping) and len(preview)) or (
+                        isinstance(preview, list) and preview
+                    ):
+                        raise ValueError(
+                            f"Composio offloaded the {operation or 'tool'} response to "
+                            "data_preview (result set too large for inline payload); "
+                            "refetch with leaner args (include_payload=False, verbose=False)"
+                        )
+                return data if data is not None else resp.get("data", {})
             # The error can live in results[0]["response"]["error"] (a per-tool
             # failure) OR directly at results[0]["error"] with NO "response"
             # wrapper (a batch-level failure envelope — e.g. a tool whose toolkit
