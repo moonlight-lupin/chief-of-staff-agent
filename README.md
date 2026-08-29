@@ -8,21 +8,22 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.5.2 
+> **Status:** v0.5.3 
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
 ---
 
-## 🆕 What's new in v0.5.2
+## 🆕 What's new in v0.5.3
 
-**Calendar events with Meet links — and the invite email that actually arrives.** `calendar.create` under the `google_api` provider now inserts events through the service-account REST API with Google Meet conferencing auto-generated, then follows up by sending each attendee an invite email with the event details and Meet URL. Service-account events don't reliably email invitations on their own; CoS now does it explicitly, so the invite lands in attendees' inboxes and a copy sits in the organizer's Gmail Sent folder where you can see it.
+**Field-tested Composio hardening — larger mail searches stop failing as "malformed".** A live deployment hit a deterministic failure: with Composio's default verbose payload mode, bigger Gmail search result sets get their body offloaded to a side channel, which the strict-response adapter refuses as malformed rather than fabricating an empty mailbox. CoS now reads mail with lean metadata arguments (snippets, never full MIME), so the offload never triggers — and if a provider change ever does offload a response, the error names the exact cause and the refetch fix instead of a generic malformation.
 
-- **Meet links by default** — `conferenceDataVersion=1` on insert, `hangoutLink` read back and included in the result
-- **Fail-fast validation** — attendee emails, delegate, and title are validated (format + header-injection) *before* anything is created; naive datetimes (`T` without an offset) are rejected with a clear message
-- **Typed errors** — insert-path failures raise `CalendarInsertError` (a `RuntimeError` subclass); the `calendar` CLI prints structured failure JSON and exits 1 instead of a traceback; guardrail refusals pass through untouched
-- **Pending-conference guard** — if Google is still creating the Meet link, the invite email is skipped and the reason returned (partial success, event still created)
-- Audited end-to-end: 3 Codex review rounds (1 BLOCKING + 8 MAJOR fixed), 2104 tests passing, CI green on Python 3.11 + 3.12
+- **Lean reads by default** — `mail_search` pins `include_payload=false, verbose=false` on the Google family; larger result sets stay inline
+- **Named offload error** — an offloaded response raises an error that says "offloaded to data_preview … refetch with leaner args", not a generic malformed-response message
+- **Direct-slug reads documented** — the workspace access ladder now says: known slugs call `COMPOSIO_MULTI_EXECUTE_TOOL` directly (batched); `COMPOSIO_SEARCH_TOOLS` discovery is a fallback for unknown/renamed slugs
+- **Source-trust rule** — when the daily pipeline marks a source `unavailable` but a direct read of the same source succeeds, trust the records and disclose the gap rather than failing closed
+- **Hermetic tests** — the no-key subprocess tests can no longer silently pass through a production API key loaded from `.env`
+- Audited end-to-end: red contract tests → Codex 2-round review (2 MAJOR fixed, re-verified RESOLVED), 2107 tests passing, CI green on Python 3.11 + 3.12
 
 ---
 

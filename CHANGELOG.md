@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.5.3 — Composio hardening from the field (mail_search + test hermeticity)
+
+Upstream fixes found in a live deployment (composio:mcp provider, Google
+family, Raspberry Pi 5 hardware, suite at 2104 passing). With Composio's
+default `include_payload=true/verbose=true`, larger `GMAIL_FETCH_EMAILS`
+result sets get their body offloaded to `data_preview` — the strict-response
+adapter then correctly but opaquely refuses the shape as malformed. Six of
+eight `queries.yaml` templates failed live before the fix. Short queries
+succeeded, which made it look query-dependent; it was result-size dependent.
+
+### Changes
+
+- **Lean mail_search args (Google family)** — `mail_search` pins
+  `include_payload=False, verbose=False` so briefing/triage reads stay in the
+  metadata+snippets shape and never trip Composio's offload. Microsoft branch
+  unchanged (it has its own `_ms_mail_search_args` contract).
+- **Named offload error** — `_execute_composio_tool` now inspects the full
+  successful response envelope: when `data` is null but `data_preview` is
+  non-empty, it raises a distinct error naming the offload with refetch
+  guidance, instead of the generic malformed-response message. Defense-in-depth
+  check also lives in `_validate_read_payload`. Empty previews keep the
+  generic path.
+- **Access ladder reorder (`shared/docs/workspace-access.md`)** — agent-side
+  Composio reads now go direct to `COMPOSIO_MULTI_EXECUTE_TOOL` with the
+  slugs pinned in `tools_allowlist` (batched); `COMPOSIO_SEARCH_TOOLS`
+  discovery is fallback only for unknown/renamed slugs. Discovery costs ~54 KB
+  of schemas per call and adds a session-ID contract with no benefit when
+  slugs are already known. Source-trust note added: a direct Composio read
+  that succeeds while `chief_of_staff.py daily` marks the same source
+  `unavailable` should trust the records and disclose the adapter gap.
+- **Hermetic no-key tests** — the two `connect_workspace.py` "missing-key"
+  subprocess tests no longer inherit a production `COMPOSIO_MCP_KEY` from the
+  plugin-root `.env` (auto-loaded at startup). They run with a scrubbed
+  subprocess environment and a config copy whose `key_env` points at a
+  guaranteed-unset variable, with strict assertions on the named variable.
+
+### Review
+
+Red contract tests first (orchestrator), Cursor (Grok 4.6 High) build, then
+Codex (GPT-5.6 Sol) review. R1 found 2 MAJOR (offload error unreachable in
+production because `data_preview` was discarded before validation; original
+no-key tests still non-hermetic) — both fixed and re-reviewed: RESOLVED, zero
+new findings. 2107 tests passing, CI green on Python 3.11 + 3.12.
+
 ## v0.5.2 — Meet-link creation + follow-up invite email on calendar.create
 
 `calendar.create` under the `google_api` provider now runs entirely through
