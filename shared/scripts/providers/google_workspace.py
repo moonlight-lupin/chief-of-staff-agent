@@ -8,10 +8,12 @@ All write actions are audited via workspace_audit.
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import os
 import subprocess
 import sys
+import uuid
 import warnings
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -34,6 +36,11 @@ from workspace_guardrails import guarded
 # draft in the delegate's Drafts folder.
 _GMAIL_DRAFT_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 _GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
+_GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+# Calendar create uses events.insert over REST so we can request a Meet link
+# (google_api.py's calendar create CLI has no conferenceData support).
+_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
+_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 # Drive untrash uses the same SA + delegate pattern as draft: google_api.py has
 # no drive-untrash CLI, so we PATCH files.update with trashed=False over REST.
 _DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
@@ -151,6 +158,194 @@ def _drive_untrash_via_service_account(
     out["reversible"] = True
     out["trashed"] = False
     return out
+
+
+def _calendar_create_via_service_account(
+    *,
+    service_account_path: str,
+    delegate_email: str,
+    title: str,
+    start: str,
+    end: str,
+    attendees: list[str] | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Insert a calendar event with a Meet link, then email attendees.
+
+    ``google_api.py calendar create`` cannot request conferenceData (no Meet
+    link) and service-account-created events do not reliably generate Google's
+    own invitation email, so this path uses Calendar events.insert + a Gmail
+    messages.send follow-up.
+    """
+    import requests
+
+    credentials = _sa_credentials(
+        service_account_path=service_account_path,
+        delegate_email=delegate_email,
+        scopes=[_CALENDAR_SCOPE],
+    )
+
+    attendee_emails = [str(a).strip() for a in (attendees or []) if str(a).strip()]
+    body: dict[str, Any] = {
+        "summary": title,
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        "conferenceData": {
+            "createRequest": {
+                "requestId": uuid.uuid4().hex,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
+    }
+    if attendee_emails:
+        body["attendees"] = [{"email": a} for a in attendee_emails]
+    if description:
+        body["description"] = description
+
+    resp = requests.post(
+        _CALENDAR_EVENTS_URL,
+        headers={
+            "Authorization": f"Bearer {credentials.token}",
+            "Content-Type": "application/json",
+        },
+        params={"conferenceDataVersion": 1},
+        json=body,
+        timeout=45,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"Calendar events.insert failed ({resp.status_code}): {resp.text[:500]}"
+        )
+    event = resp.json() if resp.content else {}
+    if not isinstance(event, dict):
+        event = {}
+
+    hangout_link = event.get("hangoutLink") or ""
+    out: dict[str, Any] = {
+        "id": event.get("id"),
+        "htmlLink": event.get("htmlLink"),
+        "hangoutLink": event.get("hangoutLink"),
+        "invite_message_id": None,
+        "invite_sent_to": [],
+    }
+
+    if not attendee_emails:
+        return out
+
+    invite_error = _gmail_send_calendar_invite(
+        service_account_path=service_account_path,
+        delegate_email=delegate_email,
+        title=title,
+        start=start,
+        end=end,
+        attendees=attendee_emails,
+        hangout_link=str(hangout_link) if hangout_link else "",
+    )
+    if invite_error.get("error"):
+        out["error"] = invite_error["error"]
+    else:
+        out["invite_message_id"] = invite_error.get("invite_message_id")
+        out["invite_sent_to"] = list(attendee_emails)
+    return out
+
+
+def _gmail_send_calendar_invite(
+    *,
+    service_account_path: str,
+    delegate_email: str,
+    title: str,
+    start: str,
+    end: str,
+    attendees: list[str],
+    hangout_link: str,
+) -> dict[str, Any]:
+    """Send one follow-up invite email covering every attendee.
+
+    Never raises: insert already succeeded, so invite failure is partial
+    success for the caller. Uses gmail.modify (same scope as drafts) rather
+    than gmail.send so existing domain-wide delegation keeps working.
+    """
+    import requests
+
+    meet_line = hangout_link or "(Meet link will appear on the calendar event)"
+    body_text = (
+        f"You are invited to: {title}\n"
+        f"\n"
+        f"When: {start} to {end}\n"
+        f"\n"
+        f"Join Google Meet: {meet_line}\n"
+        f"\n"
+        f"This event is also on the organizer's Google Calendar.\n"
+    )
+    # us-ascii / 7bit so the Gmail `raw` payload (urlsafe-b64 of the whole
+    # MIME message) still contains the Meet link as plaintext after one decode —
+    # utf-8 would wrap the body in a second base64 CTE and hide it.
+    mime = MIMEText(body_text)
+    mime["To"] = ", ".join(attendees)
+    mime["Subject"] = f"Invitation: {title}"
+    mime["From"] = delegate_email
+    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+
+    try:
+        credentials = _sa_credentials(
+            service_account_path=service_account_path,
+            delegate_email=delegate_email,
+            scopes=[_GMAIL_DRAFT_SCOPE],
+        )
+        resp = requests.post(
+            _GMAIL_SEND_URL,
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json",
+            },
+            json={"message": {"raw": raw}},
+            timeout=45,
+        )
+    except Exception as exc:  # noqa: BLE001 — invite failure must not drop the event
+        return {"error": f"invite email failed: {exc}"}
+
+    if resp.status_code >= 400:
+        return {
+            "error": (
+                f"invite email failed ({resp.status_code}): {resp.text[:500]}"
+            )
+        }
+    data = resp.json() if resp.content else {}
+    msg_id = ""
+    if isinstance(data, dict):
+        msg_id = str(data.get("id") or "")
+    return {"invite_message_id": msg_id}
+
+
+def _calendar_create_contract(fn):
+    """Adapt @guarded's ActionResult to the calendar.create contract.
+
+    ``@guarded`` swallows body exceptions into ``success=False`` and always
+    sets ``error=None`` on success. Contract tests require insert HTTP
+    failures to raise ``RuntimeError``, and invite-send failures to keep
+    ``success=True`` with a top-level ``error`` note.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        result = fn(self, *args, **kwargs)
+        if not isinstance(result, dict):
+            return result
+        err = result.get("error") or ""
+        if result.get("success") is False and "Calendar events.insert failed" in err:
+            raise RuntimeError(err)
+        data = result.get("data")
+        if (
+            result.get("success") is True
+            and not result.get("error")
+            and isinstance(data, dict)
+            and data.get("error")
+        ):
+            result = dict(result)
+            result["error"] = data["error"]
+        return result
+
+    return wrapper
 
 
 def _find_google_api_script() -> Path:
@@ -349,28 +544,49 @@ class GoogleWorkspaceClient(WorkspaceClient):
             cc=cc,
         )
 
+    @_calendar_create_contract
     @guarded("calendar.create", target_arg="title", audit_provider="google_api")
     def calendar_create(self, title: str, start: str, end: str,
                         attendees: list[str] | None = None,
                         description: str | None = None) -> dict[str, Any]:
-        # Ensure RFC3339 format (google_api.py requires ISO 8601 with timezone)
+        """Create a calendar event with a Google Meet link (Meet-by-default).
+
+        Inserts via Calendar REST (conferenceDataVersion=1) using the
+        configured service account + delegate, then sends one follow-up
+        Gmail invite to attendees. Service-account-created events do not
+        reliably generate Google's own invitation email.
+        """
+        # Date-only strings still get a default time so callers that passed
+        # YYYY-MM-DD to the old CLI keep working; RFC3339 values are used as-is.
         if "T" not in start:
             start = f"{start}T10:00:00Z"
         if "T" not in end:
             end = f"{end}T11:00:00Z"
-        cmd = self._build_cmd("calendar", "create", "--summary", title,
-                              "--start", start, "--end", end)
-        if attendees:
-            cmd.extend(["--attendees", ",".join(attendees)])
-        if description:
-            cmd.extend(["--description", description])
-        rc, out, err = self._run(cmd)
-        if rc != 0:
-            raise RuntimeError(err.strip() or out.strip())
-        try:
-            return json.loads(out) if out else {}
-        except json.JSONDecodeError:
-            return {"raw": out.strip()}
+        google_cfg = (
+            self.config.get("google", {})
+            if isinstance(self.config, Mapping)
+            else {}
+        )
+        sa_path = str(google_cfg.get("service_account_path") or "").strip()
+        if not sa_path:
+            sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
+        delegate = self.delegate_email or str(
+            google_cfg.get("delegate_email") or ""
+        ).strip()
+        if not sa_path:
+            raise RuntimeError(
+                "calendar.create requires google.service_account_path (or "
+                "GOOGLE_SERVICE_ACCOUNT_PATH) — events.insert is REST-only"
+            )
+        return _calendar_create_via_service_account(
+            service_account_path=sa_path,
+            delegate_email=delegate,
+            title=title,
+            start=start,
+            end=end,
+            attendees=attendees,
+            description=description,
+        )
 
     @guarded("calendar.update", target_arg="event_id", audit_provider="google_api")
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:

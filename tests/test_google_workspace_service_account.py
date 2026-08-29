@@ -183,8 +183,14 @@ class TestWriteGuardrails:
         mock_run.assert_not_called()
 
     def test_calendar_create_proceeds_with_auto_approve(self, google_client):
+        """calendar.create goes through SA REST (events.insert + invite), not
+        the google_api.py CLI _run path — patch the REST helper like the
+        draft/untrash tests do."""
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-        with patch.object(google_client, "_run", return_value=(0, '{"id": "e1"}', "")):
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account",
+            return_value={"id": "e1", "hangoutLink": None},
+        ):
             result = google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
         assert result["success"] is True
         assert result["action"] == "calendar.create"

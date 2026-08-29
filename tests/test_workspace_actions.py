@@ -111,7 +111,18 @@ class TestGoogleProviderWriteActions:
         mock_draft.assert_called_once()
 
     def test_calendar_create(self, google_client):
-        with patch.object(google_client, "_run", return_value=(0, '{"id": "evt_1"}', "")):
+        """calendar.create uses SA REST; patch the REST helper (old _run CLI path removed)."""
+        google_client.config = {
+            "google": {
+                "delegate_email": "test@test.com",
+                "account_alias": "test",
+                "service_account_path": "/fake/sa.json",
+            }
+        }
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account",
+            return_value={"id": "evt_1", "hangoutLink": None},
+        ):
             result = google_client.calendar_create("Meeting", "2026-07-10", "2026-07-10")
         assert result["success"] is True
         assert result["data"]["id"] == "evt_1"
