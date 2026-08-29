@@ -128,13 +128,31 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 0
 
     attendees = [a.strip() for a in args.attendees.split(",")] if args.attendees else None
-    result = client.calendar_create(
-        title=args.title,
-        start=args.start,
-        end=args.end,
-        attendees=attendees,
-        description=args.description,
-    )
+    try:
+        result = client.calendar_create(
+            title=args.title,
+            start=args.start,
+            end=args.end,
+            attendees=attendees,
+            description=args.description,
+        )
+    except RuntimeError as exc:
+        result = {
+            "success": False,
+            "action": "calendar.create",
+            "provider": client.provider_name,
+            "target": args.title,
+            "data": {
+                "start": args.start,
+                "end": args.end,
+                "attendees": args.attendees or "",
+                "description": args.description or "",
+            },
+            "error": str(exc),
+            "audited": False,
+        }
+        print_result(result, args.summary, "Calendar event created")
+        return 1
     print_result(result, args.summary, "Calendar event created")
     return 0 if result.get("success") else 1
 

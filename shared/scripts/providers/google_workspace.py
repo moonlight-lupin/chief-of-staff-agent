@@ -15,7 +15,9 @@ import subprocess
 import sys
 import uuid
 import warnings
+from datetime import datetime
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -45,6 +47,70 @@ _CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary
 # no drive-untrash CLI, so we PATCH files.update with trashed=False over REST.
 _DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 _DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
+
+
+class CalendarInsertError(RuntimeError):
+    """Raised when Calendar events.insert (or a prerequisite) fails."""
+
+
+def _reject_crlf(value: str, kind: str) -> str:
+    """Reject CR/LF so values cannot be injected into MIME headers."""
+    text = str(value)
+    if "\r" in text or "\n" in text:
+        raise RuntimeError(f"invalid {kind}: CR/LF not allowed")
+    return text
+
+
+def _validated_email(value: str, kind: str) -> str:
+    """Return a non-empty addr-spec containing '@', or raise RuntimeError."""
+    raw = str(value)
+    if "\r" in raw or "\n" in raw:
+        raise RuntimeError(f"invalid {kind}: {value}")
+    _name, addr = parseaddr(raw.strip())
+    if not addr or "@" not in addr:
+        raise RuntimeError(f"invalid {kind}: {value}")
+    return addr
+
+
+def _validated_attendee_emails(attendees: list[str] | None) -> list[str]:
+    """Validate every attendee; never silently drop an invalid address."""
+    out: list[str] = []
+    for raw in attendees or []:
+        text = str(raw)
+        if not text.strip():
+            continue
+        out.append(_validated_email(text, "attendee email"))
+    return out
+
+
+def _raise_if_naive_datetimelike(value: str, arg_name: str) -> None:
+    """Reject datetimelike strings that have ``T`` but no UTC offset or Z."""
+    text = str(value)
+    if "T" not in text:
+        return
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return
+    if text.endswith("Z"):
+        return
+    if parsed.tzinfo is None:
+        raise CalendarInsertError(
+            f"{arg_name}={text!r} must include a UTC offset or Z"
+        )
+
+
+def _conference_status_code(event: Mapping[str, Any]) -> str:
+    conf = event.get("conferenceData")
+    if not isinstance(conf, Mapping):
+        return ""
+    create_req = conf.get("createRequest")
+    if not isinstance(create_req, Mapping):
+        return ""
+    status = create_req.get("status")
+    if not isinstance(status, Mapping):
+        return ""
+    return str(status.get("statusCode") or "")
 
 
 def _sa_credentials(*, service_account_path: str, delegate_email: str, scopes: list[str]):
@@ -179,13 +245,19 @@ def _calendar_create_via_service_account(
     """
     import requests
 
-    credentials = _sa_credentials(
-        service_account_path=service_account_path,
-        delegate_email=delegate_email,
-        scopes=[_CALENDAR_SCOPE],
-    )
+    title = _reject_crlf(title, "title")
+    attendee_emails = _validated_attendee_emails(attendees)
+    delegate = _validated_email(delegate_email, "delegate email")
 
-    attendee_emails = [str(a).strip() for a in (attendees or []) if str(a).strip()]
+    try:
+        credentials = _sa_credentials(
+            service_account_path=service_account_path,
+            delegate_email=delegate,
+            scopes=[_CALENDAR_SCOPE],
+        )
+    except Exception as exc:
+        raise CalendarInsertError(f"Calendar events.insert failed: {exc}") from exc
+
     body: dict[str, Any] = {
         "summary": title,
         "start": {"dateTime": start},
@@ -202,18 +274,21 @@ def _calendar_create_via_service_account(
     if description:
         body["description"] = description
 
-    resp = requests.post(
-        _CALENDAR_EVENTS_URL,
-        headers={
-            "Authorization": f"Bearer {credentials.token}",
-            "Content-Type": "application/json",
-        },
-        params={"conferenceDataVersion": 1},
-        json=body,
-        timeout=45,
-    )
+    try:
+        resp = requests.post(
+            _CALENDAR_EVENTS_URL,
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json",
+            },
+            params={"conferenceDataVersion": 1},
+            json=body,
+            timeout=45,
+        )
+    except Exception as exc:
+        raise CalendarInsertError(f"Calendar events.insert failed: {exc}") from exc
     if resp.status_code >= 400:
-        raise RuntimeError(
+        raise CalendarInsertError(
             f"Calendar events.insert failed ({resp.status_code}): {resp.text[:500]}"
         )
     event = resp.json() if resp.content else {}
@@ -232,9 +307,14 @@ def _calendar_create_via_service_account(
     if not attendee_emails:
         return out
 
+    status_code = _conference_status_code(event)
+    if not hangout_link and status_code == "pending":
+        out["error"] = "meet link pending — invite email not sent"
+        return out
+
     invite_error = _gmail_send_calendar_invite(
         service_account_path=service_account_path,
-        delegate_email=delegate_email,
+        delegate_email=delegate,
         title=title,
         start=start,
         end=end,
@@ -277,16 +357,14 @@ def _gmail_send_calendar_invite(
         f"\n"
         f"This event is also on the organizer's Google Calendar.\n"
     )
-    # us-ascii / 7bit so the Gmail `raw` payload (urlsafe-b64 of the whole
-    # MIME message) still contains the Meet link as plaintext after one decode —
-    # utf-8 would wrap the body in a second base64 CTE and hide it.
-    mime = MIMEText(body_text)
-    mime["To"] = ", ".join(attendees)
-    mime["Subject"] = f"Invitation: {title}"
-    mime["From"] = delegate_email
-    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
-
+    # Keep the MIMEText us-ascii default; UnicodeEncodeError is caught below
+    # so a non-ascii title cannot raise after the event already exists.
     try:
+        mime = MIMEText(body_text)
+        mime["To"] = ", ".join(attendees)
+        mime["Subject"] = f"Invitation: {title}"
+        mime["From"] = delegate_email
+        raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
         credentials = _sa_credentials(
             service_account_path=service_account_path,
             delegate_email=delegate_email,
@@ -298,19 +376,19 @@ def _gmail_send_calendar_invite(
                 "Authorization": f"Bearer {credentials.token}",
                 "Content-Type": "application/json",
             },
-            json={"message": {"raw": raw}},
+            json={"raw": raw},
             timeout=45,
         )
+        if resp.status_code >= 400:
+            return {
+                "error": (
+                    f"invite email failed ({resp.status_code}): {resp.text[:500]}"
+                )
+            }
+        data = resp.json() if resp.content else {}
     except Exception as exc:  # noqa: BLE001 — invite failure must not drop the event
         return {"error": f"invite email failed: {exc}"}
 
-    if resp.status_code >= 400:
-        return {
-            "error": (
-                f"invite email failed ({resp.status_code}): {resp.text[:500]}"
-            )
-        }
-    data = resp.json() if resp.content else {}
     msg_id = ""
     if isinstance(data, dict):
         msg_id = str(data.get("id") or "")
@@ -331,9 +409,15 @@ def _calendar_create_contract(fn):
         result = fn(self, *args, **kwargs)
         if not isinstance(result, dict):
             return result
+        stored = getattr(self, "_pending_calendar_insert_error", None)
+        if stored is not None:
+            self._pending_calendar_insert_error = None
         err = result.get("error") or ""
-        if result.get("success") is False and "Calendar events.insert failed" in err:
-            raise RuntimeError(err)
+        if result.get("success") is False:
+            if isinstance(stored, CalendarInsertError):
+                raise stored
+            if "Calendar events.insert failed" in err:
+                raise CalendarInsertError(err)
         data = result.get("data")
         if (
             result.get("success") is True
@@ -562,6 +646,12 @@ class GoogleWorkspaceClient(WorkspaceClient):
             start = f"{start}T10:00:00Z"
         if "T" not in end:
             end = f"{end}T11:00:00Z"
+        try:
+            _raise_if_naive_datetimelike(start, "start")
+            _raise_if_naive_datetimelike(end, "end")
+        except CalendarInsertError as exc:
+            self._pending_calendar_insert_error = exc
+            raise
         google_cfg = (
             self.config.get("google", {})
             if isinstance(self.config, Mapping)
@@ -578,15 +668,25 @@ class GoogleWorkspaceClient(WorkspaceClient):
                 "calendar.create requires google.service_account_path (or "
                 "GOOGLE_SERVICE_ACCOUNT_PATH) — events.insert is REST-only"
             )
-        return _calendar_create_via_service_account(
-            service_account_path=sa_path,
-            delegate_email=delegate,
-            title=title,
-            start=start,
-            end=end,
-            attendees=attendees,
-            description=description,
-        )
+        try:
+            return _calendar_create_via_service_account(
+                service_account_path=sa_path,
+                delegate_email=delegate,
+                title=title,
+                start=start,
+                end=end,
+                attendees=attendees,
+                description=description,
+            )
+        except CalendarInsertError as exc:
+            self._pending_calendar_insert_error = exc
+            raise
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            wrapped = CalendarInsertError(f"Calendar events.insert failed: {exc}")
+            self._pending_calendar_insert_error = wrapped
+            raise wrapped from exc
 
     @guarded("calendar.update", target_arg="event_id", audit_provider="google_api")
     def calendar_update(self, event_id: str, **fields: Any) -> dict[str, Any]:

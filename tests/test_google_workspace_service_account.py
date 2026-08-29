@@ -177,10 +177,12 @@ class TestWriteGuardrails:
         assert "acme.json" in kwargs["service_account_path"]
 
     def test_calendar_create_blocked_without_auto_approve(self, google_client):
-        with patch.object(google_client, "_run") as mock_run:
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account"
+        ) as mock_create:
             result = google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
         assert result["success"] is False
-        mock_run.assert_not_called()
+        mock_create.assert_not_called()
 
     def test_calendar_create_proceeds_with_auto_approve(self, google_client):
         """calendar.create goes through SA REST (events.insert + invite), not
@@ -190,10 +192,16 @@ class TestWriteGuardrails:
         with patch(
             "providers.google_workspace._calendar_create_via_service_account",
             return_value={"id": "e1", "hangoutLink": None},
-        ):
+        ) as mock_create:
             result = google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
         assert result["success"] is True
         assert result["action"] == "calendar.create"
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["title"] == "Sync"
+        assert kwargs["start"] == "2026-07-10T10:00:00Z"
+        assert kwargs["end"] == "2026-07-10T11:00:00Z"
+        assert "acme.json" in kwargs["service_account_path"]
+        assert kwargs["delegate_email"] == "alicia@acme-advisory.example"
 
     def test_drive_upload_blocked_without_auto_approve(self, google_client):
         with patch.object(google_client, "_run") as mock_run:
@@ -250,13 +258,20 @@ class TestGmailSendDestructive:
 class TestActionResultShape:
     def test_calendar_create_returns_action_result(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-        with patch.object(google_client, "_run", return_value=(0, '{"id": "e1"}', "")):
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account",
+            return_value={"id": "e1", "hangoutLink": None},
+        ) as mock_create:
             result = google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
         assert "success" in result
         assert "action" in result
         assert "provider" in result
         assert "audited" in result
+        assert result["success"] is True
         assert result["provider"] == "google_api"
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["title"] == "Sync"
+        assert kwargs["start"] == "2026-07-10T10:00:00Z"
 
     def test_gmail_draft_returns_action_result(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
@@ -282,12 +297,17 @@ class TestActionResultShape:
 class TestAuditCalled:
     def test_calendar_create_audits(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-        with patch.object(google_client, "_run", return_value=(0, '{"id": "e1"}', "")), \
-             patch("workspace_audit.audit_workspace_action") as mock_audit:
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account",
+            return_value={"id": "e1", "hangoutLink": None},
+        ) as mock_create, patch(
+            "workspace_audit.audit_workspace_action"
+        ) as mock_audit:
             google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
         mock_audit.assert_called_once()
         args = mock_audit.call_args
         assert args[0][1] == "google_api"  # provider
+        assert mock_create.call_args.kwargs["title"] == "Sync"
 
     def test_drive_upload_audits(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
@@ -298,9 +318,13 @@ class TestAuditCalled:
 
     def test_failed_write_audits_with_status(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-        with patch.object(google_client, "_run", return_value=(1, "", "auth failed")), \
-             patch("workspace_audit.audit_workspace_action") as mock_audit:
-            google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
+        from providers.google_workspace import CalendarInsertError
+        with patch(
+            "providers.google_workspace._calendar_create_via_service_account",
+            side_effect=CalendarInsertError("Calendar events.insert failed: auth failed"),
+        ), patch("workspace_audit.audit_workspace_action") as mock_audit:
+            with pytest.raises(RuntimeError):
+                google_client.calendar_create("Sync", "2026-07-10", "2026-07-10")
         mock_audit.assert_called_once()
         # Check status="failed" is in kwargs
         assert mock_audit.call_args.kwargs.get("status") == "failed"
