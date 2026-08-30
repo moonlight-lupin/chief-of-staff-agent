@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.5 — note-taker retrieval activation guidance
+
+Doc-only follow-up from wiki-routing research on the live deployment. A wiki
+query only happens if the agent first knows to reach for the wiki — and the
+wiki is pull-only: nothing injects it into context (Hermes has no
+CLAUDE.md/AGENTS.md always-on router for `$HERMES_HOME`).
+
+### Changes
+
+- **note-taker 0.2.1 — new "Retrieval Activation" section** in Operation 2
+  (Query). Explains the activation problem, gives a persistent-memory pointer
+  template with explicit trigger conditions (comparisons, decisions, lessons,
+  client/vendor facts, domain research — a bare path reference gets
+  skipped), and a recommendation ladder:
+  1. memory pointer by default (~30 tokens, no machinery);
+  2. plugin hook escalation only when the agent is observed re-deriving
+     wiki-held knowledge twice or more in a month (bounded system-prompt
+     section before per-turn `pre_llm_call` injection);
+  3. never route from identity files (`SOUL.md` holds identity, not
+     infrastructure routing that changes with the tool landscape).
+  Adds a scheduled/headless caveat: cron runs often skip persistent memory,
+  so the job prompt must name the wiki query step explicitly.
+- No code changes; suite unchanged.
+
 ## v0.5.4 — Wiki bootstrap/lint contract + headless-scheduler hardening
 
 Field follow-up #2 from the live deployment (Battery Road Collective,

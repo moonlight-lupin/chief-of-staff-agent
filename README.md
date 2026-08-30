@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.5.4
+> **Status:** v0.5.5
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 

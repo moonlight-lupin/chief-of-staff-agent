@@ -1,7 +1,7 @@
 ---
 name: note-taker
 description: "Use when capturing durable knowledge into the wiki, querying it, or linting it."
-version: 0.2.0
+version: 0.2.1
 author: moonlight-lupin
 license: Apache-2.0
 metadata:
@@ -259,6 +259,39 @@ In interactive mode, share this analysis before writing many pages. In cron/auto
 Completion criterion: raw source is preserved, all curated changes are indexed, and the log lists every created/updated file.
 
 ## Operation 2 — Query (4-Signal Relevance)
+
+### Retrieval Activation
+
+The wiki is pull-only: nothing injects it into the agent's context. A query
+succeeds only if the agent first knows to reach for the wiki. Seed the host
+agent's always-on context (persistent memory file or equivalent) with a
+routing pointer like:
+
+```text
+Wiki = second brain at <wiki_path>. Before answering comparisons, decisions,
+lessons, client/vendor facts, or research in the wiki's domains, read
+<wiki_path>/index.md first. Answer from wiki pages before re-deriving.
+```
+
+Recommendation ladder:
+
+1. **Pointer in persistent memory (default).** One line, ~30 tokens, no
+   machinery. Update it when the wiki's domain scope changes. Keep the trigger
+   conditions (comparison, decision, lessons, research) in the line itself —
+   a bare path reference gets skipped.
+2. **Plugin hook (escalation only).** Trigger: the agent re-derives knowledge
+   the wiki already holds two or more times in a month. Then register a plugin
+   hook that injects relevant `index.md` titles into context. On Hermes, a
+   plugin can register a bounded system-prompt section via
+   `ctx.register_hook`/plugin lifecycle — start there before adding a
+   per-turn `pre_llm_call` injection.
+3. **Never route from identity files.** Identity layers (Hermes `SOUL.md`,
+   persona blocks) hold stable self-definition, not infrastructure routing
+   that changes with the tool landscape. Hermes docs route cross-project
+   context to memory, skills, or hooks — not identity.
+
+Scheduled/headless runs often skip persistent memory loading. The job prompt
+or skill invocation must name the wiki query step explicitly.
 
 When answering from the wiki:
 
