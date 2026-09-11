@@ -150,3 +150,50 @@ Match the file's existing heading level and tone.
 | COMPOSIO_MULTI_EXECUTE_TOOL payload | {tool_slug, arguments} | + optional {account} | same file | N/A |
 | _manage_connections action | "status" | "list" | same file | N/A |
 | account_aliases | unused | read → per-tool account field | same file | N/A |
+---
+
+# FIX ROUND — Codex review round 1 (commit 83b73af)
+
+Contract tests updated: `tests/test_composio_field_followup3.py` gained
+`TestAccountRoutingFamilyGuard` (4 tests) and
+`TestConnectionStatusMalformedEnvelope` (2 tests). 4 are RED right now — they
+encode the fixes below. Make them pass. Do NOT modify or delete that test file.
+
+## Fix 1 (MAJOR) — account routing must be family-scoped
+
+`_account_for` currently gathers toolkit candidates across BOTH families and
+uses cross-family membership to disambiguate. With `family: google` and
+`toolkits: [gmail, outlook]`:
+- only an outlook alias configured → GMAIL call gets the outlook account;
+- both aliases configured → routing returns None and silently drops the pin.
+
+Fix: select the toolkit from `_OPERATION_PREFIX_TOOLKITS[self.family]` ONLY
+(single family-specific mapping per prefix), verify it is in `self.toolkits`,
+then return `self._account_aliases.get(toolkit)`. No cross-family fallback, no
+multi-candidate guessing branch — delete it. Keep returning None when the
+family toolkit is not enabled or has no alias. Also update the stale
+docstring of `_execute_composio_tool`: `operation` now drives (a) account
+routing and (b) the unknown-tool self-diagnosis message — drop the "ONLY" claim.
+
+## Fix 2 (MINOR) — malformed connection-status envelopes read as unknown
+
+`refresh_connection_statuses()`: when the parsed result has no `results`
+mapping or no entry for the queried toolkit, classify as "unknown" (not
+"pending"). Only a well-formed entry with an accounts list maps
+active→connected / no-active→pending.
+
+## Fix 3 (MINOR) — weekly-review Drive example contradicts the bounds paragraph
+
+`skills/weekly-review/SKILL.md` ~line 69: the example
+`.venv/bin/python skills/weekly-review/scripts/workspace_collect.py drive --query ""`
+uses an empty query right above the bounded-query paragraph. Replace the
+example query with a folder-scoped one, e.g.:
+`.venv/bin/python skills/weekly-review/scripts/workspace_collect.py drive --query "00_Inbox modified > 2026-09-04"`
+(one realistic bounded example; keep surrounding text coherent).
+
+## Acceptance criteria (fix round)
+
+1. `python3 -m pytest tests/test_composio_field_followup3.py -q` — all 20 pass.
+2. `python3 -m pytest tests/ -q` — full suite green.
+3. `python3 -m ruff check shared/scripts/providers/composio_mcp_workspace_base.py shared/scripts/connect_workspace.py tests/test_composio_field_followup3.py` — clean.
+4. `_account_for` no longer contains the cross-family candidate logic.

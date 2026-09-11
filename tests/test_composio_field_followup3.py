@@ -272,3 +272,118 @@ class TestStatusIsActiveHelper:
         assert helper("INITIATED") is False
         assert helper(None) is False
         assert helper("") is False
+
+
+class TestAccountRoutingFamilyGuard:
+    """Account routing is family-scoped — Codex review MAJOR fix.
+
+    A toolkit from the OTHER family must never receive an alias, and an
+    explicit pin must never be silently dropped when its own family toolkit is
+    enabled.
+    """
+
+    def _mock(self, payload):
+        mcp = MagicMock()
+        mcp.call_tool.return_value = payload
+        return mcp
+
+    def test_google_family_never_routes_to_outlook_alias(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        config = _make_config(aliases={"gmail": "acc-g", "outlook": "acc-o"})
+        # Misconfigured toolkits list contains a foreign-family toolkit.
+        config["integrations"]["workspace"]["toolkits"] = ["gmail", "outlook"]
+        client = ComposioMCPWorkspaceClient(config)
+        client._mcp_client = self._mock({
+            "data": {"results": [{"response": {"successful": True, "data": {"messages": []}}}]}
+        })
+
+        client.mail_search("invoice")
+
+        tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
+        assert tools_arg[0]["tool_slug"] == "GMAIL_FETCH_EMAILS"
+        # The outlook alias must NOT ride along on a gmail call.
+        assert tools_arg[0]["account"] == "acc-g"
+
+    def test_google_mail_without_gmail_alias_gets_no_account(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        config = _make_config(aliases={"outlook": "acc-o"})
+        config["integrations"]["workspace"]["toolkits"] = ["gmail", "outlook"]
+        client = ComposioMCPWorkspaceClient(config)
+        client._mcp_client = self._mock({
+            "data": {"results": [{"response": {"successful": True, "data": {"messages": []}}}]}
+        })
+
+        client.mail_search("invoice")
+
+        tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
+        assert "account" not in tools_arg[0]
+
+    def test_microsoft_family_routes_to_outlook_alias(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        workspace = {
+            "provider": "composio",
+            "mode": "mcp",
+            "family": "microsoft",
+            "user_id": "test-user-123",
+            "toolkits": ["outlook", "one_drive"],
+            "account_aliases": {"outlook": "acc-outlook-7", "one_drive": "acc-od-2"},
+            "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
+        }
+        config = {
+            "integrations": {"workspace": workspace},
+            "paths": {"project_root": "/tmp/test-composio-f3"},
+            "delivery": {"timezone": "Asia/Singapore"},
+        }
+        client = ComposioMCPWorkspaceClient(config)
+        client._mcp_client = self._mock({
+            "data": {"results": [{"response": {"successful": True, "data": {"value": []}}}]}
+        })
+
+        client.mail_search("invoice")
+
+        tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
+        assert tools_arg[0]["tool_slug"].startswith("OUTLOOK_")
+        assert tools_arg[0]["account"] == "acc-outlook-7"
+
+    def test_alias_for_disabled_toolkit_is_dropped(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        # googledrive not in toolkits -> its alias must never be attached.
+        config = _make_config(
+            aliases={"gmail": "acc-g", "googledrive": "acc-od", "googlecalendar": "acc-cal"},
+        )
+        config["integrations"]["workspace"]["toolkits"] = ["gmail", "googlecalendar"]
+        client = ComposioMCPWorkspaceClient(config)
+        client._mcp_client = self._mock(_mock_events_payload())
+
+        client.calendar_list("2026-07-09", "2026-07-10")
+
+        tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
+        assert tools_arg[0]["account"] == "acc-cal"
+
+
+class TestConnectionStatusMalformedEnvelope:
+    """Malformed COMPOSIO_MANAGE_CONNECTIONS responses read as unknown."""
+
+    def _client(self):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        client = ComposioMCPWorkspaceClient(_make_config())
+        return client
+
+    def test_missing_results_is_unknown_not_pending(self, mcp_key):
+        client = self._client()
+        mcp = MagicMock()
+        mcp.call_tool.return_value = {"data": {"unexpected": True}}
+        client._mcp_client = mcp
+        assert client.refresh_connection_statuses()["gmail"] == "unknown"
+
+    def test_missing_toolkit_entry_is_unknown_not_pending(self, mcp_key):
+        client = self._client()
+        mcp = MagicMock()
+        mcp.call_tool.return_value = {"data": {"results": {"other_toolkit": {"accounts": []}}}}
+        client._mcp_client = mcp
+        assert client.refresh_connection_statuses()["gmail"] == "unknown"
