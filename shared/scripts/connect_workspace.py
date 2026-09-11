@@ -327,6 +327,7 @@ def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
 
     try:
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient, save_session_meta, load_session_meta
+        from providers.composio_mcp_workspace_base import _status_is_active
     except ImportError as exc:
         print(f"❌ {exc}")
         return 1
@@ -352,7 +353,7 @@ def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
             print("\nExisting accounts:")
             for acc in accounts:
                 status = acc.get("status", "unknown")
-                icon = "✅" if status == "active" else "⏳"
+                icon = "✅" if _status_is_active(status) else "⏳"
                 print(f"  {icon} {acc.get('id', '?')} — {status}")
 
         # Update session metadata
@@ -625,15 +626,15 @@ def cmd_composio_debug_tool(config: dict[str, Any], toolkit: str) -> int:
 
     tool_map = {
         "gmail": [("GMAIL_FETCH_EMAILS", {"max_results": 2})],
-        "googlecalendar": [("GOOGLECALENDAR_FIND_EVENT", {
-            "time_min": "2026-01-01T00:00:00Z",
-            "time_max": "2026-12-31T23:59:59Z",
-            "max_results": 2,
+        "googlecalendar": [("GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", {
+            "max_results_per_calendar": 2,
+            "response_detail": "full",
+            "single_events": True,
         })],
-        "calendar": [("GOOGLECALENDAR_FIND_EVENT", {
-            "time_min": "2026-01-01T00:00:00Z",
-            "time_max": "2026-12-31T23:59:59Z",
-            "max_results": 2,
+        "calendar": [("GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", {
+            "max_results_per_calendar": 2,
+            "response_detail": "full",
+            "single_events": True,
         })],
         "googledrive": [("GOOGLEDRIVE_FIND_FILE", {"query": "", "max_results": 3})],
         "outlook": [

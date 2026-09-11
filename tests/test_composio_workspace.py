@@ -36,12 +36,13 @@ def composio_config():
                 },
                 "tools_allowlist": {
                     "gmail": {"read": ["GMAIL_FETCH_EMAILS"], "write_safe": ["GMAIL_CREATE_EMAIL_DRAFT"]},
-                    "googlecalendar": {"read": ["GOOGLECALENDAR_FIND_EVENT"], "write_safe": ["GOOGLECALENDAR_CREATE_EVENT"]},
+                    "googlecalendar": {"read": ["GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS"], "write_safe": ["GOOGLECALENDAR_CREATE_EVENT"]},
                     "googledrive": {"read": ["GOOGLEDRIVE_FIND_FILE", "GOOGLEDRIVE_DOWNLOAD_FILE"], "write_safe": ["GOOGLEDRIVE_UPLOAD_FILE"]},
                 },
             }
         },
         "paths": {"project_root": "/tmp/test-composio"},
+        "delivery": {"timezone": "Asia/Singapore"},
     }
 
 
@@ -192,13 +193,24 @@ class TestComposioMCPCalendar:
 
         mock_mcp = MagicMock()
         mock_mcp.call_tool.return_value = {
-            "data": {"results": [{"response": {"successful": True, "data": {"event_data": {"event_data": [{"id": "e1", "summary": "Meeting"}]}}}}]},
+            "data": {"results": [{"response": {"successful": True, "data": [
+                {
+                    "event": {"id": "e1", "summary": "Meeting"},
+                    "source_calendar_id": "cal-primary",
+                    "source_calendar_summary": "Work",
+                },
+            ]}}]},
         }
         client._mcp_client = mock_mcp
 
         result = client.calendar_list("2026-07-09", "2026-07-10")
         assert len(result) == 1
-        assert mock_mcp.call_tool.call_args[0][1]["tools"][0]["tool_slug"] == "GOOGLECALENDAR_FIND_EVENT"
+        assert result[0]["id"] == "e1"
+        assert result[0]["source_calendar_id"] == "cal-primary"
+        tools_arg = mock_mcp.call_tool.call_args[0][1]["tools"][0]
+        assert tools_arg["tool_slug"] == "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS"
+        assert tools_arg["arguments"]["time_min"] == "2026-07-09T00:00:00+08:00"
+        assert tools_arg["arguments"]["time_max"] == "2026-07-10T23:59:59+08:00"
 
 
 class TestComposioMCPDrive:
@@ -299,9 +311,20 @@ class TestNormalizeToolResult:
 
     def test_normalize_calendar(self):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
-        data = {"event_data": {"event_data": [{"id": "e1"}]}}
-        result = ComposioMCPWorkspaceClient._normalize_tool_result("GOOGLECALENDAR_FIND_EVENT", data)
+        data = [
+            {
+                "event": {"id": "e1"},
+                "source_calendar_id": "cal-primary",
+                "source_calendar_summary": "Work",
+            },
+        ]
+        result = ComposioMCPWorkspaceClient._normalize_tool_result(
+            "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", data,
+        )
         assert len(result) == 1
+        assert result[0]["id"] == "e1"
+        assert result[0]["source_calendar_id"] == "cal-primary"
+        assert result[0]["source_calendar_summary"] == "Work"
 
     def test_normalize_drive(self):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

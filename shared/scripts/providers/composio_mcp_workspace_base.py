@@ -14,10 +14,11 @@ import os
 import sys
 import time
 import warnings
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 _PARENT = Path(__file__).resolve().parent.parent
 if str(_PARENT) not in sys.path:
@@ -55,7 +56,7 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "mail_modify_labels": "GMAIL_ADD_LABEL_TO_EMAIL",  # archive/unarchive/tag
         "mail_trash": "GMAIL_MOVE_TO_TRASH",
         "mail_untrash": "GMAIL_UNTRASH_MESSAGE",
-        "calendar_list": "GOOGLECALENDAR_FIND_EVENT",
+        "calendar_list": "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS",
         "calendar_create": "GOOGLECALENDAR_CREATE_EVENT",
         "calendar_update": "GOOGLECALENDAR_UPDATE_EVENT",
         "files_search": "GOOGLEDRIVE_FIND_FILE",
@@ -523,6 +524,52 @@ def get_enabled_tools(config: Any, access_level: str = "read") -> dict[str, list
     return result
 
 
+def _status_is_active(status: Any) -> bool:
+    return str(status or "").strip().lower() == "active"
+
+
+def _normalize_unified_calendar_events(data: Any) -> list[Any]:
+    """Flatten GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS into event dicts.
+
+    Accepts a list of ``{event, source_calendar_id, source_calendar_summary}``
+    items, a bare list of event dicts, or a dict with an ``items`` list.
+    """
+    items: Any = data
+    if isinstance(data, Mapping):
+        items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return []
+    events: list[Any] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        raw_event = item.get("event")
+        if isinstance(raw_event, Mapping):
+            event = dict(raw_event)
+            if "source_calendar_id" in item:
+                event["source_calendar_id"] = item["source_calendar_id"]
+            if "source_calendar_summary" in item:
+                event["source_calendar_summary"] = item["source_calendar_summary"]
+            events.append(event)
+        else:
+            events.append(dict(item))
+    return events
+
+
+_OPERATION_PREFIX_TOOLKITS: dict[str, dict[str, str]] = {
+    "google": {
+        "mail": "gmail",
+        "calendar": "googlecalendar",
+        "files": "googledrive",
+    },
+    "microsoft": {
+        "mail": "outlook",
+        "calendar": "outlook",
+        "files": "one_drive",
+    },
+}
+
+
 class ComposioMCPWorkspaceClient(WorkspaceClient):
     """Composio backend using MCP meta-tools (connect.composio.dev/mcp)."""
 
@@ -553,6 +600,18 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             self._tool_slugs = {
                 str(k): str(v) for k, v in raw_slugs.items() if v
             }
+
+        self._account_aliases: dict[str, str] = {}
+        raw_aliases = workspace.get("account_aliases")
+        if isinstance(raw_aliases, Mapping):
+            enabled = {str(t) for t in self.toolkits}
+            for key, value in raw_aliases.items():
+                name = str(key)
+                if name not in enabled or value is None:
+                    continue
+                alias = str(value).strip()
+                if alias:
+                    self._account_aliases[name] = alias
 
         mcp_cfg = workspace.get("mcp", {}) if isinstance(workspace, Mapping) else {}
         self.endpoint = str(mcp_cfg.get("endpoint", "https://connect.composio.dev/mcp"))
@@ -587,6 +646,35 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         if override:
             return override
         return FAMILY_SLUGS.get(self.family, FAMILY_SLUGS["google"])[operation]
+
+    def _account_for(self, operation: str) -> str | None:
+        """Return the configured account alias for an operation, if any.
+
+        Toolkit is derived from the operation prefix (mail/calendar/files)
+        family-agnostically, then checked against ``self.toolkits``. Unknown
+        prefixes and disabled toolkits return None; when more than one
+        candidate is enabled, only an explicit ``account_aliases`` entry is
+        used — no guessing.
+        """
+        prefix = operation.split("_", 1)[0] if operation else ""
+        candidates = list(dict.fromkeys(
+            family_map[prefix]
+            for family_map in _OPERATION_PREFIX_TOOLKITS.values()
+            if prefix in family_map
+        ))
+        if not candidates:
+            return None
+        enabled = [name for name in candidates if name in self.toolkits]
+        if len(enabled) == 1:
+            toolkit = enabled[0]
+        elif len(enabled) > 1:
+            aliased = [name for name in enabled if self._account_aliases.get(name)]
+            if len(aliased) != 1:
+                return None
+            toolkit = aliased[0]
+        else:
+            return None
+        return self._account_aliases.get(toolkit) or None
 
     def _validate_config(self) -> None:
         if not isinstance(self.config, Mapping):
@@ -627,17 +715,21 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         ``operation`` is the neutral op name (e.g. "mail_search"); it is used ONLY
         to build a self-diagnosing message when Composio reports the slug as an
         unknown tool — the raise names the slug and the tool_slugs override path.
+        When ``account_aliases`` pins a toolkit, the matching alias is added as
+        an ``account`` sibling of ``tool_slug`` / ``arguments``.
         """
         mcp = self._get_mcp()
+        tool_entry: dict[str, Any] = {
+            "tool_slug": tool_slug,
+            "arguments": input_data,
+        }
+        alias = self._account_for(operation)
+        if alias:
+            tool_entry["account"] = str(alias)
         result = mcp.call_tool(
             "COMPOSIO_MULTI_EXECUTE_TOOL",
             {
-                "tools": [
-                    {
-                        "tool_slug": tool_slug,
-                        "arguments": input_data,
-                    }
-                ]
+                "tools": [tool_entry]
             },
         )
         # Extract the actual tool response from results array
@@ -713,12 +805,15 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return self._normalize_tool_result(slug, data)
 
     @staticmethod
-    def _normalize_tool_result(tool_slug: str, data: dict[str, Any]) -> Any:
+    def _normalize_tool_result(tool_slug: str, data: Any) -> Any:
         """Normalize live Composio response quirks into standard shapes.
 
         Contains all the response-shape knowledge in one place so
         workspace methods don't repeat extraction logic.
         """
+        if tool_slug == "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS":
+            return _normalize_unified_calendar_events(data)
+
         if not isinstance(data, dict):
             return data
 
@@ -765,10 +860,10 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         statuses: dict[str, str] = {}
         for toolkit in self.toolkits:
             try:
-                result = self._manage_connections("status", toolkit)
+                result = self._manage_connections("list", toolkit)
                 tk_info = result.get("results", {}).get(toolkit, {})
                 accounts = tk_info.get("accounts", [])
-                has_active = any(a.get("status") == "active" for a in accounts)
+                has_active = any(_status_is_active(a.get("status")) for a in accounts)
                 statuses[toolkit] = "connected" if has_active else "pending"
             except Exception:
                 statuses[toolkit] = "unknown"
@@ -1403,6 +1498,28 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
     # --- Calendar ---
 
+    def _localized_calendar_bound(self, value: str, *, end_of_day: bool) -> str:
+        """Turn a date-only bound into a tz-localized ISO window.
+
+        Full ISO datetimes (containing ``T``) pass through unchanged. Date-only
+        values become 00:00:00 / 23:59:59 in ``delivery.timezone`` (UTC when
+        unset), formatted with an explicit offset (``±HH:MM``, never bare Z).
+        """
+        if "T" in value:
+            return value
+        delivery = (
+            self.config.get("delivery", {}) if isinstance(self.config, Mapping) else {}
+        )
+        tz_name = "UTC"
+        if isinstance(delivery, Mapping):
+            raw_tz = delivery.get("timezone")
+            if raw_tz:
+                tz_name = str(raw_tz)
+        clock = dt_time(23, 59, 59) if end_of_day else dt_time(0, 0, 0)
+        return datetime.combine(
+            date.fromisoformat(value), clock, tzinfo=ZoneInfo(tz_name),
+        ).isoformat()
+
     def calendar_list(self, start: str, end: str) -> list[dict[str, Any]]:
         slug = self._slug_for("calendar_list")
         try:
@@ -1416,9 +1533,11 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
                 }
             else:
                 args = {
-                    "time_min": f"{start}T00:00:00Z" if "T" not in start else start,
-                    "time_max": f"{end}T23:59:59Z" if "T" not in end else end,
-                    "max_results": 50,
+                    "time_min": self._localized_calendar_bound(start, end_of_day=False),
+                    "time_max": self._localized_calendar_bound(end, end_of_day=True),
+                    "max_results_per_calendar": 50,
+                    "response_detail": "full",
+                    "single_events": True,
                 }
             data = self._execute_composio_tool(slug, args, operation="calendar_list")
             return self._normalize_records("calendar_list", slug, data)

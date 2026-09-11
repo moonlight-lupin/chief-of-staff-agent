@@ -69,6 +69,8 @@ Google Calendar and Drive access go through the shared `WorkspaceClient` layer:
 .venv/bin/python skills/weekly-review/scripts/workspace_collect.py drive --query ""
 ```
 
+Drive queries in scheduled runs are bounded and metadata-only: never run an unbounded empty-query Drive search or request full `allDrives` scope. Scope each query to the configured root/operational folder, filter `trashed=false` plus a `createdTime`/`modifiedTime` window, request only metadata fields, page size 50–100, handle pagination tokens exactly (no silent retries that skip tokens), split large date slices into windows, and union-dedupe by file ID. This avoids the Composio inline-payload offload failure mode (data_preview offload, same family as the 2026-08-29 data_preview issue) for agents doing inventory reads outside the provider's pinned `files_search`.
+
 `WorkspaceClient` routes to the workspace provider selected by `integrations.workspace.provider` in `company.yaml` (`google_api` | `composio` | `m365`); calendar and file methods are provider-neutral, so the same commands work on Google or Microsoft 365. All operations are read-only.
 
 ## Time Windows

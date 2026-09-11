@@ -31,12 +31,13 @@ def mcp_config():
                 },
                 "tools_allowlist": {
                     "gmail": {"read": ["GMAIL_FETCH_EMAILS"], "write_safe": ["GMAIL_CREATE_EMAIL_DRAFT"]},
-                    "googlecalendar": {"read": ["GOOGLECALENDAR_FIND_EVENT"], "write_safe": ["GOOGLECALENDAR_CREATE_EVENT"]},
+                    "googlecalendar": {"read": ["GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS"], "write_safe": ["GOOGLECALENDAR_CREATE_EVENT"]},
                     "googledrive": {"read": ["GOOGLEDRIVE_FIND_FILE"], "write_safe": ["GOOGLEDRIVE_UPLOAD_FILE"]},
                 },
             }
         },
         "paths": {"project_root": "/tmp/test-mcp-workspace"},
+        "delivery": {"timezone": "Asia/Singapore"},
     }
 
 
@@ -117,16 +118,25 @@ class TestComposioMCPCalendar:
 
         mock_mcp = MagicMock()
         mock_mcp.call_tool.return_value = {
-            "data": {"results": [{"response": {"successful": True, "data": {"event_data": {"event_data": [{"id": "e1", "summary": "Meeting"}]}}}}]},
+            "data": {"results": [{"response": {"successful": True, "data": [
+                {
+                    "event": {"id": "e1", "summary": "Meeting"},
+                    "source_calendar_id": "cal-primary",
+                    "source_calendar_summary": "Work",
+                },
+            ]}}]},
         }
         client._mcp_client = mock_mcp
 
         result = client.calendar_list("2026-07-09", "2026-07-10")
 
         assert len(result) == 1
+        assert result[0]["source_calendar_id"] == "cal-primary"
         mock_mcp.call_tool.assert_called_once()
         tools_arg = mock_mcp.call_tool.call_args[0][1]["tools"]
-        assert tools_arg[0]["tool_slug"] == "GOOGLECALENDAR_FIND_EVENT"
+        assert tools_arg[0]["tool_slug"] == "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS"
+        assert tools_arg[0]["arguments"]["time_min"] == "2026-07-09T00:00:00+08:00"
+        assert tools_arg[0]["arguments"]["time_max"] == "2026-07-10T23:59:59+08:00"
 
     def test_calendar_create_calls_multi_execute(self, mcp_config, mcp_key, tmp_project):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
