@@ -45,8 +45,9 @@ def _resolve_composio_family(
 
     Explicit ``family`` wins when it is one of :data:`VALID_FAMILIES`. Invalid
     explicit values default to ``google`` (and warn). When family is unset,
-    microsoft toolkits in the list imply ``microsoft`` (and warn). Otherwise
-    ``google``.
+    a microsoft-only toolkit list implies ``microsoft`` (and warn). A mixed
+    Google+Microsoft list keeps the ``google`` default so a stray outlook
+    entry cannot flip Gmail/Calendar/Drive slugs. Otherwise ``google``.
     """
     if not isinstance(workspace, Mapping):
         return "google"
@@ -69,7 +70,9 @@ def _resolve_composio_family(
             )
         return "google"
 
-    if any(t in MICROSOFT_TOOLKITS for t in tk):
+    has_microsoft = any(t in MICROSOFT_TOOLKITS for t in tk)
+    has_google = any(t in GOOGLE_TOOLKITS for t in tk)
+    if has_microsoft and not has_google:
         if warn:
             warnings.warn(
                 "integrations.workspace.family not set but toolkits contain "

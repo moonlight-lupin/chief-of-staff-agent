@@ -648,31 +648,17 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         return FAMILY_SLUGS.get(self.family, FAMILY_SLUGS["google"])[operation]
 
     def _account_for(self, operation: str) -> str | None:
-        """Return the configured account alias for an operation, if any.
+        """Return the configured account alias for this family's toolkit, if any.
 
-        Toolkit is derived from the operation prefix (mail/calendar/files)
-        family-agnostically, then checked against ``self.toolkits``. Unknown
-        prefixes and disabled toolkits return None; when more than one
-        candidate is enabled, only an explicit ``account_aliases`` entry is
-        used — no guessing.
+        Toolkit is taken from ``_OPERATION_PREFIX_TOOLKITS[self.family]`` for the
+        operation prefix, then checked against ``self.toolkits``. Unknown
+        prefixes, a family toolkit that is not enabled, and a toolkit with no
+        alias all return None. There is no cross-family fallback.
         """
         prefix = operation.split("_", 1)[0] if operation else ""
-        candidates = list(dict.fromkeys(
-            family_map[prefix]
-            for family_map in _OPERATION_PREFIX_TOOLKITS.values()
-            if prefix in family_map
-        ))
-        if not candidates:
-            return None
-        enabled = [name for name in candidates if name in self.toolkits]
-        if len(enabled) == 1:
-            toolkit = enabled[0]
-        elif len(enabled) > 1:
-            aliased = [name for name in enabled if self._account_aliases.get(name)]
-            if len(aliased) != 1:
-                return None
-            toolkit = aliased[0]
-        else:
+        family_map = _OPERATION_PREFIX_TOOLKITS.get(self.family) or {}
+        toolkit = family_map.get(prefix)
+        if not toolkit or toolkit not in self.toolkits:
             return None
         return self._account_aliases.get(toolkit) or None
 
@@ -712,11 +698,12 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         failed for others (Calendar Create) because the input dict was not
         passed through to the underlying tool.
 
-        ``operation`` is the neutral op name (e.g. "mail_search"); it is used ONLY
-        to build a self-diagnosing message when Composio reports the slug as an
-        unknown tool — the raise names the slug and the tool_slugs override path.
-        When ``account_aliases`` pins a toolkit, the matching alias is added as
-        an ``account`` sibling of ``tool_slug`` / ``arguments``.
+        ``operation`` is the neutral op name (e.g. "mail_search"). It drives
+        account routing via ``_account_for`` and the self-diagnosing message
+        when Composio reports the slug as an unknown tool (the raise names the
+        slug and the tool_slugs override path). When ``account_aliases`` pins a
+        toolkit, the matching alias is added as an ``account`` sibling of
+        ``tool_slug`` / ``arguments``.
         """
         mcp = self._get_mcp()
         tool_entry: dict[str, Any] = {
@@ -861,8 +848,15 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         for toolkit in self.toolkits:
             try:
                 result = self._manage_connections("list", toolkit)
-                tk_info = result.get("results", {}).get(toolkit, {})
-                accounts = tk_info.get("accounts", [])
+                results = result.get("results") if isinstance(result, Mapping) else None
+                if not isinstance(results, Mapping) or toolkit not in results:
+                    statuses[toolkit] = "unknown"
+                    continue
+                tk_info = results[toolkit]
+                accounts = tk_info.get("accounts") if isinstance(tk_info, Mapping) else None
+                if not isinstance(accounts, list):
+                    statuses[toolkit] = "unknown"
+                    continue
                 has_active = any(_status_is_active(a.get("status")) for a in accounts)
                 statuses[toolkit] = "connected" if has_active else "pending"
             except Exception:
