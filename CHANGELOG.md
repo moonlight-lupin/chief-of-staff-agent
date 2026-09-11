@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.5.6 — field follow-up #3: unified calendar reads, multi-account routing, status fixes
+
+Field follow-up #3 from the live deployment (Battery Road Collective,
+composio:mcp provider, Raspberry Pi 5, Asia/Singapore). Three provider fixes
+and one doc hardening, ported from the operator's tested local batch.
+
+### Changes
+
+- **calendar_list: unified endpoint + normalizer + tz-correct windows**
+  (composio:mcp provider). `FAMILY_SLUGS["google"]["calendar_list"]` moved from
+  the legacy `GOOGLECALENDAR_FIND_EVENT` (intermittent nested
+  `event_data.event_data` payloads in scheduled runs) to
+  `GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS`. New normalizer branch unwraps
+  `[{event, source_calendar_id, source_calendar_summary}]` and surfaces
+  per-item `source_calendar_*` so multi-calendar reads stay attributable.
+  Timezone fix: windows are now built with an explicit offset from
+  `delivery.timezone` (`+08:00` for an SG workspace) instead of hardcoded
+  `T00:00:00Z`/`T23:59:59Z`, which Google interprets as UTC — an all-day SGT
+  window previously read events ending 07:59 SGT the next day. Stale contract
+  tests updated; debug `tool_map` in `connect_workspace.py` follows the new
+  slug.
+- **Per-tool account routing.** Workspaces with more than one connection per
+  toolkit can pin the connection: `integrations.workspace.account_aliases`
+  (already documented in `company.yaml.example`) is now read and passed as
+  `tool["account"]` on `COMPOSIO_MULTI_EXECUTE_TOOL` entries. Routing is
+  family-scoped, resolves operation → toolkit via a prefix map with a
+  per-operation override table (`files_recycle_*` → `share_point`), and never
+  attaches a foreign-family alias. Single-account installs are unchanged
+  (no alias configured → no `account` key).
+- **Connection status: action `list` + casing normalization.**
+  `refresh_connection_statuses()` calls `COMPOSIO_MANAGE_CONNECTIONS` with
+  `action: "list"` (`status` is not a supported action). Account status
+  comparison is now case/whitespace-insensitive via the new
+  `_status_is_active` helper, shared with `connect_workspace.py`'s
+  existing-accounts icon. Malformed or missing response envelopes now read as
+  `unknown` instead of silently `pending`.
+- **weekly-review: bounded Drive queries.** `skills/weekly-review/SKILL.md`
+  documents metadata-only, folder- and time-scoped Drive queries (page size
+  50–100, `trashed=false`, `createdTime`/`modifiedTime` windows, exact
+  pagination, union-dedupe by file ID) to avoid the Composio inline-payload
+  offload failure mode for inventory reads outside the provider's pinned
+  `files_search`.
+- Mixed Google+Microsoft toolkit lists without an explicit `family` now
+  resolve to `google` (a stray outlook entry can no longer flip the family).
+- Tests: 20 contract tests in `tests/test_composio_field_followup3.py`
+  (slug/windows/normalizer, account routing incl. family-guard and
+  SharePoint override, status action + casing + malformed envelopes); stale
+  calendar contract tests updated. Suite: 2138 passed.
+
+### Upstream shape notes (from the field)
+
+- Keep a per-family calendar_list slug table; derive the window offset from
+  the configured workspace timezone instead of hardcoding `Z` or `+08:00`
+  (implemented: `delivery.timezone`).
+- Promote `account_aliases` to a documented config key — it is the only
+  deterministic way to pin multi-connection workspaces (already present in
+  `company.yaml.example`; now honored by the provider).
+- Use `list` everywhere for connection discovery and normalize status casing
+  at the adapter boundary (one helper: `_status_is_active`).
+
 ## v0.5.5 — note-taker retrieval activation guidance
 
 Doc-only follow-up from wiki-routing research on the live deployment. A wiki
