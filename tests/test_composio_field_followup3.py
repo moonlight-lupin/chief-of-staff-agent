@@ -364,6 +364,72 @@ class TestAccountRoutingFamilyGuard:
         tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
         assert tools_arg[0]["account"] == "acc-cal"
 
+    def test_sharepoint_recycle_ops_route_to_sharepoint_alias(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        # files_recycle_* slugs are SHARE_POINT_*, so the pin must come from
+        # the share_point toolkit, not one_drive (Codex round-2 MAJOR).
+        workspace = {
+            "provider": "composio",
+            "mode": "mcp",
+            "family": "microsoft",
+            "user_id": "test-user-123",
+            "toolkits": ["outlook", "one_drive", "share_point"],
+            "account_aliases": {
+                "one_drive": "acc-od",
+                "share_point": "acc-sp",
+            },
+            "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
+        }
+        config = {
+            "integrations": {"workspace": workspace},
+            "paths": {"project_root": "/tmp/test-composio-f3"},
+            "delivery": {"timezone": "Asia/Singapore"},
+        }
+        client = ComposioMCPWorkspaceClient(config)
+        client._mcp_client = self._mock({
+            "data": {"results": [{"response": {"successful": True, "data": {"value": []}}}]}
+        })
+
+        client._execute_composio_tool(
+            client._slug_for("files_recycle_list"), {}, operation="files_recycle_list",
+        )
+
+        tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
+        assert tools_arg[0]["tool_slug"] == "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS"
+        assert tools_arg[0]["account"] == "acc-sp"
+
+    def test_sharepoint_recycle_ops_without_sharepoint_alias_get_no_account(self, mcp_key):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+
+        workspace = {
+            "provider": "composio",
+            "mode": "mcp",
+            "family": "microsoft",
+            "user_id": "test-user-123",
+            "toolkits": ["outlook", "one_drive", "share_point"],
+            "account_aliases": {"one_drive": "acc-od"},
+            "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
+        }
+        config = {
+            "integrations": {"workspace": workspace},
+            "paths": {"project_root": "/tmp/test-composio-f3"},
+            "delivery": {"timezone": "Asia/Singapore"},
+        }
+        client = ComposioMCPWorkspaceClient(config)
+        client._mcp_client = self._mock({
+            "data": {"results": [{"response": {"successful": True, "data": {"value": []}}}]}
+        })
+
+        client._execute_composio_tool(
+            client._slug_for("files_recycle_restore"), {}, operation="files_recycle_restore",
+        )
+
+        tools_arg = client._mcp_client.call_tool.call_args[0][1]["tools"]
+        assert tools_arg[0]["tool_slug"] == "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM"
+        # one_drive alias must not ride on a SharePoint call.
+        assert "account" not in tools_arg[0]
+
 
 class TestConnectionStatusMalformedEnvelope:
     """Malformed COMPOSIO_MANAGE_CONNECTIONS responses read as unknown."""

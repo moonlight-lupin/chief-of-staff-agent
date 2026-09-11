@@ -197,3 +197,28 @@ example query with a folder-scoped one, e.g.:
 2. `python3 -m pytest tests/ -q` — full suite green.
 3. `python3 -m ruff check shared/scripts/providers/composio_mcp_workspace_base.py shared/scripts/connect_workspace.py tests/test_composio_field_followup3.py` — clean.
 4. `_account_for` no longer contains the cross-family candidate logic.
+
+---
+
+# FIX ROUND 2 — Codex re-review (after 4614835)
+
+## Fix (MAJOR) — SharePoint recycle operations route to the share_point toolkit
+
+`_OPERATION_PREFIX_TOOLKITS["microsoft"]["files"] = "one_drive"` maps
+`files_recycle_list` / `files_recycle_restore` to one_drive, but their slugs
+are `SHARE_POINT_LIST_RECYCLE_BIN_ITEMS` / `SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM`.
+
+Fix: in `_account_for`, resolve operation → toolkit with a per-operation
+override table checked BEFORE the prefix fallback:
+`_OPERATION_TOOLKIT_OVERRIDES = {("microsoft", "files_recycle_list"): "share_point", ("microsoft", "files_recycle_restore"): "share_point"}`
+(or derive it: if `_slug_for(operation)` starts with `SHARE_POINT_`, use
+`share_point` — pick one mechanism, keep it explicit and simple). Preserve the
+enabled-toolkit check and the no-alias → None behavior.
+
+## Acceptance criteria (fix round 2)
+
+1. New tests `test_sharepoint_recycle_ops_route_to_sharepoint_alias` and
+   `test_sharepoint_recycle_ops_without_sharepoint_alias_get_no_account` in
+   `tests/test_composio_field_followup3.py` pass (22 total in the file).
+2. `python3 -m pytest tests/ -q` — full suite green.
+3. Ruff clean on touched production files.
