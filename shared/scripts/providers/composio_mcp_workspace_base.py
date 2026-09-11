@@ -569,6 +569,13 @@ _OPERATION_PREFIX_TOOLKITS: dict[str, dict[str, str]] = {
     },
 }
 
+# Per-operation toolkit pins checked before the prefix map. Recycle-bin ops
+# use SHARE_POINT_* slugs, so they must not inherit files → one_drive.
+_OPERATION_TOOLKIT_OVERRIDES: dict[tuple[str, str], str] = {
+    ("microsoft", "files_recycle_list"): "share_point",
+    ("microsoft", "files_recycle_restore"): "share_point",
+}
+
 
 class ComposioMCPWorkspaceClient(WorkspaceClient):
     """Composio backend using MCP meta-tools (connect.composio.dev/mcp)."""
@@ -650,14 +657,17 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
     def _account_for(self, operation: str) -> str | None:
         """Return the configured account alias for this family's toolkit, if any.
 
-        Toolkit is taken from ``_OPERATION_PREFIX_TOOLKITS[self.family]`` for the
+        Toolkit is taken from ``_OPERATION_TOOLKIT_OVERRIDES`` when present,
+        otherwise from ``_OPERATION_PREFIX_TOOLKITS[self.family]`` for the
         operation prefix, then checked against ``self.toolkits``. Unknown
         prefixes, a family toolkit that is not enabled, and a toolkit with no
         alias all return None. There is no cross-family fallback.
         """
-        prefix = operation.split("_", 1)[0] if operation else ""
-        family_map = _OPERATION_PREFIX_TOOLKITS.get(self.family) or {}
-        toolkit = family_map.get(prefix)
+        toolkit = _OPERATION_TOOLKIT_OVERRIDES.get((self.family, operation))
+        if toolkit is None:
+            prefix = operation.split("_", 1)[0] if operation else ""
+            family_map = _OPERATION_PREFIX_TOOLKITS.get(self.family) or {}
+            toolkit = family_map.get(prefix)
         if not toolkit or toolkit not in self.toolkits:
             return None
         return self._account_aliases.get(toolkit) or None
