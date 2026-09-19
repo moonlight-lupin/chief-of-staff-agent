@@ -1,0 +1,7 @@
+{
+  "schema": "btl-attest.v1",
+  "file": "test_trends_v057_fixes_r2.py",
+  "sha256": "3a658b1eb1f9e89c588bead4198723a4586f360c4d7e6cc862f15962c7a0f3d7",
+  "attestedAt": "2026-09-19T17:11:09+00:00",
+  "note": "builder r2 contract tests"
+}

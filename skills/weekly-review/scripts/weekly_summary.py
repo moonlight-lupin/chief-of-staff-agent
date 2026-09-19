@@ -12,6 +12,7 @@ _spec = importlib.util.spec_from_file_location("cos_weekly_summary", _TARGET)
 if _spec is None or _spec.loader is None:
     raise ImportError(f"Cannot load weekly summary from {_TARGET}")
 _mod = importlib.util.module_from_spec(_spec)
+sys.modules["cos_weekly_summary"] = _mod
 _spec.loader.exec_module(_mod)
 
 build_weekly_summary = _mod.build_weekly_summary

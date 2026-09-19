@@ -990,6 +990,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         else:
             record(f"import:{mod_name}", "ok", "available")
 
+    try:
+        from trend_history import snapshot_health
+        health = snapshot_health(config)
+        record("trend_snapshots", health.get("status", "warn"), str(health.get("detail", "")))
+    except Exception as exc:
+        record("trend_snapshots", "warn", f"unavailable: {exc}")
+
     # Optionally fold doctor.run_checks (read-only: fix=False)
     if doctor_mod is not None and hasattr(doctor_mod, "run_checks"):
         try:

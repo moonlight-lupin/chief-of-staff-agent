@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
@@ -31,6 +32,8 @@ _SENT_STATUSES = frozenset({"sent"})
 _PAID_STATUSES = frozenset({"paid"})
 _OVERDUE_STATUSES = frozenset({"overdue"})
 _RECEIVED_STATUSES = frozenset({"received"})
+_CLOSED_STATUSES = frozenset({"paid", "cancelled"})
+_DRAFT_STATUS = "draft"
 
 
 def _project_root(config: Mapping[str, Any] | None) -> Path | None:
@@ -83,15 +86,7 @@ def _store_records(config: Mapping[str, Any] | None, store_name: str, key: str) 
         return []
 
 
-def _load_records(config: Mapping[str, Any] | None, yaml_name: str, store_name: str, key: str) -> list:
-    root = _project_root(config)
-    if root is not None:
-        try:
-            recs = _yaml_records(root / yaml_name, key)
-            if recs is not None:
-                return recs
-        except Exception:
-            return []
+def _fallback_store(config: Mapping[str, Any] | None, store_name: str, key: str) -> list:
     if store_name == "pipeline":
         try:
             from pipeline_actions import load_pipeline
@@ -103,8 +98,64 @@ def _load_records(config: Mapping[str, Any] | None, yaml_name: str, store_name: 
     return _store_records(config, store_name, key)
 
 
+def _peek_store_records(config: Mapping[str, Any] | None, store_name: str, key: str) -> list:
+    """Count store records without persisting an empty template."""
+    try:
+        from state_db import StateDB
+        with StateDB(config) as db:
+            data = db.get_kv(store_name)
+        recs = data.get(key) if isinstance(data, dict) else []
+        return recs if isinstance(recs, list) else []
+    except Exception:
+        return []
+
+
+def _load_records(
+    config: Mapping[str, Any] | None,
+    yaml_name: str,
+    store_name: str,
+    key: str,
+    sources: dict[str, Any] | None = None,
+) -> list:
+    root = _project_root(config)
+    yaml_recs: list | None = None
+    yaml_ok = False
+    if root is not None:
+        try:
+            yaml_recs = _yaml_records(root / yaml_name, key)
+            yaml_ok = yaml_recs is not None
+        except Exception:
+            # Malformed YAML: fall through to the store instead of returning [].
+            yaml_recs = None
+            yaml_ok = False
+    if yaml_ok:
+        store_recs = _peek_store_records(config, store_name, key)
+        if sources is not None:
+            yaml_n = len(yaml_recs or [])
+            store_n = len(store_recs)
+            sources[store_name] = {
+                "yaml_records": yaml_n,
+                "store_records": store_n,
+                "divergence": yaml_n != store_n,
+            }
+        return yaml_recs if isinstance(yaml_recs, list) else []
+    return _fallback_store(config, store_name, key)
+
+
 def _status(record: Mapping[str, Any]) -> str:
     return str(record.get("status") or "").strip().lower()
+
+
+def _direction(record: Mapping[str, Any]) -> str:
+    raw = str(record.get("direction") or "").strip().lower()
+    if raw in {"sent", "received"}:
+        return raw
+    status = _status(record)
+    if status in _SENT_STATUSES:
+        return "sent"
+    if status in _RECEIVED_STATUSES:
+        return "received"
+    return ""
 
 
 def _week_start(today: date | None = None) -> date:
@@ -113,10 +164,15 @@ def _week_start(today: date | None = None) -> date:
 
 
 def _parse_date(value: Any) -> date | None:
+    """Parse a date. Aware ISO timestamps are converted to the local timezone
+    before taking ``date()``, so week membership uses local calendar days."""
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.date()
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().date()
     if isinstance(value, date):
         return value
     text = str(value).strip()
@@ -124,7 +180,10 @@ def _parse_date(value: Any) -> date | None:
         return None
     try:
         if "T" in text:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone().date()
         return datetime.strptime(text[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return None
@@ -137,11 +196,37 @@ def _in_week(value: Any, start: date, end: date) -> bool:
     return start <= parsed <= end
 
 
+def _in_week_or_undated(value: Any, start: date, end: date) -> bool:
+    parsed = _parse_date(value)
+    if parsed is None:
+        return True
+    return start <= parsed <= end
+
+
 def _amount(record: Mapping[str, Any]) -> float | int | None:
     raw = record.get("amount")
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
+    if not math.isfinite(raw):
+        return None
     return raw
+
+
+def _fallback_currency(config: Mapping[str, Any] | None) -> str:
+    try:
+        if isinstance(config, Mapping):
+            bookkeeping = config.get("bookkeeping") or {}
+            if isinstance(bookkeeping, Mapping) and bookkeeping.get("base_currency"):
+                return str(bookkeeping["base_currency"])
+    except Exception:
+        pass
+    return "SGD"
+
+
+def _add_amount(bucket: dict[str, float | int], currency: str, amt: float | int) -> None:
+    prev = bucket.get(currency, 0)
+    total = prev + amt
+    bucket[currency] = int(total) if isinstance(total, (int, float)) and total == int(total) else total
 
 
 def _pipeline_section(deals: list) -> dict[str, Any]:
@@ -156,10 +241,14 @@ def _pipeline_section(deals: list) -> dict[str, Any]:
     today = date.today()
     moved = 0
     for deal in rows:
-        for field in ("last_moved_at", "moved_at", "stage_changed_at", "updated_at"):
-            if _in_week(deal.get(field), week_start, today):
+        history = deal.get("stage_history")
+        if isinstance(history, list) and history:
+            last = history[-1]
+            if isinstance(last, dict) and _in_week(last.get("at"), week_start, today):
                 moved += 1
-                break
+            continue
+        if _in_week(deal.get("updated_at"), week_start, today):
+            moved += 1
     return {
         "deals_by_stage": by_stage,
         "total_deals": len(rows),
@@ -167,31 +256,58 @@ def _pipeline_section(deals: list) -> dict[str, Any]:
     }
 
 
-def _bookkeeping_section(invoices: list) -> dict[str, Any]:
+def _bookkeeping_section(
+    invoices: list,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     rows = [i for i in invoices if isinstance(i, dict)]
     if not rows:
         return {}
-    sent = [i for i in rows if _status(i) in _SENT_STATUSES]
-    paid = [i for i in rows if _status(i) in _PAID_STATUSES]
-    overdue = [i for i in rows if _status(i) in _OVERDUE_STATUSES]
-    received = [i for i in rows if _status(i) in _RECEIVED_STATUSES]
-    outstanding: dict[str, float | int] = {}
+    week_start = _week_start()
+    today = date.today()
+    fallback_ccy = _fallback_currency(config)
+    sent_n = 0
+    received_n = 0
+    paid_n = 0
+    overdue_n = 0
+    outstanding_ar: dict[str, float | int] = {}
+    outstanding_ap: dict[str, float | int] = {}
     for inv in rows:
-        if _status(inv) in _PAID_STATUSES | {"cancelled"}:
+        status = _status(inv)
+        direction = _direction(inv)
+        if (
+            direction == "sent"
+            and status != _DRAFT_STATUS
+            and _in_week_or_undated(inv.get("issue_date"), week_start, today)
+        ):
+            sent_n += 1
+        if (
+            direction == "received"
+            and status != _DRAFT_STATUS
+            and _in_week_or_undated(inv.get("issue_date"), week_start, today)
+        ):
+            received_n += 1
+        if status in _PAID_STATUSES and _in_week_or_undated(inv.get("paid_date"), week_start, today):
+            paid_n += 1
+        if status in _OVERDUE_STATUSES:
+            overdue_n += 1
+        if status in _CLOSED_STATUSES or status == _DRAFT_STATUS:
             continue
         amt = _amount(inv)
         if amt is None:
             continue
-        ccy = str(inv.get("currency") or "SGD")
-        prev = outstanding.get(ccy, 0)
-        total = prev + amt
-        outstanding[ccy] = int(total) if isinstance(total, (int, float)) and total == int(total) else total
+        ccy = str(inv.get("currency") or fallback_ccy)
+        if direction == "received":
+            _add_amount(outstanding_ap, ccy, amt)
+        else:
+            _add_amount(outstanding_ar, ccy, amt)
     return {
-        "invoices_sent": len(sent),
-        "invoices_received": len(received),
-        "invoices_paid": len(paid),
-        "overdue_invoices": len(overdue),
-        "outstanding_totals": outstanding,
+        "invoices_sent": sent_n,
+        "invoices_received": received_n,
+        "invoices_paid": paid_n,
+        "overdue_invoices": overdue_n,
+        "outstanding_ar": outstanding_ar,
+        "outstanding_ap": outstanding_ap,
     }
 
 
@@ -214,6 +330,33 @@ def _tasks_section(todos: list) -> dict[str, Any]:
     }
 
 
+def _wiki_frontmatter_dates(text: str) -> tuple[date | None, date | None]:
+    created = None
+    updated = None
+    if not text.startswith("---\n"):
+        return None, None
+    fm_end = text.find("\n---\n", 4)
+    if fm_end <= 0:
+        return None, None
+    for line in text[4:fm_end].split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("created:"):
+            created = _parse_date(stripped.split(":", 1)[1].strip().strip('"').strip("'"))
+        elif stripped.startswith("updated:"):
+            updated = _parse_date(stripped.split(":", 1)[1].strip().strip('"').strip("'"))
+    return created, updated
+
+
+def _local_mtime_date(path: Path) -> date | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    # File mtimes are UTC instants; convert to local before date() so a
+    # Monday 05:00 SGT edit is not treated as Sunday UTC.
+    return datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).astimezone().date()
+
+
 def _knowledge_section(config: Mapping[str, Any] | None) -> dict[str, Any]:
     root = _project_root(config)
     wiki = _wiki_path(config, root)
@@ -231,14 +374,19 @@ def _knowledge_section(config: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     for path in pages:
         try:
-            st = path.stat()
+            text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        ctime = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).date()
-        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).date()
-        if week_start <= ctime <= today:
+        created_d, updated_d = _wiki_frontmatter_dates(text)
+        if created_d is None and updated_d is None:
+            mtime = _local_mtime_date(path)
+            if mtime is not None and week_start <= mtime <= today:
+                updated += 1
+            continue
+        if created_d is not None and week_start <= created_d <= today:
             created += 1
-        elif week_start <= mtime <= today:
+            continue
+        if updated_d is not None and week_start <= updated_d <= today:
             updated += 1
     return {
         "wiki_pages_created": created,
@@ -259,13 +407,56 @@ def _empty_summary() -> dict[str, int]:
     }
 
 
+def _week_window() -> dict[str, str]:
+    today = date.today()
+    return {"start": _week_start(today).isoformat(), "end": today.isoformat()}
+
+
+def _envelope(
+    *,
+    operator: str,
+    summary: dict[str, int],
+    pipeline: dict[str, Any],
+    bookkeeping: dict[str, Any],
+    tasks: dict[str, Any],
+    knowledge: dict[str, Any],
+    expenses: dict[str, Any],
+    sources: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "kind": "weekly",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "week": _week_window(),
+        "operator": operator,
+        "summary": summary,
+        "pipeline": pipeline,
+        "bookkeeping": bookkeeping,
+        "tasks": tasks,
+        "knowledge": knowledge,
+        "expenses": expenses,
+        "sections": {
+            "pipeline": pipeline,
+            "bookkeeper": bookkeeping,
+        },
+    }
+    if sources:
+        out["sources"] = sources
+    return out
+
+
 def build_weekly_summary_from_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Build a structured weekly summary from ``paths.project_root`` files."""
     try:
-        pipeline = _pipeline_section(_load_records(config, "pipeline.yaml", "pipeline", "deals"))
-        bookkeeping = _bookkeeping_section(_load_records(config, "invoices.yaml", "invoices", "invoices"))
-        tasks = _tasks_section(_load_records(config, "todos.yaml", "todos", "todos"))
-        expenses = _load_records(config, "expenses.yaml", "expenses", "expenses")
+        sources: dict[str, Any] = {}
+        pipeline = _pipeline_section(
+            _load_records(config, "pipeline.yaml", "pipeline", "deals", sources)
+        )
+        bookkeeping = _bookkeeping_section(
+            _load_records(config, "invoices.yaml", "invoices", "invoices", sources),
+            config,
+        )
+        tasks = _tasks_section(_load_records(config, "todos.yaml", "todos", "todos", sources))
+        expense_rows = _load_records(config, "expenses.yaml", "expenses", "expenses", sources)
         knowledge = _knowledge_section(config)
         summary = _empty_summary()
         if pipeline:
@@ -289,32 +480,26 @@ def build_weekly_summary_from_config(config: Mapping[str, Any] | None) -> dict[s
                     operator = str(config["operator"])
         except Exception:
             operator = "Operator"
-        return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "operator": operator,
-            "summary": summary,
-            "pipeline": pipeline,
-            "bookkeeping": bookkeeping,
-            "tasks": tasks,
-            "knowledge": knowledge,
-            "expenses": {"expenses": expenses} if expenses else {},
-            "sections": {
-                "pipeline": pipeline,
-                "bookkeeper": bookkeeping,
-            },
-        }
+        return _envelope(
+            operator=operator,
+            summary=summary,
+            pipeline=pipeline,
+            bookkeeping=bookkeeping,
+            tasks=tasks,
+            knowledge=knowledge,
+            expenses={"expenses": expense_rows} if expense_rows else {},
+            sources=sources,
+        )
     except Exception:
-        return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "operator": "Operator",
-            "summary": _empty_summary(),
-            "pipeline": {},
-            "bookkeeping": {},
-            "tasks": {},
-            "knowledge": {},
-            "expenses": {},
-            "sections": {},
-        }
+        return _envelope(
+            operator="Operator",
+            summary=_empty_summary(),
+            pipeline={},
+            bookkeeping={},
+            tasks={},
+            knowledge={},
+            expenses={},
+        )
 
 
 def build_weekly_summary(config_path: str | Path | None) -> dict[str, Any]:

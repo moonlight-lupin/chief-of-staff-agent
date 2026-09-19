@@ -23,6 +23,8 @@ def _risk_icon(risk: str) -> str:
 
 def render_text(briefing: dict[str, Any]) -> str:
     """Render briefing as human-readable text for CLI."""
+    if isinstance(briefing, dict) and briefing.get("kind") == "weekly":
+        return render_weekly_text(briefing)
     lines: list[str] = []
     summary = briefing.get("summary", {})
     sections = briefing.get("sections", {})
@@ -415,6 +417,9 @@ th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
 .ts{font-family:monospace;font-size:.8rem;color:var(--muted)}
 .footer{margin-top:16px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:.8rem;text-align:center}
+"""
+
+_TREND_STYLE = """\
 .trend-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border)}
 .trend-row:last-child{border-bottom:none}
 .trend-label{font-weight:600;min-width:140px}
@@ -490,6 +495,214 @@ def _html_pending_approvals(pa: dict) -> str:
     return "".join(parts) if parts else '<p class="muted">No pending approvals.</p>'
 
 
+def _money_map(values: Any) -> str:
+    if not isinstance(values, dict) or not values:
+        return ""
+    return ", ".join(f"{_esc(cur)} {_esc(amt)}" for cur, amt in values.items())
+
+
+def _weekly_badges(summary: dict[str, Any]) -> list[str]:
+    badges = []
+    mapping = (
+        ("deals_moved", "deals moved", "badge-neutral"),
+        ("invoices_sent", "invoices sent", "badge-low"),
+        ("invoices_paid", "invoices paid", "badge-low"),
+        ("overdue_invoices", "overdue", "badge-high"),
+        ("tasks_completed", "tasks done", "badge-neutral"),
+        ("tasks_carry_over", "tasks carry over", "badge-medium"),
+        ("wiki_pages_changed", "wiki pages", "badge-neutral"),
+    )
+    for key, label, cls in mapping:
+        count = summary.get(key, 0) or 0
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = 0
+        if count:
+            badges.append(f'<span class="badge {cls}">{count} {label}</span>')
+    if not badges:
+        badges.append('<span class="badge badge-low">Quiet week</span>')
+    return badges
+
+
+def _weekly_pipeline_html(pipeline: dict[str, Any]) -> str:
+    if not pipeline:
+        return '<p class="muted">No pipeline records.</p>'
+    parts = []
+    by_stage = pipeline.get("deals_by_stage") or {}
+    if isinstance(by_stage, dict) and by_stage:
+        rows = [{"stage": k, "count": v} for k, v in by_stage.items()]
+        parts.append(_html_table(rows, [("stage", "Stage"), ("count", "Deals")]))
+    parts.append(
+        f'<p>Total deals: {_esc(pipeline.get("total_deals", 0))} · '
+        f'Moved this week: {_esc(pipeline.get("deals_moved", 0))}</p>'
+    )
+    return "".join(parts)
+
+
+def _weekly_bookkeeping_html(bookkeeping: dict[str, Any]) -> str:
+    if not bookkeeping:
+        return '<p class="muted">No invoices this week.</p>'
+    parts = [
+        f'<p>Sent: {_esc(bookkeeping.get("invoices_sent", 0))}'
+        f'<br>Received: {_esc(bookkeeping.get("invoices_received", 0))}'
+        f'<br>Paid: {_esc(bookkeeping.get("invoices_paid", 0))}'
+        f'<br>Overdue: {_esc(bookkeeping.get("overdue_invoices", 0))}</p>'
+    ]
+    ar = _money_map(bookkeeping.get("outstanding_ar"))
+    ap = _money_map(bookkeeping.get("outstanding_ap"))
+    if ar:
+        parts.append(f'<p><strong>Outstanding AR:</strong> {ar}</p>')
+    if ap:
+        parts.append(f'<p><strong>Outstanding AP:</strong> {ap}</p>')
+    if not ar and not ap:
+        parts.append('<p class="muted">No outstanding AR or AP.</p>')
+    return "".join(parts)
+
+
+def _weekly_tasks_html(tasks: dict[str, Any]) -> str:
+    if not tasks:
+        return '<p class="muted">No tasks recorded.</p>'
+    return (
+        f'<p>Completed: {_esc(tasks.get("tasks_completed", 0))}'
+        f'<br>Carry over: {_esc(tasks.get("tasks_carry_over", 0))}'
+        f'<br>Overdue open: {_esc(tasks.get("tasks_overdue_open", 0))}</p>'
+    )
+
+
+def _weekly_knowledge_html(knowledge: dict[str, Any]) -> str:
+    if not knowledge:
+        return '<p class="muted">No wiki changes this week.</p>'
+    return (
+        f'<p>Created: {_esc(knowledge.get("wiki_pages_created", 0))}'
+        f'<br>Updated: {_esc(knowledge.get("wiki_pages_updated", 0))}'
+        f'<br>Changed: {_esc(knowledge.get("wiki_pages_changed", 0))}</p>'
+    )
+
+
+def _weekly_expenses_html(expenses: dict[str, Any]) -> str:
+    rows = expenses.get("expenses") if isinstance(expenses, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return '<p class="muted">No expenses recorded.</p>'
+    items = [r for r in rows if isinstance(r, dict)]
+    if not items:
+        return '<p class="muted">No expenses recorded.</p>'
+    return _html_table(
+        items,
+        [("id", "ID"), ("vendor", "Vendor"), ("amount", "Amount"), ("currency", "Currency")],
+    )
+
+
+def render_weekly_text(briefing: dict[str, Any]) -> str:
+    """Weekly review as CLI text. No daily greeting."""
+    lines: list[str] = []
+    week = briefing.get("week") if isinstance(briefing.get("week"), dict) else {}
+    start = week.get("start", "")
+    end = week.get("end", "")
+    lines.append("Chief-of-Staff Weekly Review")
+    if start or end:
+        lines.append(f"Week {start} to {end}".strip())
+    lines.append("")
+    summary = briefing.get("summary") or {}
+    lines.append("This week:")
+    lines.append(f"- {summary.get('deals_moved', 0)} deal(s) moved")
+    lines.append(f"- {summary.get('invoices_sent', 0)} invoice(s) sent")
+    lines.append(f"- {summary.get('invoices_paid', 0)} invoice(s) paid")
+    lines.append(f"- {summary.get('overdue_invoices', 0)} overdue invoice(s)")
+    lines.append(f"- {summary.get('tasks_completed', 0)} task(s) completed")
+    lines.append(f"- {summary.get('tasks_carry_over', 0)} task(s) carrying over")
+    lines.append(f"- {summary.get('wiki_pages_changed', 0)} wiki page(s) changed")
+    lines.append("")
+    pipeline = briefing.get("pipeline") or {}
+    if pipeline:
+        lines.append("Pipeline:")
+        by_stage = pipeline.get("deals_by_stage") or {}
+        if isinstance(by_stage, dict):
+            for stage, count in by_stage.items():
+                lines.append(f"  {stage}: {count}")
+        lines.append(f"  Total: {pipeline.get('total_deals', 0)}")
+        lines.append(f"  Moved this week: {pipeline.get('deals_moved', 0)}")
+        lines.append("")
+    bookkeeping = briefing.get("bookkeeping") or {}
+    if bookkeeping:
+        lines.append("Bookkeeping:")
+        lines.append(f"  Sent: {bookkeeping.get('invoices_sent', 0)}")
+        lines.append(f"  Received: {bookkeeping.get('invoices_received', 0)}")
+        lines.append(f"  Paid: {bookkeeping.get('invoices_paid', 0)}")
+        lines.append(f"  Overdue: {bookkeeping.get('overdue_invoices', 0)}")
+        ar = bookkeeping.get("outstanding_ar") or {}
+        ap = bookkeeping.get("outstanding_ap") or {}
+        if isinstance(ar, dict) and ar:
+            lines.append("  Outstanding AR: " + ", ".join(f"{c} {a}" for c, a in ar.items()))
+        if isinstance(ap, dict) and ap:
+            lines.append("  Outstanding AP: " + ", ".join(f"{c} {a}" for c, a in ap.items()))
+        lines.append("")
+    tasks = briefing.get("tasks") or {}
+    if tasks:
+        lines.append("Tasks:")
+        lines.append(f"  Completed: {tasks.get('tasks_completed', 0)}")
+        lines.append(f"  Carry over: {tasks.get('tasks_carry_over', 0)}")
+        lines.append(f"  Overdue open: {tasks.get('tasks_overdue_open', 0)}")
+        lines.append("")
+    knowledge = briefing.get("knowledge") or {}
+    if knowledge:
+        lines.append("Knowledge:")
+        lines.append(f"  Created: {knowledge.get('wiki_pages_created', 0)}")
+        lines.append(f"  Updated: {knowledge.get('wiki_pages_updated', 0)}")
+        lines.append(f"  Changed: {knowledge.get('wiki_pages_changed', 0)}")
+        lines.append("")
+    expenses = briefing.get("expenses") or {}
+    rows = expenses.get("expenses") if isinstance(expenses, dict) else None
+    if isinstance(rows, list) and rows:
+        lines.append(f"Expenses: {len(rows)} recorded")
+        lines.append("")
+    sources = briefing.get("sources") or {}
+    if isinstance(sources, dict) and any(
+        isinstance(v, dict) and v.get("divergence") for v in sources.values()
+    ):
+        lines.append("Data divergence:")
+        for name, info in sources.items():
+            if isinstance(info, dict) and info.get("divergence"):
+                lines.append(
+                    f"  {name}: yaml={info.get('yaml_records')} store={info.get('store_records')}"
+                )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def render_weekly_html(briefing: dict[str, Any], title: str | None = None) -> str:
+    """Self-contained weekly HTML. Inline CSS only, no JS, no external URLs."""
+    summary = briefing.get("summary") or {}
+    generated = briefing.get("generated_at", "")
+    week = briefing.get("week") if isinstance(briefing.get("week"), dict) else {}
+    heading = _esc(title) if title is not None else "Chief-of-Staff Weekly Review"
+    week_label = ""
+    if week.get("start") or week.get("end"):
+        week_label = f"Week {week.get('start', '')} to {week.get('end', '')}".strip()
+    meta = " · ".join(p for p in (_esc(generated), _esc(week_label)) if p)
+    sections_html = [
+        _html_section("Pipeline", _weekly_pipeline_html(briefing.get("pipeline") or {}), open_by_default=True),
+        _html_section("Bookkeeping", _weekly_bookkeeping_html(briefing.get("bookkeeping") or {}), open_by_default=True),
+        _html_section("Tasks", _weekly_tasks_html(briefing.get("tasks") or {})),
+        _html_section("Knowledge", _weekly_knowledge_html(briefing.get("knowledge") or {})),
+        _html_section("Expenses", _weekly_expenses_html(briefing.get("expenses") or {})),
+    ]
+    return (
+        f'<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+        f'<meta charset="utf-8">\n'
+        f'<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        f'<title>{heading}</title>\n'
+        f'<style>{_HTML_STYLE}</style>\n'
+        f'</head>\n<body>\n<div class="container">\n'
+        f'<h1>{heading}</h1>\n'
+        f'<p class="meta">{meta}</p>\n'
+        f'<div class="summary">{"".join(_weekly_badges(summary))}</div>\n'
+        f'{"".join(sections_html)}\n'
+        f'<div class="footer">Generated by Chief of Staff · No mutations performed</div>\n'
+        f'</div>\n</body>\n</html>'
+    )
+
+
 def _html_calendar(events: list) -> str:
     if not events:
         return '<p class="muted">No events in the next 48 hours.</p>'
@@ -543,7 +756,10 @@ def _html_section(title: str, content: str, open_by_default: bool = False) -> st
 
 def render_trends_html(section: dict) -> str:
     """Re-export: trend bars live in ``trend_history`` (SPEC §2.1 / §2.3)."""
-    from trend_history import render_trends_html as _render_trends_html
+    try:
+        from trend_history import render_trends_html as _render_trends_html
+    except ImportError:
+        return ""
     return _render_trends_html(section)
 
 
@@ -554,6 +770,8 @@ def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
     Works in Telegram's in-app browser and any modern browser.
     ``title`` overrides the document/h1 heading; ``None`` keeps the daily title.
     """
+    if isinstance(briefing, dict) and briefing.get("kind") == "weekly":
+        return render_weekly_html(briefing, title=title)
     summary = briefing.get("summary", {})
     sections = briefing.get("sections", {})
     operator = briefing.get("operator", "Operator")
@@ -641,17 +859,19 @@ def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
         sections_html.append(_html_section("Knowledge Maintenance", "".join(km_parts)))
 
     trends = briefing.get("trends")
-    if isinstance(trends, dict) and trends:
+    has_trends = isinstance(trends, dict) and bool(trends)
+    if has_trends:
         sections_html.append(_html_section(
             "Trends", render_trends_html(trends), open_by_default=False,
         ))
+    style = _HTML_STYLE + (_TREND_STYLE if has_trends else "")
 
     return (
         f'<!DOCTYPE html>\n<html lang="en">\n<head>\n'
         f'<meta charset="utf-8">\n'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">\n'
         f'<title>{heading}</title>\n'
-        f'<style>{_HTML_STYLE}</style>\n'
+        f'<style>{style}</style>\n'
         f'</head>\n<body>\n<div class="container">\n'
         f'<h1>{heading}</h1>\n'
         f'<p class="meta">{_esc(generated)}</p>\n'

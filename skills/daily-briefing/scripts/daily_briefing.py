@@ -894,15 +894,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _attach_trends(briefing: dict[str, Any], config: Any) -> None:
-    """Capture a daily snapshot and attach ``briefing["trends"]``. Never raises."""
+def _attach_trends(briefing: dict[str, Any], config: Any, *, capture: bool = True) -> None:
+    """Capture a daily snapshot (unless dry-run) and attach ``briefing["trends"]``."""
     if briefing.get("demo"):
         return
     try:
-        from trend_history import build_trends_section, capture_snapshot
-        capture_snapshot(briefing, config or {}, kind="daily")
+        from trend_history import build_trends_section, capture_snapshot, note_exception
+        if capture:
+            capture_snapshot(briefing, config or {}, kind="daily")
         briefing["trends"] = build_trends_section(briefing, config or {})
-    except Exception:
+    except Exception as exc:
+        try:
+            from trend_history import note_exception
+            note_exception("_attach_trends", exc)
+        except Exception:
+            pass
         briefing["trends"] = {}
 
 
@@ -1131,8 +1137,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                                           workspace_input=workspace_input)
     from briefing_renderer import render
     config = load_config(args.config)
-    _attach_trends(briefing, config)
     fmt = _resolve_briefing_format(args, config)
+    if not args.dry_run:
+        _attach_trends(briefing, config)
+    else:
+        _attach_trends(briefing, config, capture=False)
     rendered = render(briefing, fmt)
     _emit_rendered(
         rendered,
@@ -1160,7 +1169,8 @@ def cmd_notify(args: argparse.Namespace) -> int:
     briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit,
                                           workspace_input=workspace_input)
     from briefing_renderer import render
-    _attach_trends(briefing, load_config(args.config))
+    config = load_config(args.config, quiet=True)
+    _attach_trends(briefing, config, capture=not args.dry_run)
 
     if args.channel == "cli":
         print(render(briefing, "text"))
@@ -1171,7 +1181,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
             return 1
         if args.dry_run:
             print(f"[DRY-RUN] Would create pending gmail.send to {args.to}")
-            fmt = _resolve_briefing_format(args, load_config(args.config))
+            fmt = _resolve_briefing_format(args, config)
             if fmt == "html":
                 print(render(briefing, "html"))
             else:
@@ -1180,7 +1190,6 @@ def cmd_notify(args: argparse.Namespace) -> int:
         # Create a PENDING ACTION only — do NOT auto-send
         try:
             from state_db import create_pending_action
-            config = load_config(args.config)
             if not config:
                 print("Error: cannot load config", file=sys.stderr)
                 return 1

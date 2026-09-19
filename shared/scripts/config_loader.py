@@ -385,13 +385,18 @@ def _validate_config(data: Mapping[str, Any], source_path: Path) -> None:
         (source_path.parent / project_root).resolve()
 
 
-def load_config(path: str | os.PathLike[str] | None = None) -> Config | None:
+def load_config(
+    path: str | os.PathLike[str] | None = None,
+    *,
+    quiet: bool = False,
+) -> Config | None:
     """Load and validate ``company.yaml``.
 
     Args:
         path: Optional explicit config path. When omitted, uses
             ``CHIEF_OF_STAFF_CONFIG`` if set, otherwise
             ``shared/config/company.yaml`` under this plugin.
+        quiet: When True, skip the stderr banner on missing or invalid config.
 
     Returns:
         ``Config`` on success. On missing/unreadable/invalid config, prints a
@@ -406,18 +411,20 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config | None:
     try:
         config_path = config_path.resolve()
         if not config_path.exists():
-            example = get_config_dir() / "company.yaml.example"
-            print(
-                f"Chief-of-Staff config not found: {config_path}\n"
-                f"Create it from {example} or pass --config /path/to/company.yaml.",
-                file=sys.stderr,
-            )
+            if not quiet:
+                example = get_config_dir() / "company.yaml.example"
+                print(
+                    f"Chief-of-Staff config not found: {config_path}\n"
+                    f"Create it from {example} or pass --config /path/to/company.yaml.",
+                    file=sys.stderr,
+                )
             return None
         data = _load_yaml(config_path)
         _validate_config(data, config_path)
         return Config(data, source_path=config_path)
     except (OSError, ConfigError, Exception) as exc:
-        print(f"Failed to load Chief-of-Staff config from {config_path}: {exc}", file=sys.stderr)
+        if not quiet:
+            print(f"Failed to load Chief-of-Staff config from {config_path}: {exc}", file=sys.stderr)
         return None
 
 

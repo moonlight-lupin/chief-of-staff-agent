@@ -34,6 +34,10 @@ Also use when the operator addresses their Chief of Staff by its configured name
 
 Do **not** use this skill for deep analysis of one source. If the user asks only for deadlines, pipeline, invoices, calendar, or tasks, load the dedicated source skill instead.
 
+## Trends
+
+Trend snapshots accrue when `skills/daily-briefing/scripts/daily_briefing.py run` or `notify` runs (not `--dry-run`). The `chief_of_staff.py daily` command and the agent-composed cron briefing do not write snapshots. To build history, invoke the `daily_briefing.py` entry point on a schedule. Snapshots live in the `briefing_trends` KV store and render as a Trends section on the HTML briefing.
+
 ## Required Sources
 
 Daily Briefing pulls from exactly these six source families:

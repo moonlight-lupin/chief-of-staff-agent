@@ -7,13 +7,19 @@ Demo briefings are isolated and write nothing.
 from __future__ import annotations
 
 import html as _html
+import math
+import os
+import re
+import sys
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 TREND_KV_STORE = "briefing_trends"
 TREND_ROOT_KEY = "trend_snapshots"
 TREND_MAX_AGE_DAYS = 90
+TREND_STALE_DAYS = 7
 
 _TREND_METRICS = (
     "needs_attention",
@@ -21,7 +27,23 @@ _TREND_METRICS = (
     "suggestions",
     "classified_emails",
     "system_warnings",
+    "pipeline.active_deals",
+    "pipeline.stale_deals",
+    "pipeline.oldest_stale_days",
+    "pipeline.recently_moved",
+    "pipeline.pending_crm_actions",
+    "pipeline.contract_signed_no_invoice",
+    "pipeline.invoiced_not_paid",
+    "bookkeeper.candidates_found",
+    "bookkeeper.candidates_needs_review",
+    "bookkeeper.duplicate_warnings",
+    "bookkeeper.pending_record_actions",
+    "bookkeeper.outstanding_ar",
+    "bookkeeper.outstanding_ap",
+    "bookkeeper.overdue_count",
 )
+
+_COERCE_NUMERIC_KEY = re.compile(r"^outstanding_|^amount|_total$")
 
 
 def _esc(text: Any) -> str:
@@ -29,7 +51,29 @@ def _esc(text: Any) -> str:
 
 
 def _is_numeric_scalar(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return True
+
+
+def note_exception(where: str, exc: BaseException) -> None:
+    """Breadcrumb for swallowed trend failures. Never raises."""
+    message = f"{where}: {type(exc).__name__}: {exc}"
+    debug = os.getenv("CHIEF_OF_STAFF_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    if debug:
+        print(f"trend_history {message}", file=sys.stderr)
+    try:
+        from runtime_log import log_event
+        log_event(
+            "trend_history_error",
+            level="debug",
+            component="trend_history",
+            message=message,
+        )
+    except Exception:
+        pass
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -49,6 +93,26 @@ def _utc_date(value: Any):
     return dt.date() if dt is not None else None
 
 
+def _coerce_numeric(key: str, value: Any) -> int | float | None:
+    if _is_numeric_scalar(value):
+        return value
+    if not isinstance(value, str) or not _COERCE_NUMERIC_KEY.search(str(key)):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        decimal_value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not decimal_value.is_finite():
+        return None
+    as_float = float(decimal_value)
+    if as_float == int(as_float) and abs(as_float) < 2**53:
+        return int(as_float)
+    return as_float
+
+
 def _flatten_currency_list(key: str, items: list, counters: dict[str, int | float]) -> None:
     totals: dict[str, float] = {}
     int_only: dict[str, bool] = {}
@@ -65,30 +129,42 @@ def _flatten_currency_list(key: str, items: list, counters: dict[str, int | floa
         counters[f"{key}::{currency}"] = int(total) if int_only.get(currency) and total == int(total) else total
 
 
-def _flatten_mapping(block: dict, counters: dict[str, int | float]) -> None:
+def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str) -> None:
     for key, value in block.items():
         if not isinstance(key, str):
             continue
-        if _is_numeric_scalar(value):
-            counters[key] = value
+        dest = f"{prefix}.{key}" if prefix else key
+        coerced = _coerce_numeric(key, value)
+        if coerced is not None:
+            counters[dest] = coerced
             continue
         if isinstance(value, dict):
             if not value:
                 continue
             if not all(isinstance(k, str) for k in value):
                 continue
-            if not all(v is None or _is_numeric_scalar(v) for v in value.values()):
-                continue
-            prefix = "stage" if key == "deals_by_stage" else key
+            nested_ok = True
+            nested_pairs: list[tuple[str, int | float]] = []
             for nested_key, nested_val in value.items():
-                if _is_numeric_scalar(nested_val):
-                    counters[f"{prefix}::{nested_key}"] = nested_val
+                nested_coerced = _coerce_numeric(nested_key, nested_val) if nested_val is not None else None
+                if nested_val is None:
+                    continue
+                if nested_coerced is None:
+                    nested_ok = False
+                    break
+                nested_pairs.append((nested_key, nested_coerced))
+            if not nested_ok:
+                continue
+            nested_prefix = "stage" if key == "deals_by_stage" else key
+            head = f"{prefix}.{nested_prefix}" if prefix else nested_prefix
+            for nested_key, nested_val in nested_pairs:
+                counters[f"{head}::{nested_key}"] = nested_val
             continue
         if isinstance(value, list):
             if not value:
                 continue
             if all(isinstance(item, dict) for item in value):
-                _flatten_currency_list(key, value, counters)
+                _flatten_currency_list(dest, value, counters)
 
 
 def _extract_counters(briefing: Mapping[str, Any]) -> dict[str, int | float] | None:
@@ -97,14 +173,17 @@ def _extract_counters(briefing: Mapping[str, Any]) -> dict[str, int | float] | N
         return None
     counters: dict[str, int | float] = {}
     for key, value in summary.items():
-        if isinstance(key, str) and _is_numeric_scalar(value):
-            counters[key] = value
+        if not isinstance(key, str):
+            continue
+        coerced = _coerce_numeric(key, value)
+        if coerced is not None:
+            counters[key] = coerced
     sections = briefing.get("sections")
     if isinstance(sections, dict):
-        for name in ("pipeline", "bookkeeper"):
+        for name in ("pipeline", "bookkeeper", "system"):
             block = sections.get(name)
             if isinstance(block, dict):
-                _flatten_mapping(block, counters)
+                _flatten_mapping(block, counters, prefix=name)
     if not counters:
         return None
     return counters
@@ -125,7 +204,9 @@ def _prune(snaps: list, now: datetime) -> list:
     kept = []
     for snap in snaps:
         dt = _parse_ts(snap.get("ts"))
-        if dt is None or dt >= cutoff:
+        if dt is None:
+            continue
+        if dt >= cutoff:
             kept.append(snap)
     return kept
 
@@ -140,7 +221,7 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
         counters = _extract_counters(briefing)
         if counters is None:
             return None
-        from state_db import StateDB
+        from state_db import mutate_kv
 
         now = datetime.now(timezone.utc)
         snapshot = {
@@ -148,24 +229,63 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
             "kind": kind,
             "counters": counters,
         }
-        with StateDB(config) as db:
-            snaps = _load_snapshots(db)
+
+        def _mutate(data: dict[str, Any]) -> dict:
+            snaps = data.get(TREND_ROOT_KEY)
+            if not isinstance(snaps, list):
+                snaps = []
+            snaps = [s for s in snaps if isinstance(s, dict)]
             snaps = _prune(snaps, now)
             day = now.date()
             replace_at = None
             for i, existing in enumerate(snaps):
                 if existing.get("kind") != kind:
                     continue
-                if _utc_date(existing.get("ts")) == day:
+                existing_day = _utc_date(existing.get("ts"))
+                if existing_day is None:
+                    continue
+                if existing_day == day:
                     replace_at = i
             if replace_at is not None:
                 snaps[replace_at] = snapshot
             else:
                 snaps.append(snapshot)
-            db.set_kv(TREND_KV_STORE, {TREND_ROOT_KEY: snaps})
-        return snapshot
-    except Exception:
+            data[TREND_ROOT_KEY] = snaps
+            return snapshot
+
+        return mutate_kv(TREND_KV_STORE, _mutate, config=config)
+    except Exception as exc:
+        note_exception("capture_snapshot", exc)
         return None
+
+
+def _points_from_snaps(
+    snaps: list,
+    metric: str,
+    cutoff: datetime,
+    kind: str | None,
+) -> list[dict]:
+    points: list[dict] = []
+    for snap in snaps:
+        if kind is not None and snap.get("kind") != kind:
+            continue
+        dt = _parse_ts(snap.get("ts"))
+        if dt is None or dt < cutoff:
+            continue
+        counters = snap.get("counters")
+        if not isinstance(counters, dict) or metric not in counters:
+            continue
+        value = counters[metric]
+        if not _is_numeric_scalar(value):
+            continue
+        points.append({
+            "ts": snap.get("ts"),
+            "kind": snap.get("kind"),
+            "value": value,
+        })
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    points.sort(key=lambda p: _parse_ts(p.get("ts")) or epoch)
+    return points
 
 
 def get_series(
@@ -182,28 +302,17 @@ def get_series(
         cutoff = now - timedelta(days=days)
         with StateDB(config) as db:
             snaps = _load_snapshots(db)
-        points: list[dict] = []
-        for snap in snaps:
-            if kind is not None and snap.get("kind") != kind:
-                continue
-            dt = _parse_ts(snap.get("ts"))
-            if dt is None or dt < cutoff:
-                continue
-            counters = snap.get("counters")
-            if not isinstance(counters, dict) or metric not in counters:
-                continue
-            value = counters[metric]
-            if not _is_numeric_scalar(value):
-                continue
-            points.append({
-                "ts": snap.get("ts"),
-                "kind": snap.get("kind"),
-                "value": value,
-            })
-        points.sort(key=lambda p: str(p.get("ts") or ""))
-        return points
-    except Exception:
+        return _points_from_snaps(snaps, metric, cutoff, kind)
+    except Exception as exc:
+        note_exception("get_series", exc)
         return []
+
+
+def _format_delta_number(delta: int | float) -> str:
+    if isinstance(delta, int) or (isinstance(delta, float) and delta.is_integer()):
+        return str(int(delta))
+    text = f"{float(delta):.2f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _delta_label(series: list[dict]) -> str:
@@ -218,9 +327,9 @@ def _delta_label(series: list[dict]) -> str:
     if isinstance(last, int) and isinstance(prev, int):
         delta = int(delta)
     if delta > 0:
-        return f"vs prev: +{delta}"
+        return f"vs prev: +{_format_delta_number(delta)}"
     if delta < 0:
-        return f"vs prev: {delta}"
+        return f"vs prev: {_format_delta_number(delta)}"
     return "vs prev: 0"
 
 
@@ -228,9 +337,15 @@ def build_trends_section(briefing: dict, config: Mapping) -> dict:
     """Build the HTML trends section dict. Never raises; ``{}`` on error."""
     try:
         del briefing  # unused; series come from stored snapshots
+        from state_db import StateDB
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=30)
+        with StateDB(config) as db:
+            snaps = _load_snapshots(db)
         metrics = []
         for metric in _TREND_METRICS:
-            series = get_series(config, metric, days=30, kind="daily")
+            series = _points_from_snaps(snaps, metric, cutoff, kind="daily")
             if not series:
                 continue
             metrics.append({
@@ -241,8 +356,38 @@ def build_trends_section(briefing: dict, config: Mapping) -> dict:
         if not metrics:
             return {}
         return {"metrics": metrics}
-    except Exception:
+    except Exception as exc:
+        note_exception("build_trends_section", exc)
         return {}
+
+
+def snapshot_health(config: Mapping | None) -> dict[str, str]:
+    """Doctor check: snapshot store presence and last-snapshot age."""
+    try:
+        from state_db import StateDB
+
+        with StateDB(config) as db:
+            snaps = _load_snapshots(db)
+        if not snaps:
+            return {"status": "warn", "detail": "no snapshots yet"}
+        latest = None
+        for snap in snaps:
+            dt = _parse_ts(snap.get("ts"))
+            if dt is not None and (latest is None or dt > latest):
+                latest = dt
+        if latest is None:
+            return {"status": "warn", "detail": "snapshot store has no parseable timestamps"}
+        age = datetime.now(timezone.utc) - latest
+        days = age.days
+        if age > timedelta(days=TREND_STALE_DAYS):
+            return {
+                "status": "warn",
+                "detail": f"last snapshot {days}d ago (>{TREND_STALE_DAYS}d)",
+            }
+        return {"status": "ok", "detail": f"last snapshot {days}d ago"}
+    except Exception as exc:
+        note_exception("snapshot_health", exc)
+        return {"status": "warn", "detail": f"unavailable: {exc}"}
 
 
 def render_trends_html(section: dict) -> str:
@@ -288,5 +433,6 @@ def render_trends_html(section: dict) -> str:
                 f"</div>"
             )
         return "".join(parts)
-    except Exception:
+    except Exception as exc:
+        note_exception("render_trends_html", exc)
         return ""
