@@ -894,6 +894,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _attach_trends(briefing: dict[str, Any], config: Any) -> None:
+    """Capture a daily snapshot and attach ``briefing["trends"]``. Never raises."""
+    if briefing.get("demo"):
+        return
+    try:
+        from trend_history import build_trends_section, capture_snapshot
+        capture_snapshot(briefing, config or {}, kind="daily")
+        briefing["trends"] = build_trends_section(briefing, config or {})
+    except Exception:
+        briefing["trends"] = {}
+
+
 def _build_structured_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50,
                                workspace_input: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the structured briefing data shape for v0.2.3."""
@@ -1119,6 +1131,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                                           workspace_input=workspace_input)
     from briefing_renderer import render
     config = load_config(args.config)
+    _attach_trends(briefing, config)
     fmt = _resolve_briefing_format(args, config)
     rendered = render(briefing, fmt)
     _emit_rendered(
@@ -1147,6 +1160,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
     briefing = _build_structured_briefing(args.config, since_hours=args.since, limit=args.limit,
                                           workspace_input=workspace_input)
     from briefing_renderer import render
+    _attach_trends(briefing, load_config(args.config))
 
     if args.channel == "cli":
         print(render(briefing, "text"))

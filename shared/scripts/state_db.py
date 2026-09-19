@@ -739,6 +739,10 @@ class StateDB:
         if action:
             self._append_kv_audit(store_name, action, before, after if after is not None else plain, actor)
 
+    def set_kv(self, store_name: str, value: dict) -> None:
+        """Alias for ``put_kv`` — persist a JSON object at the store root."""
+        self.put_kv(store_name, value)
+
     def mutate_kv(
         self,
         store_name: str,

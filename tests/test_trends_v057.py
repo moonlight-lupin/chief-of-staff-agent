@@ -265,7 +265,7 @@ def _write_yaml(path: Path, data: dict) -> None:
 
 
 def test_build_weekly_summary_missing_files_never_raises(tmp_path):
-    from weekly_summary import build_weekly_summary  # noqa: F401 (module exists)
+    from weekly_summary import build_weekly_summary_from_config
     config = {"paths": {"project_root": str(tmp_path / "void")}}
     out = build_weekly_summary_from_config(config)
     assert isinstance(out, dict)

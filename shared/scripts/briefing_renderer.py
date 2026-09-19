@@ -415,6 +415,13 @@ th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
 .ts{font-family:monospace;font-size:.8rem;color:var(--muted)}
 .footer{margin-top:16px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:.8rem;text-align:center}
+.trend-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border)}
+.trend-row:last-child{border-bottom:none}
+.trend-label{font-weight:600;min-width:140px}
+.trend-value{font-variant-numeric:tabular-nums}
+.trend-delta{color:var(--muted);font-size:.85rem}
+.trend-row .bar{flex:1;min-width:80px;height:8px;background:var(--border);border-radius:4px;overflow:hidden}
+.trend-row .bar-fill{height:100%;background:#2563eb;border-radius:4px}
 """
 
 
@@ -534,16 +541,24 @@ def _html_section(title: str, content: str, open_by_default: bool = False) -> st
     return f'<details{attr}><summary>{_esc(title)}</summary><div class="body">{content}</div></details>'
 
 
-def render_html(briefing: dict[str, Any]) -> str:
+def render_trends_html(section: dict) -> str:
+    """Re-export: trend bars live in ``trend_history`` (SPEC §2.1 / §2.3)."""
+    from trend_history import render_trends_html as _render_trends_html
+    return _render_trends_html(section)
+
+
+def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
     """Render briefing as a self-contained HTML document.
 
     Inline CSS only — no external stylesheets or JavaScript.
     Works in Telegram's in-app browser and any modern browser.
+    ``title`` overrides the document/h1 heading; ``None`` keeps the daily title.
     """
     summary = briefing.get("summary", {})
     sections = briefing.get("sections", {})
     operator = briefing.get("operator", "Operator")
     generated = briefing.get("generated_at", "")
+    heading = _esc(title) if title is not None else f"Briefing — {_esc(operator)}"
 
     # Summary badges
     badges = []
@@ -625,14 +640,20 @@ def render_html(briefing: dict[str, Any]) -> str:
             km_parts.append(f'<p>Memory records: {km["total_records"]} total</p>')
         sections_html.append(_html_section("Knowledge Maintenance", "".join(km_parts)))
 
+    trends = briefing.get("trends")
+    if isinstance(trends, dict) and trends:
+        sections_html.append(_html_section(
+            "Trends", render_trends_html(trends), open_by_default=False,
+        ))
+
     return (
         f'<!DOCTYPE html>\n<html lang="en">\n<head>\n'
         f'<meta charset="utf-8">\n'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">\n'
-        f'<title>Briefing — {_esc(operator)}</title>\n'
+        f'<title>{heading}</title>\n'
         f'<style>{_HTML_STYLE}</style>\n'
         f'</head>\n<body>\n<div class="container">\n'
-        f'<h1>Briefing — {_esc(operator)}</h1>\n'
+        f'<h1>{heading}</h1>\n'
         f'<p class="meta">{_esc(generated)}</p>\n'
         f'<div class="summary">{"".join(badges)}</div>\n'
         f'{"".join(sections_html)}\n'
@@ -641,13 +662,13 @@ def render_html(briefing: dict[str, Any]) -> str:
     )
 
 
-def render(briefing: dict[str, Any], fmt: str = "text") -> str:
+def render(briefing: dict[str, Any], fmt: str = "text", title: str | None = None) -> str:
     """Render briefing in the specified format."""
     if fmt == "json":
         return render_json(briefing)
     elif fmt == "markdown":
         return render_markdown(briefing)
     elif fmt == "html":
-        return render_html(briefing)
+        return render_html(briefing, title=title)
     else:
         return render_text(briefing)
