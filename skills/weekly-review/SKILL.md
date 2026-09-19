@@ -192,9 +192,22 @@ From `invoices.yaml`:
 
 - `direction: sent`, `issue_date` within week → invoices sent,
 - `status: paid`, `paid_date` within week → payments received,
-- `direction: sent`, not paid/cancelled → outstanding AR,
+- `direction: sent`, not paid/cancelled **and not `draft`** → outstanding AR
+  (issued-only). Drafts are commitments, not issued invoices, so they are
+  excluded here.
 - unpaid due date before today → overdue AR,
 - `direction: received` not paid → AP due/outstanding.
+- invoices with no `sent`/`received` direction land in `outstanding_unknown`
+  on the JSON envelope only; they are not shown in the rendered weekly HTML
+  or text.
+
+**Outstanding AR means two different things in two reports, on purpose.**
+The weekly review is issued-only (above). The daily briefing and
+`chief_of_staff.py bookkeeper` (parity with `pl_report`) count commitments
+including drafts. The same `invoices.yaml` can therefore print two numbers
+(e.g. weekly SGD 1200 vs daily SGD 1208 when an 8 SGD draft is present).
+Do not "fix" weekly to include drafts: an attested weekly fixture pins
+issued-only.
 
 From `expenses.yaml`:
 

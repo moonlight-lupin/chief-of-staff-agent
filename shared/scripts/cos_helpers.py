@@ -119,8 +119,12 @@ def _format_outstanding_bucket(bucket: Any) -> str:
         if isinstance(n, bool) or not isinstance(n, (int, float)):
             return str(n)
         if n == int(n):
-            return str(int(n))
-        return f"{n:.2f}".rstrip("0").rstrip(".")
+            text = str(int(n))
+        else:
+            text = f"{n:.2f}".rstrip("0").rstrip(".")
+        if text in {"-0", "0", "-0.00"}:
+            return "0"
+        return text
 
     items = [(str(ccy), _amt(amt)) for ccy, amt in bucket.items()]
     if len(items) == 1:

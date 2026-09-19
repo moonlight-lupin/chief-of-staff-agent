@@ -601,28 +601,29 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
     except Exception:
         pass
 
-    # Standing AR/AP/overdue from invoices.yaml. Status filter mirrors
-    # pl_report.py (paid + cancelled/void/written_off); drafts count.
+    # Standing AR/AP/overdue from invoices.yaml (YAML-first, store fallback
+    # with disclosure — same contract as weekly_summary._load_records).
+    # Status filter mirrors pl_report.py (paid + cancelled/void/written_off);
+    # drafts count.
     try:
         from weekly_summary import (
             _add_amount,
             _amount,
             _fallback_currency,
+            _load_records,
             _parse_date,
         )
 
-        invoices_path = root / "invoices.yaml"
-        invoices: list = []
-        if invoices_path.exists():
-            try:
-                import yaml as _yaml  # type: ignore
-            except Exception:
-                _yaml = None
-            if _yaml is not None:
-                loaded = _yaml.safe_load(invoices_path.read_text(encoding="utf-8"))
-                recs = loaded.get("invoices") if isinstance(loaded, dict) else None
-                if isinstance(recs, list):
-                    invoices = recs
+        invoices_sources: dict[str, Any] = {}
+        invoices = _load_records(
+            config if isinstance(config, Mapping) else None,
+            "invoices.yaml",
+            "invoices",
+            "invoices",
+            invoices_sources,
+        )
+        if invoices_sources:
+            stats["sources"] = invoices_sources
         ar: dict[str, float | int] = {}
         ap: dict[str, float | int] = {}
         overdue_n = 0
@@ -654,8 +655,12 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
         stats["outstanding_ar"] = ar
         stats["outstanding_ap"] = ap
         stats["overdue_count"] = overdue_n
-    except Exception:
-        pass
+    except Exception as exc:
+        try:
+            from trend_history import note_exception
+            note_exception("collect_bookkeeper_stats.invoices", exc)
+        except Exception:
+            pass
 
     # v0.2.7: Wiki lint counts — scan wiki directory
     try:

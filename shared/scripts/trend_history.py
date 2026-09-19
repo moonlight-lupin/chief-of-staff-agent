@@ -132,7 +132,14 @@ def _flatten_currency_list(key: str, items: list, put) -> None:
         put(f"{key}::{currency}", value)
 
 
-def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str) -> None:
+def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str) -> list[str]:
+    """Flatten ``block`` into ``counters`` under ``prefix``.
+
+    Ambiguous destinations are omitted (not last-write-wins) and returned as
+    a sorted dest-key list. Each drop is also breadcrumbed via
+    ``note_exception``. Callers that persist snapshots must surface the list
+    on the envelope (see ``_extract_counters`` / ``capture_snapshot``).
+    """
     dropped: set[str] = set()
 
     def _put(dest: str, value: int | float) -> None:
@@ -183,13 +190,35 @@ def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str)
                 continue
             if all(isinstance(item, dict) for item in value):
                 _flatten_currency_list(dest, value, _put)
+    return sorted(dropped)
+
+
+class _Counters(dict):
+    """Numeric counters. ``_dropped`` is an attribute, never a counter key."""
+
+    _dropped: list[str]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._dropped = []
 
 
 def _extract_counters(briefing: Mapping[str, Any]) -> dict[str, int | float] | None:
+    """Flatten briefing counters for a snapshot.
+
+    Returns the numeric mapping, or ``None`` if there is nothing to store.
+    Collision drops stay off that mapping: they are attached as
+    ``counters._dropped`` (a ``list[str]`` of dest keys) on the ``_Counters``
+    dict subclass, never as a counter key named ``_dropped``.
+    ``capture_snapshot`` copies the list onto ``snapshot["dropped"]`` when
+    non-empty. A 2-tuple return would break callers that index the result
+    as a dict; a plain ``dict`` cannot hold the attribute.
+    """
     summary = briefing.get("summary")
     if not isinstance(summary, dict):
         return None
-    counters: dict[str, int | float] = {}
+    counters: _Counters = _Counters()
+    dropped: list[str] = []
     for key, value in summary.items():
         if not isinstance(key, str):
             continue
@@ -201,9 +230,11 @@ def _extract_counters(briefing: Mapping[str, Any]) -> dict[str, int | float] | N
         for name in ("pipeline", "bookkeeper", "system"):
             block = sections.get(name)
             if isinstance(block, dict):
-                _flatten_mapping(block, counters, prefix=name)
+                dropped.extend(_flatten_mapping(block, counters, prefix=name))
     if not counters:
         return None
+    if dropped:
+        counters._dropped = dropped
     return counters
 
 
@@ -242,11 +273,17 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
         from state_db import StateDB
 
         now = datetime.now(timezone.utc)
+        dropped = [
+            key for key in getattr(counters, "_dropped", ())
+            if isinstance(key, str)
+        ]
         snapshot = {
             "ts": now.isoformat(),
             "kind": kind,
-            "counters": counters,
+            "counters": {key: value for key, value in counters.items()},
         }
+        if dropped:
+            snapshot["dropped"] = dropped
 
         def _mutate(data: dict[str, Any]) -> dict:
             snaps = data.get(TREND_ROOT_KEY)
@@ -279,6 +316,64 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
         return None
 
 
+_OUTSTANDING_METRIC_PREFIXES = (
+    "bookkeeper.outstanding_ar",
+    "bookkeeper.outstanding_ap",
+)
+
+
+def _is_outstanding_currency_metric(metric: str) -> bool:
+    if not isinstance(metric, str) or "::" not in metric:
+        return False
+    return any(metric.startswith(prefix + "::") for prefix in _OUTSTANDING_METRIC_PREFIXES)
+
+
+def _counter_value(counters: Any, metric: str) -> int | float | None:
+    if not isinstance(counters, dict) or metric not in counters:
+        return None
+    value = counters[metric]
+    return value if _is_numeric_scalar(value) else None
+
+
+def _append_settled_currency_points(
+    points: list[dict],
+    window: list[tuple[datetime, dict]],
+    metric: str,
+) -> None:
+    """If a later snapshot omitted a previously seen ::CCY child, record 0.
+
+    A subsequent snapshot that lacks the child is "collected as zero" (the
+    currency was fully settled). No later snapshot is "no data at all" — the
+    series stops at the last observed value and we do not invent a point.
+    Scalar metrics (overdue_count, …) are not carried forward.
+    """
+    if not _is_outstanding_currency_metric(metric) or not window:
+        return
+    by_kind: dict[Any, list[tuple[datetime, dict]]] = {}
+    for dt, snap in window:
+        by_kind.setdefault(snap.get("kind"), []).append((dt, snap))
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    for kind_snaps in by_kind.values():
+        kind_snaps.sort(key=lambda item: item[0])
+        latest_dt, latest = kind_snaps[-1]
+        if _counter_value(latest.get("counters"), metric) is not None:
+            continue
+        earlier_had = any(
+            _counter_value(snap.get("counters"), metric) is not None
+            for dt, snap in kind_snaps[:-1]
+            if dt <= latest_dt
+        )
+        if not earlier_had:
+            continue
+        points.append({
+            "ts": latest.get("ts"),
+            "kind": latest.get("kind"),
+            "value": 0,
+            "carried": True,
+        })
+    points.sort(key=lambda p: _parse_ts(p.get("ts")) or epoch)
+
+
 def _points_from_snaps(
     snaps: list,
     metric: str,
@@ -286,17 +381,16 @@ def _points_from_snaps(
     kind: str | None,
 ) -> list[dict]:
     points: list[dict] = []
+    window: list[tuple[datetime, dict]] = []
     for snap in snaps:
         if kind is not None and snap.get("kind") != kind:
             continue
         dt = _parse_ts(snap.get("ts"))
         if dt is None or dt < cutoff:
             continue
-        counters = snap.get("counters")
-        if not isinstance(counters, dict) or metric not in counters:
-            continue
-        value = counters[metric]
-        if not _is_numeric_scalar(value):
+        window.append((dt, snap))
+        value = _counter_value(snap.get("counters"), metric)
+        if value is None:
             continue
         points.append({
             "ts": snap.get("ts"),
@@ -305,6 +399,7 @@ def _points_from_snaps(
         })
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     points.sort(key=lambda p: _parse_ts(p.get("ts")) or epoch)
+    _append_settled_currency_points(points, window, metric)
     return points
 
 
@@ -353,12 +448,6 @@ def _delta_label(series: list[dict]) -> str:
     return "vs prev: 0"
 
 
-_OUTSTANDING_METRIC_PREFIXES = (
-    "bookkeeper.outstanding_ar",
-    "bookkeeper.outstanding_ap",
-)
-
-
 def _trend_metrics_for(snaps: list) -> list[str]:
     """Static metric order, plus per-currency outstanding keys found in snaps."""
     extras: dict[str, list[str]] = {p: [] for p in _OUTSTANDING_METRIC_PREFIXES}
@@ -399,6 +488,14 @@ def build_trends_section(briefing: dict, config: Mapping) -> dict:
         with StateDB(config) as db:
             snaps = _load_snapshots(db)
         metrics = []
+        dropped_n = 0
+        for snap in snaps:
+            dt = _parse_ts(snap.get("ts"))
+            if dt is None or dt < cutoff:
+                continue
+            dropped = snap.get("dropped")
+            if isinstance(dropped, list):
+                dropped_n += sum(1 for item in dropped if isinstance(item, str))
         for metric in _trend_metrics_for(snaps):
             series = _points_from_snaps(snaps, metric, cutoff, kind="daily")
             if not series:
@@ -410,7 +507,10 @@ def build_trends_section(briefing: dict, config: Mapping) -> dict:
             })
         if not metrics:
             return {}
-        return {"metrics": metrics}
+        section: dict[str, Any] = {"metrics": metrics}
+        if dropped_n:
+            section["dropped_count"] = dropped_n
+        return section
     except Exception as exc:
         note_exception("build_trends_section", exc)
         return {}

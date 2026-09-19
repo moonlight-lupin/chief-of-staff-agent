@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.5.7 — trends settlement, dropped-key disclosure, daily AR/AP store fallback
+
+Pre-release round of the briefing-trends work. Outstanding currency series now
+drop to zero when a currency is fully collected; colliding trend keys are
+disclosed on the snapshot envelope; daily AR/AP uses the same YAML-then-store
+loader as weekly.
+
+### Changes
+
+- **Settled currency series reach 0.** When a later daily snapshot omits a
+  previously seen `bookkeeper.outstanding_ar::CCY` / `outstanding_ap::CCY`
+  child, trend history appends a synthetic `{value: 0, carried: true}` point
+  at that snapshot's timestamp. A missing later snapshot is "no data yet"
+  (series stops); a later snapshot without the child is "collected as zero".
+  Scalar metrics such as `overdue_count` are not carried forward. No snapshot
+  schema migration: the extra point is computed at series time.
+- **Dropped-key disclosure.** Ambiguous flatten destinations still drop (and
+  still `note_exception`); the dest list is now stored as `snapshot["dropped"]`
+  when non-empty. `build_trends_section` surfaces `dropped_count` only.
+- **Daily AR/AP uses `_load_records`.** `collect_bookkeeper_stats` no longer
+  `yaml.safe_load`s `invoices.yaml` itself. Malformed YAML falls through to
+  the store with a `sources` disclosure; the bare except notes via
+  `note_exception`.
+- **Bucket formatting:** `_amt(-0.001)` renders `0`, not `-0`. Empty-bucket
+  `"0"` vs `pl_report`'s `"0.00"` is unchanged.
+- **`_DONE_STATUSES`** is the hard set `{done}` (aliases still map
+  `completed` → `done`).
+
+### Documented, not changed
+
+- **Daily vs weekly Outstanding AR.** Daily / `chief_of_staff.py bookkeeper`
+  (and `pl_report`) count commitments including drafts. Weekly Outstanding AR
+  is issued-only (drafts skipped, attested by the r2 weekly fixture). Same
+  `invoices.yaml` can print SGD 1208 daily and SGD 1200 weekly; the split is
+  intentional. See `skills/weekly-review/SKILL.md`.
+- **`overdue_count` on the daily bookkeeper panel** sums past-due sent and
+  received (and counts drafts). `pl_report` keeps `overdue_ar` / `overdue_ap`
+  separate. Pre-existing; the panel label is just "Overdue count".
+- **`outstanding_unknown`** (direction-less invoices in the weekly JSON) is
+  not rendered in weekly HTML/text. It remains on the envelope.
+- **String amounts.** Weekly `_amount` returns `None` for `amount: "1200"`;
+  `pl_report.money()` parses via Decimal. Pre-existing, inherited by daily
+  through the shared helper.
+- **Weekly `render_markdown`** is `render_weekly_text`. Two-space-indented
+  lines can reflow in clients that treat the body as markdown; content is
+  correct.
+- **Mixed-shape trend history.** Pre-R4 snapshots may still chart the scalar
+  `bookkeeper.outstanding_ar` next to the new `::CCY` rows. Currency children
+  now settle to 0 (above); scalar series that simply stop are unchanged.
+
 ## v0.5.6 — field follow-up #3: unified calendar reads, multi-account routing, status fixes
 
 Field follow-up #3 from the live deployment (Battery Road Collective,

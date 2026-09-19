@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
     _TODO_STATUSES = {"open", "done", "deferred", "cancelled"}
 
 _STATUS_ALIASES = {"completed": "done", "pending": "open"}
-_DONE_STATUSES = frozenset({"done"}) & frozenset(_TODO_STATUSES)
+_DONE_STATUSES = frozenset({"done"})
 _OPEN_STATUSES = frozenset(_TODO_STATUSES) - _DONE_STATUSES - {"cancelled"}
 _SENT_STATUSES = frozenset({"sent"})
 _PAID_STATUSES = frozenset({"paid"})
