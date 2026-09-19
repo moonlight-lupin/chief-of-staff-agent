@@ -566,8 +566,8 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
         "candidates_needs_review": 0,
         "duplicate_warnings": 0,
         "pending_record_actions": 0,
-        "outstanding_ap": "0",
-        "outstanding_ar": "0",
+        "outstanding_ap": {},
+        "outstanding_ar": {},
         "overdue_count": 0,
     }
 
@@ -601,8 +601,16 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
     except Exception:
         pass
 
-    # Standing AR/AP/overdue from invoices.yaml (not paid/draft).
+    # Standing AR/AP/overdue from invoices.yaml. Status filter mirrors
+    # pl_report.py (paid + cancelled/void/written_off); drafts count.
     try:
+        from weekly_summary import (
+            _add_amount,
+            _amount,
+            _fallback_currency,
+            _parse_date,
+        )
+
         invoices_path = root / "invoices.yaml"
         invoices: list = []
         if invoices_path.exists():
@@ -615,48 +623,36 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
                 recs = loaded.get("invoices") if isinstance(loaded, dict) else None
                 if isinstance(recs, list):
                     invoices = recs
-        ar = 0.0
-        ap = 0.0
+        ar: dict[str, float | int] = {}
+        ap: dict[str, float | int] = {}
         overdue_n = 0
         today = date.today()
+        fallback_ccy = _fallback_currency(config if isinstance(config, Mapping) else None)
+        cancelled = {"cancelled", "void", "written_off"}
         for inv in invoices:
             if not isinstance(inv, dict):
                 continue
             status = str(inv.get("status") or "").strip().lower()
-            if status in {"paid", "draft", "cancelled"}:
+            if status == "paid" or status in cancelled:
                 continue
             direction = str(inv.get("direction") or "").strip().lower()
-            amt = inv.get("amount")
-            if isinstance(amt, bool) or not isinstance(amt, (int, float)):
+            amt = _amount(inv)
+            if amt is None:
                 continue
-            due_raw = inv.get("due_date")
-            due = None
-            if isinstance(due_raw, datetime):
-                due = due_raw.date() if due_raw.tzinfo is None else due_raw.astimezone().date()
-            elif hasattr(due_raw, "toordinal"):
-                due = due_raw
-            elif due_raw:
-                try:
-                    due = datetime.strptime(str(due_raw).strip()[:10], "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    due = None
+            due = _parse_date(inv.get("due_date"))
             past_due = due is not None and due < today
+            ccy = str(inv.get("currency") or fallback_ccy)
             if direction == "sent":
-                ar += amt
+                _add_amount(ar, ccy, amt)
                 if past_due:
                     overdue_n += 1
             elif direction == "received":
-                ap += amt
+                _add_amount(ap, ccy, amt)
                 if past_due:
                     overdue_n += 1
 
-        def _fmt_amt(n: float) -> str:
-            if n == int(n):
-                return str(int(n))
-            return f"{n:.2f}".rstrip("0").rstrip(".")
-
-        stats["outstanding_ar"] = _fmt_amt(ar)
-        stats["outstanding_ap"] = _fmt_amt(ap)
+        stats["outstanding_ar"] = ar
+        stats["outstanding_ap"] = ap
         stats["overdue_count"] = overdue_n
     except Exception:
         pass

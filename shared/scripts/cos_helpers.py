@@ -105,6 +105,29 @@ def _indent_lines(text: str, prefix: str = "  ") -> str:
 def _json_dump(payload: Any) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
+
+def _format_outstanding_bucket(bucket: Any) -> str:
+    """Render an AR/AP currency bucket for the bookkeeper CLI.
+
+    One currency → ``SGD 1200``. Several → ``JPY 100 / USD 100`` (sorted),
+    matching ``pl_report.format_bucket``'s join style without mixing units.
+    """
+    if not isinstance(bucket, dict) or not bucket:
+        return "0"
+
+    def _amt(n: Any) -> str:
+        if isinstance(n, bool) or not isinstance(n, (int, float)):
+            return str(n)
+        if n == int(n):
+            return str(int(n))
+        return f"{n:.2f}".rstrip("0").rstrip(".")
+
+    items = [(str(ccy), _amt(amt)) for ccy, amt in bucket.items()]
+    if len(items) == 1:
+        ccy, amt = items[0]
+        return f"{ccy} {amt}"
+    return " / ".join(f"{ccy} {amt}" for ccy, amt in sorted(items))
+
 # ---------------------------------------------------------------------------
 # Demo fixture re-anchoring
 # ---------------------------------------------------------------------------

@@ -336,9 +336,9 @@ def test_collect_bookkeeper_stats_outstanding_from_invoices(tmp_path):
          "due_date": _iso(today - timedelta(days=2))},
     ]})
     stats = collect_bookkeeper_stats(cfg(root))
-    assert stats["outstanding_ar"] == "1200"
-    assert stats["outstanding_ap"] == "150.5"
-    assert stats["overdue_count"] == 1
+    assert stats["outstanding_ar"] == {"SGD": 1208}
+    assert stats["outstanding_ap"] == {"SGD": 150.5}
+    assert stats["overdue_count"] == 2
 
 
 # ── R3-13 notify email missing-config banner ────────────────────

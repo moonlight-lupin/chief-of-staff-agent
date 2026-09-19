@@ -99,7 +99,7 @@ from cos_helpers import (  # noqa: E402
     _resolve_hermes_home,
     _get_action_risk,
     _call_collector,
-    _json_dump,
+    _json_dump, _format_outstanding_bucket,
     _reanchor_demo_envelope,
 )
 
@@ -366,8 +366,8 @@ def collect_bookkeeper_panel(config: Any) -> dict[str, Any]:
         "candidates_needs_review": stats.get("candidates_needs_review", 0),
         "duplicate_warnings": stats.get("duplicate_warnings", 0),
         "pending_record_actions": stats.get("pending_record_actions", 0),
-        "outstanding_ap": stats.get("outstanding_ap", "0"),
-        "outstanding_ar": stats.get("outstanding_ar", "0"),
+        "outstanding_ap": stats.get("outstanding_ap") if isinstance(stats.get("outstanding_ap"), dict) else {},
+        "outstanding_ar": stats.get("outstanding_ar") if isinstance(stats.get("outstanding_ar"), dict) else {},
         "overdue_count": stats.get("overdue_count", 0),
     }
 
@@ -1082,8 +1082,8 @@ def cmd_bookkeeper(args: argparse.Namespace) -> int:
     print(f"  Candidates needing review: {panel.get('candidates_needs_review', 0)}")
     print(f"  Duplicate warnings: {panel.get('duplicate_warnings', 0)}")
     print(f"  Pending record actions: {panel.get('pending_record_actions', 0)}")
-    print(f"  Outstanding AP: {panel.get('outstanding_ap', '0')}")
-    print(f"  Outstanding AR: {panel.get('outstanding_ar', '0')}")
+    print(f"  Outstanding AP: {_format_outstanding_bucket(panel.get('outstanding_ap'))}")
+    print(f"  Outstanding AR: {_format_outstanding_bucket(panel.get('outstanding_ar'))}")
     print(f"  Overdue count: {panel.get('overdue_count', 0)}")
     return 0
 

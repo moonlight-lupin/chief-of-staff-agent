@@ -115,7 +115,7 @@ def _coerce_numeric(key: str, value: Any) -> int | float | None:
     return as_float
 
 
-def _flatten_currency_list(key: str, items: list, counters: dict[str, int | float]) -> None:
+def _flatten_currency_list(key: str, items: list, put) -> None:
     totals: dict[str, float] = {}
     int_only: dict[str, bool] = {}
     for item in items:
@@ -128,7 +128,8 @@ def _flatten_currency_list(key: str, items: list, counters: dict[str, int | floa
         totals[currency] = totals.get(currency, 0) + amount
         int_only[currency] = int_only.get(currency, True) and isinstance(amount, int)
     for currency, total in totals.items():
-        counters[f"{key}::{currency}"] = int(total) if int_only.get(currency) and total == int(total) else total
+        value = int(total) if int_only.get(currency) and total == int(total) else total
+        put(f"{key}::{currency}", value)
 
 
 def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str) -> None:
@@ -181,7 +182,7 @@ def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str)
             if not value:
                 continue
             if all(isinstance(item, dict) for item in value):
-                _flatten_currency_list(dest, value, counters)
+                _flatten_currency_list(dest, value, _put)
 
 
 def _extract_counters(briefing: Mapping[str, Any]) -> dict[str, int | float] | None:
@@ -239,7 +240,6 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
         if counters is None:
             return None
         from state_db import StateDB
-        import state_db as _state_db
 
         now = datetime.now(timezone.utc)
         snapshot = {
@@ -273,14 +273,6 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
 
         with StateDB(config) as db:
             result = db.mutate_kv(TREND_KV_STORE, _mutate)
-        patched = getattr(_state_db, "mutate_kv", None)
-        if callable(patched) and getattr(patched, "__module__", "state_db") != "state_db":
-            def _already(data: dict[str, Any]) -> dict:
-                return result
-            try:
-                patched(TREND_KV_STORE, _already, config=config)
-            except Exception:
-                pass
         return result
     except Exception as exc:
         note_exception("capture_snapshot", exc)
@@ -361,6 +353,41 @@ def _delta_label(series: list[dict]) -> str:
     return "vs prev: 0"
 
 
+_OUTSTANDING_METRIC_PREFIXES = (
+    "bookkeeper.outstanding_ar",
+    "bookkeeper.outstanding_ap",
+)
+
+
+def _trend_metrics_for(snaps: list) -> list[str]:
+    """Static metric order, plus per-currency outstanding keys found in snaps."""
+    extras: dict[str, list[str]] = {p: [] for p in _OUTSTANDING_METRIC_PREFIXES}
+    seen: set[str] = set()
+    for snap in snaps:
+        if not isinstance(snap, dict):
+            continue
+        counters = snap.get("counters")
+        if not isinstance(counters, dict):
+            continue
+        for key in counters:
+            if not isinstance(key, str) or key in seen:
+                continue
+            for prefix in _OUTSTANDING_METRIC_PREFIXES:
+                if key.startswith(prefix + "::"):
+                    extras[prefix].append(key)
+                    seen.add(key)
+                    break
+    for prefix in extras:
+        extras[prefix].sort()
+    out: list[str] = []
+    for metric in _TREND_METRICS:
+        out.append(metric)
+        children = extras.get(metric)
+        if children:
+            out.extend(children)
+    return out
+
+
 def build_trends_section(briefing: dict, config: Mapping) -> dict:
     """Build the HTML trends section dict. Never raises; ``{}`` on error."""
     try:
@@ -372,7 +399,7 @@ def build_trends_section(briefing: dict, config: Mapping) -> dict:
         with StateDB(config) as db:
             snaps = _load_snapshots(db)
         metrics = []
-        for metric in _TREND_METRICS:
+        for metric in _trend_metrics_for(snaps):
             series = _points_from_snaps(snaps, metric, cutoff, kind="daily")
             if not series:
                 continue

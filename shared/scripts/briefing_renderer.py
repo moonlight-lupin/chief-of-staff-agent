@@ -530,14 +530,26 @@ def _weekly_badges(summary: dict[str, Any]) -> list[str]:
 def _divergence_badges(sources: Any) -> list[str]:
     if not isinstance(sources, dict):
         return []
-    if not any(isinstance(v, dict) and v.get("divergence") for v in sources.values()):
-        return []
     parts: list[str] = []
     for name, info in sources.items():
-        if not isinstance(info, dict) or not info.get("divergence"):
+        if not isinstance(info, dict):
             continue
+        if info.get("fallback") == "store":
+            reason = info.get("reason") or "unreadable"
+            parts.append(
+                f"{_esc(name)} YAML unreadable ({_esc(reason)}); using store"
+            )
+            continue
+        if not info.get("divergence"):
+            continue
+        yaml_n = info.get("yaml_records")
+        store_n = info.get("store_records")
+        if yaml_n is None:
+            yaml_n = 0
+        if store_n is None:
+            store_n = 0
         parts.append(
-            f"{_esc(name)} YAML {_esc(info.get('yaml_records'))} / store {_esc(info.get('store_records'))}"
+            f"{_esc(name)} YAML {_esc(yaml_n)} / store {_esc(store_n)}"
         )
     if not parts:
         return []
@@ -677,14 +689,26 @@ def render_weekly_text(briefing: dict[str, Any]) -> str:
         lines.append("")
     sources = briefing.get("sources") or {}
     if isinstance(sources, dict) and any(
-        isinstance(v, dict) and v.get("divergence") for v in sources.values()
+        isinstance(v, dict) and (v.get("divergence") or v.get("fallback"))
+        for v in sources.values()
     ):
         lines.append("Data divergence:")
         for name, info in sources.items():
-            if isinstance(info, dict) and info.get("divergence"):
+            if not isinstance(info, dict):
+                continue
+            if info.get("fallback") == "store":
                 lines.append(
-                    f"  {name}: yaml={info.get('yaml_records')} store={info.get('store_records')}"
+                    f"  {name}: YAML unreadable ({info.get('reason') or 'unreadable'}); using store"
                 )
+                continue
+            if info.get("divergence"):
+                yaml_n = info.get("yaml_records")
+                store_n = info.get("store_records")
+                if yaml_n is None:
+                    yaml_n = 0
+                if store_n is None:
+                    store_n = 0
+                lines.append(f"  {name}: yaml={yaml_n} store={store_n}")
         lines.append("")
     return "\n".join(lines)
 

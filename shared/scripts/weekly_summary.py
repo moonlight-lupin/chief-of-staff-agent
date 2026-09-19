@@ -32,6 +32,7 @@ try:
 except Exception:  # pragma: no cover
     _TODO_STATUSES = {"open", "done", "deferred", "cancelled"}
 
+_STATUS_ALIASES = {"completed": "done", "pending": "open"}
 _DONE_STATUSES = frozenset({"done"}) & frozenset(_TODO_STATUSES)
 _OPEN_STATUSES = frozenset(_TODO_STATUSES) - _DONE_STATUSES - {"cancelled"}
 _SENT_STATUSES = frozenset({"sent"})
@@ -134,10 +135,17 @@ def _load_records(
         try:
             yaml_recs = _yaml_records(root / yaml_name, key)
             yaml_ok = yaml_recs is not None
-        except Exception:
+        except Exception as exc:
             # Malformed YAML: fall through to the store instead of returning [].
             yaml_recs = None
             yaml_ok = False
+            if sources is not None:
+                reason = str(exc).strip() or type(exc).__name__
+                if "\n" in reason:
+                    reason = reason.split("\n", 1)[0].strip()
+                if len(reason) > 160:
+                    reason = reason[:157] + "..."
+                sources[store_name] = {"fallback": "store", "reason": reason}
     if yaml_ok:
         store_recs = _peek_store_records(config, store_name, key)
         if sources is not None:
@@ -154,6 +162,11 @@ def _load_records(
 
 def _status(record: Mapping[str, Any]) -> str:
     return str(record.get("status") or "").strip().lower()
+
+
+def _todo_status(record: Mapping[str, Any]) -> str:
+    raw = _status(record)
+    return _STATUS_ALIASES.get(raw, raw)
 
 
 def _direction(record: Mapping[str, Any]) -> str:
@@ -188,12 +201,18 @@ def _parse_date(value: Any) -> date | None:
     text = str(value).strip()
     if not text:
         return None
-    try:
-        if "T" in text or " " in text:
+    if "T" in text or " " in text:
+        try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 return dt.date()
             return dt.astimezone().date()
+        except (ValueError, TypeError):
+            try:
+                return datetime.strptime(text[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                return None
+    try:
         return datetime.strptime(text[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return None
@@ -337,8 +356,8 @@ def _tasks_section(todos: list) -> dict[str, Any]:
     rows = [t for t in todos if isinstance(t, dict)]
     if not rows:
         return {}
-    completed = [t for t in rows if _status(t) in _DONE_STATUSES]
-    carry = [t for t in rows if _status(t) in _OPEN_STATUSES]
+    completed = [t for t in rows if _todo_status(t) in _DONE_STATUSES]
+    carry = [t for t in rows if _todo_status(t) in _OPEN_STATUSES]
     week_start = _week_start()
     today = date.today()
     overdue = []
@@ -454,6 +473,7 @@ def _envelope(
     knowledge: dict[str, Any],
     expenses: dict[str, Any],
     sources: dict[str, Any] | None = None,
+    exceptions: list | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "kind": "weekly",
@@ -473,15 +493,28 @@ def _envelope(
     }
     if sources:
         out["sources"] = sources
+    if exceptions:
+        out["exceptions"] = exceptions
     return out
 
 
-def _isolated_section(builder):
+def _isolated_section(builder, name: str = "section", exceptions: list | None = None):
     """Run a section builder; any failure yields ``{}`` for that section only."""
     try:
         result = builder()
         return result if isinstance(result, dict) else {}
-    except Exception:
+    except Exception as exc:
+        try:
+            from trend_history import note_exception
+            note_exception(f"weekly_summary.{name}", exc)
+        except Exception:
+            pass
+        if exceptions is not None:
+            exceptions.append({
+                "section": name,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
         return {}
 
 
@@ -489,28 +522,39 @@ def build_weekly_summary_from_config(config: Mapping[str, Any] | None) -> dict[s
     """Build a structured weekly summary from ``paths.project_root`` files."""
     try:
         sources: dict[str, Any] = {}
+        exceptions: list[dict[str, str]] = []
         pipeline = _isolated_section(
             lambda: _pipeline_section(
                 _load_records(config, "pipeline.yaml", "pipeline", "deals", sources)
-            )
+            ),
+            name="pipeline",
+            exceptions=exceptions,
         )
         bookkeeping = _isolated_section(
             lambda: _bookkeeping_section(
                 _load_records(config, "invoices.yaml", "invoices", "invoices", sources),
                 config,
-            )
+            ),
+            name="bookkeeping",
+            exceptions=exceptions,
         )
         tasks = _isolated_section(
             lambda: _tasks_section(
                 _load_records(config, "todos.yaml", "todos", "todos", sources)
-            )
+            ),
+            name="tasks",
+            exceptions=exceptions,
         )
         def _expenses():
             rows = _load_records(config, "expenses.yaml", "expenses", "expenses", sources)
             return {"expenses": rows} if rows else {}
 
-        expenses = _isolated_section(_expenses)
-        knowledge = _isolated_section(lambda: _knowledge_section(config))
+        expenses = _isolated_section(_expenses, name="expenses", exceptions=exceptions)
+        knowledge = _isolated_section(
+            lambda: _knowledge_section(config),
+            name="knowledge",
+            exceptions=exceptions,
+        )
         summary = _empty_summary()
         if pipeline:
             summary["deals_moved"] = int(pipeline.get("deals_moved") or 0)
@@ -542,6 +586,7 @@ def build_weekly_summary_from_config(config: Mapping[str, Any] | None) -> dict[s
             knowledge=knowledge,
             expenses=expenses,
             sources=sources,
+            exceptions=exceptions,
         )
     except Exception:
         return _envelope(
