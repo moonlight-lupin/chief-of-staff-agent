@@ -318,3 +318,10 @@ def test_render_title_default_unchanged():
     html = render_html(b)
     html2 = render_html(b, title=None)
     assert html == html2, "default title path must be unchanged"
+
+def test_build_weekly_summary_path_api(tmp_path, monkeypatch):
+    """SPEC §2.4 names build_weekly_summary(config_path) — cover the loader ladder."""
+    from weekly_summary import build_weekly_summary
+    # Missing dir must not raise; returns a dict-shaped summary.
+    result = build_weekly_summary(str(tmp_path / "void"))
+    assert isinstance(result, dict)

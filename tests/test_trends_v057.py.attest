@@ -1,0 +1,7 @@
+{
+  "schema": "btl-attest.v1",
+  "file": "test_trends_v057.py",
+  "sha256": "22cf250954e5545b142380bd3294857d773b3b31ec4a2ca15a5af68e0850a5b9",
+  "attestedAt": "2026-09-19T16:53:14+00:00",
+  "note": "Hermes: fixed own import bug + added build_weekly_summary path-coverage test post-build r1 (Opus B4)"
+}
