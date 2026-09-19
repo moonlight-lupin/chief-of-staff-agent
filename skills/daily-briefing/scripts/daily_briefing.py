@@ -1192,6 +1192,7 @@ def cmd_notify(args: argparse.Namespace) -> int:
             from state_db import create_pending_action
             if not config:
                 print("Error: cannot load config", file=sys.stderr)
+                load_config(args.config, quiet=False)
                 return 1
             fmt = _resolve_briefing_format(args, config)
             payload: dict[str, Any] = {

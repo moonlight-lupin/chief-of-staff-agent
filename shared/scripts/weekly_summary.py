@@ -26,8 +26,14 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 WEEKLY_TITLE = "Chief-of-Staff Weekly Review"
-_DONE_STATUSES = frozenset({"done", "completed"})
-_OPEN_STATUSES = frozenset({"open", "pending", "deferred"})
+
+try:
+    from schemas import TODO_STATUSES as _TODO_STATUSES
+except Exception:  # pragma: no cover
+    _TODO_STATUSES = {"open", "done", "deferred", "cancelled"}
+
+_DONE_STATUSES = frozenset({"done"}) & frozenset(_TODO_STATUSES)
+_OPEN_STATUSES = frozenset(_TODO_STATUSES) - _DONE_STATUSES - {"cancelled"}
 _SENT_STATUSES = frozenset({"sent"})
 _PAID_STATUSES = frozenset({"paid"})
 _OVERDUE_STATUSES = frozenset({"overdue"})
@@ -62,18 +68,22 @@ def _wiki_path(config: Mapping[str, Any] | None, root: Path | None) -> Path | No
 
 
 def _yaml_records(path: Path, key: str) -> list | None:
-    """Load a YAML list under ``key``. None means the file is absent."""
+    """Load a YAML list under ``key``. None means the file is absent.
+
+    Structural problems (no PyYAML, non-dict document, missing/non-list key)
+    raise so ``_load_records`` can fall through to the store.
+    """
     if not path.exists():
         return None
     if yaml is None:
-        return []
+        raise ValueError("PyYAML is not available")
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if loaded is None:
-        return []
     if not isinstance(loaded, dict):
-        return []
+        raise ValueError(f"{path.name} is not a mapping")
     recs = loaded.get(key)
-    return recs if isinstance(recs, list) else []
+    if not isinstance(recs, list):
+        raise ValueError(f"{path.name} missing list {key!r}")
+    return recs
 
 
 def _store_records(config: Mapping[str, Any] | None, store_name: str, key: str) -> list:
@@ -171,7 +181,7 @@ def _parse_date(value: Any) -> date | None:
     if isinstance(value, datetime):
         dt = value
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            return dt.date()
         return dt.astimezone().date()
     if isinstance(value, date):
         return value
@@ -179,10 +189,10 @@ def _parse_date(value: Any) -> date | None:
     if not text:
         return None
     try:
-        if "T" in text:
+        if "T" in text or " " in text:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                return dt.date()
             return dt.astimezone().date()
         return datetime.strptime(text[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
@@ -272,6 +282,7 @@ def _bookkeeping_section(
     overdue_n = 0
     outstanding_ar: dict[str, float | int] = {}
     outstanding_ap: dict[str, float | int] = {}
+    outstanding_unknown: dict[str, float | int] = {}
     for inv in rows:
         status = _status(inv)
         direction = _direction(inv)
@@ -287,8 +298,14 @@ def _bookkeeping_section(
             and _in_week_or_undated(inv.get("issue_date"), week_start, today)
         ):
             received_n += 1
-        if status in _PAID_STATUSES and _in_week_or_undated(inv.get("paid_date"), week_start, today):
-            paid_n += 1
+        if status in _PAID_STATUSES:
+            if _in_week(inv.get("paid_date"), week_start, today):
+                paid_n += 1
+            elif (
+                _parse_date(inv.get("paid_date")) is None
+                and _parse_date(inv.get("issue_date")) is None
+            ):
+                paid_n += 1
         if status in _OVERDUE_STATUSES:
             overdue_n += 1
         if status in _CLOSED_STATUSES or status == _DRAFT_STATUS:
@@ -299,9 +316,11 @@ def _bookkeeping_section(
         ccy = str(inv.get("currency") or fallback_ccy)
         if direction == "received":
             _add_amount(outstanding_ap, ccy, amt)
-        else:
+        elif direction == "sent":
             _add_amount(outstanding_ar, ccy, amt)
-    return {
+        else:
+            _add_amount(outstanding_unknown, ccy, amt)
+    out: dict[str, Any] = {
         "invoices_sent": sent_n,
         "invoices_received": received_n,
         "invoices_paid": paid_n,
@@ -309,6 +328,9 @@ def _bookkeeping_section(
         "outstanding_ar": outstanding_ar,
         "outstanding_ap": outstanding_ap,
     }
+    if outstanding_unknown:
+        out["outstanding_unknown"] = outstanding_unknown
+    return out
 
 
 def _tasks_section(todos: list) -> dict[str, Any]:
@@ -317,14 +339,24 @@ def _tasks_section(todos: list) -> dict[str, Any]:
         return {}
     completed = [t for t in rows if _status(t) in _DONE_STATUSES]
     carry = [t for t in rows if _status(t) in _OPEN_STATUSES]
+    week_start = _week_start()
     today = date.today()
     overdue = []
     for todo in carry:
         due = _parse_date(todo.get("due") or todo.get("due_date"))
         if due is not None and due < today:
             overdue.append(todo)
+    weekly_completed = 0
+    for todo in completed:
+        stamp = todo.get("completed_at")
+        if stamp:
+            if _in_week(stamp, week_start, today):
+                weekly_completed += 1
+        else:
+            weekly_completed += 1
     return {
-        "tasks_completed": len(completed),
+        "tasks_completed": weekly_completed,
+        "tasks_done_total": len(completed),
         "tasks_carry_over": len(carry),
         "tasks_overdue_open": len(overdue),
     }
@@ -375,19 +407,19 @@ def _knowledge_section(config: Mapping[str, Any] | None) -> dict[str, Any]:
     for path in pages:
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         created_d, updated_d = _wiki_frontmatter_dates(text)
-        if created_d is None and updated_d is None:
-            mtime = _local_mtime_date(path)
-            if mtime is not None and week_start <= mtime <= today:
-                updated += 1
-            continue
         if created_d is not None and week_start <= created_d <= today:
             created += 1
             continue
         if updated_d is not None and week_start <= updated_d <= today:
             updated += 1
+            continue
+        if updated_d is None:
+            mtime = _local_mtime_date(path)
+            if mtime is not None and week_start <= mtime <= today:
+                updated += 1
     return {
         "wiki_pages_created": created,
         "wiki_pages_updated": updated,
@@ -444,20 +476,41 @@ def _envelope(
     return out
 
 
+def _isolated_section(builder):
+    """Run a section builder; any failure yields ``{}`` for that section only."""
+    try:
+        result = builder()
+        return result if isinstance(result, dict) else {}
+    except Exception:
+        return {}
+
+
 def build_weekly_summary_from_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Build a structured weekly summary from ``paths.project_root`` files."""
     try:
         sources: dict[str, Any] = {}
-        pipeline = _pipeline_section(
-            _load_records(config, "pipeline.yaml", "pipeline", "deals", sources)
+        pipeline = _isolated_section(
+            lambda: _pipeline_section(
+                _load_records(config, "pipeline.yaml", "pipeline", "deals", sources)
+            )
         )
-        bookkeeping = _bookkeeping_section(
-            _load_records(config, "invoices.yaml", "invoices", "invoices", sources),
-            config,
+        bookkeeping = _isolated_section(
+            lambda: _bookkeeping_section(
+                _load_records(config, "invoices.yaml", "invoices", "invoices", sources),
+                config,
+            )
         )
-        tasks = _tasks_section(_load_records(config, "todos.yaml", "todos", "todos", sources))
-        expense_rows = _load_records(config, "expenses.yaml", "expenses", "expenses", sources)
-        knowledge = _knowledge_section(config)
+        tasks = _isolated_section(
+            lambda: _tasks_section(
+                _load_records(config, "todos.yaml", "todos", "todos", sources)
+            )
+        )
+        def _expenses():
+            rows = _load_records(config, "expenses.yaml", "expenses", "expenses", sources)
+            return {"expenses": rows} if rows else {}
+
+        expenses = _isolated_section(_expenses)
+        knowledge = _isolated_section(lambda: _knowledge_section(config))
         summary = _empty_summary()
         if pipeline:
             summary["deals_moved"] = int(pipeline.get("deals_moved") or 0)
@@ -487,7 +540,7 @@ def build_weekly_summary_from_config(config: Mapping[str, Any] | None) -> dict[s
             bookkeeping=bookkeeping,
             tasks=tasks,
             knowledge=knowledge,
-            expenses={"expenses": expense_rows} if expense_rows else {},
+            expenses=expenses,
             sources=sources,
         )
     except Exception:
@@ -506,7 +559,7 @@ def build_weekly_summary(config_path: str | Path | None) -> dict[str, Any]:
     """Load company.yaml at ``config_path`` (or default) and build a summary."""
     try:
         from config_loader import load_config
-        config = load_config(config_path) if config_path else load_config()
+        config = load_config(config_path, quiet=True) if config_path else load_config(quiet=True)
     except Exception:
         config = None
     if config is None and config_path:

@@ -991,8 +991,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             record(f"import:{mod_name}", "ok", "available")
 
     try:
-        from trend_history import snapshot_health
-        health = snapshot_health(config)
+        from trend_history import doctor_snapshot_health
+        health = doctor_snapshot_health(config)
         record("trend_snapshots", health.get("status", "warn"), str(health.get("detail", "")))
     except Exception as exc:
         record("trend_snapshots", "warn", f"unavailable: {exc}")

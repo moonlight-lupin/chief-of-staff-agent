@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -601,6 +601,66 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
     except Exception:
         pass
 
+    # Standing AR/AP/overdue from invoices.yaml (not paid/draft).
+    try:
+        invoices_path = root / "invoices.yaml"
+        invoices: list = []
+        if invoices_path.exists():
+            try:
+                import yaml as _yaml  # type: ignore
+            except Exception:
+                _yaml = None
+            if _yaml is not None:
+                loaded = _yaml.safe_load(invoices_path.read_text(encoding="utf-8"))
+                recs = loaded.get("invoices") if isinstance(loaded, dict) else None
+                if isinstance(recs, list):
+                    invoices = recs
+        ar = 0.0
+        ap = 0.0
+        overdue_n = 0
+        today = date.today()
+        for inv in invoices:
+            if not isinstance(inv, dict):
+                continue
+            status = str(inv.get("status") or "").strip().lower()
+            if status in {"paid", "draft", "cancelled"}:
+                continue
+            direction = str(inv.get("direction") or "").strip().lower()
+            amt = inv.get("amount")
+            if isinstance(amt, bool) or not isinstance(amt, (int, float)):
+                continue
+            due_raw = inv.get("due_date")
+            due = None
+            if isinstance(due_raw, datetime):
+                due = due_raw.date() if due_raw.tzinfo is None else due_raw.astimezone().date()
+            elif hasattr(due_raw, "toordinal"):
+                due = due_raw
+            elif due_raw:
+                try:
+                    due = datetime.strptime(str(due_raw).strip()[:10], "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    due = None
+            past_due = due is not None and due < today
+            if direction == "sent":
+                ar += amt
+                if past_due:
+                    overdue_n += 1
+            elif direction == "received":
+                ap += amt
+                if past_due:
+                    overdue_n += 1
+
+        def _fmt_amt(n: float) -> str:
+            if n == int(n):
+                return str(int(n))
+            return f"{n:.2f}".rstrip("0").rstrip(".")
+
+        stats["outstanding_ar"] = _fmt_amt(ar)
+        stats["outstanding_ap"] = _fmt_amt(ap)
+        stats["overdue_count"] = overdue_n
+    except Exception:
+        pass
+
     # v0.2.7: Wiki lint counts — scan wiki directory
     try:
         wiki_path_str = config.get("paths", {}).get("wiki_path") if isinstance(config, dict) else None
@@ -625,7 +685,6 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
                             if line.strip().startswith("updated:"):
                                 val = line.split(":", 1)[1].strip().strip('"').strip("'")
                                 try:
-                                    from datetime import datetime, timezone
                                     upd = datetime.fromisoformat(val)
                                     if (datetime.now(timezone.utc) - upd).days > 90:
                                         stats["wiki_stale_pages"] = stats["wiki_stale_pages"] + 1 if isinstance(stats["wiki_stale_pages"], int) else 1

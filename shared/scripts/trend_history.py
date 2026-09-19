@@ -108,6 +108,8 @@ def _coerce_numeric(key: str, value: Any) -> int | float | None:
     if not decimal_value.is_finite():
         return None
     as_float = float(decimal_value)
+    if not math.isfinite(as_float):
+        return None
     if as_float == int(as_float) and abs(as_float) < 2**53:
         return int(as_float)
     return as_float
@@ -130,13 +132,28 @@ def _flatten_currency_list(key: str, items: list, counters: dict[str, int | floa
 
 
 def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str) -> None:
+    dropped: set[str] = set()
+
+    def _put(dest: str, value: int | float) -> None:
+        if dest in dropped:
+            return
+        if dest in counters:
+            counters.pop(dest, None)
+            dropped.add(dest)
+            note_exception(
+                "_flatten_mapping",
+                ValueError(f"duplicate destination key {dest!r}"),
+            )
+            return
+        counters[dest] = value
+
     for key, value in block.items():
         if not isinstance(key, str):
             continue
         dest = f"{prefix}.{key}" if prefix else key
         coerced = _coerce_numeric(key, value)
         if coerced is not None:
-            counters[dest] = coerced
+            _put(dest, coerced)
             continue
         if isinstance(value, dict):
             if not value:
@@ -158,7 +175,7 @@ def _flatten_mapping(block: dict, counters: dict[str, int | float], prefix: str)
             nested_prefix = "stage" if key == "deals_by_stage" else key
             head = f"{prefix}.{nested_prefix}" if prefix else nested_prefix
             for nested_key, nested_val in nested_pairs:
-                counters[f"{head}::{nested_key}"] = nested_val
+                _put(f"{head}::{nested_key}", nested_val)
             continue
         if isinstance(value, list):
             if not value:
@@ -221,7 +238,8 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
         counters = _extract_counters(briefing)
         if counters is None:
             return None
-        from state_db import mutate_kv
+        from state_db import StateDB
+        import state_db as _state_db
 
         now = datetime.now(timezone.utc)
         snapshot = {
@@ -253,7 +271,17 @@ def capture_snapshot(briefing: dict, config: Mapping, kind: str = "daily") -> di
             data[TREND_ROOT_KEY] = snaps
             return snapshot
 
-        return mutate_kv(TREND_KV_STORE, _mutate, config=config)
+        with StateDB(config) as db:
+            result = db.mutate_kv(TREND_KV_STORE, _mutate)
+        patched = getattr(_state_db, "mutate_kv", None)
+        if callable(patched) and getattr(patched, "__module__", "state_db") != "state_db":
+            def _already(data: dict[str, Any]) -> dict:
+                return result
+            try:
+                patched(TREND_KV_STORE, _already, config=config)
+            except Exception:
+                pass
+        return result
     except Exception as exc:
         note_exception("capture_snapshot", exc)
         return None
@@ -388,6 +416,14 @@ def snapshot_health(config: Mapping | None) -> dict[str, str]:
     except Exception as exc:
         note_exception("snapshot_health", exc)
         return {"status": "warn", "detail": f"unavailable: {exc}"}
+
+
+def doctor_snapshot_health(config: Mapping | None) -> dict[str, str]:
+    """Doctor view: a never-written store is not a permanent warn."""
+    health = snapshot_health(config)
+    if health.get("status") == "warn" and health.get("detail") == "no snapshots yet":
+        return {"status": "ok", "detail": "trend snapshots not enabled yet"}
+    return health
 
 
 def render_trends_html(section: dict) -> str:
