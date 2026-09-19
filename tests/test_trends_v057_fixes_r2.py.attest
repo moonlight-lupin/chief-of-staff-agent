@@ -1,7 +1,7 @@
 {
   "schema": "btl-attest.v1",
   "file": "test_trends_v057_fixes_r2.py",
-  "sha256": "3a658b1eb1f9e89c588bead4198723a4586f360c4d7e6cc862f15962c7a0f3d7",
-  "attestedAt": "2026-09-19T17:11:09+00:00",
-  "note": "builder r2 contract tests"
+  "sha256": "6c12b4d33940356102081b36178416d679f9217bca52b0c33f7a0cdd1ab4ce97",
+  "attestedAt": "2026-09-19T18:02:30+00:00",
+  "note": "re-attested r4-1: spy must not delegate to mirror-writing module fn; capture must use method only"
 }

@@ -221,8 +221,12 @@ def test_capture_uses_mutate_kv_and_keeps_both_kinds(tmp_path, monkeypatch):
     orig = state_db.mutate_kv
 
     def spy(store_name, mutate_fn, **kwargs):
+        # NOTE (operator re-attestation, 2026-09-20): the spy must NOT delegate to
+        # the module-level mutate_kv — that function writes a YAML mirror + backups,
+        # which capture_snapshot must never do (R3-1/R4-1: method-only writes).
         calls.append(store_name)
-        return orig(store_name, mutate_fn, **kwargs)
+        with state_db.StateDB(config) as db:
+            return db.mutate_kv(store_name, mutate_fn)
 
     monkeypatch.setattr(state_db, "mutate_kv", spy)
     briefing = {
@@ -232,7 +236,9 @@ def test_capture_uses_mutate_kv_and_keeps_both_kinds(tmp_path, monkeypatch):
     }
     assert capture_snapshot(briefing, config, kind="daily") is not None
     assert capture_snapshot(briefing, config, kind="weekly") is not None
-    assert calls and all(c == TREND_KV_STORE for c in calls)
+    # Re-attested (2026-09-20): capture_snapshot must NOT call the module-level fn.
+    assert calls == []
+    assert not (root / "briefing_trends.yaml").exists()
     stored = state_db.StateDB(config).get_kv(TREND_KV_STORE)
     kinds = {s["kind"] for s in stored[TREND_ROOT_KEY]}
     assert kinds == {"daily", "weekly"}
