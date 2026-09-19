@@ -1,11 +1,11 @@
 # Changelog
 
-## v0.5.7 — trends settlement, dropped-key disclosure, daily AR/AP store fallback
+## v0.5.7 — daily + weekly briefing trends, weekly HTML report
 
-Pre-release round of the briefing-trends work. Outstanding currency series now
-drop to zero when a currency is fully collected; colliding trend keys are
-disclosed on the snapshot envelope; daily AR/AP uses the same YAML-then-store
-loader as weekly.
+Adds operational trend visualization to the daily HTML briefing (pure-CSS bars,
+no JavaScript, self-contained) and an HTML output for the weekly review.
+Trend snapshots accumulate in the existing `kv_stores` table (no schema
+migration), pruned to 90 days, daily+weekly kinds kept separate.
 
 ### Changes
 
