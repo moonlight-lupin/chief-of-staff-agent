@@ -342,10 +342,12 @@ def _append_settled_currency_points(
 ) -> None:
     """If a later snapshot omitted a previously seen ::CCY child, record 0.
 
-    A subsequent snapshot that lacks the child is "collected as zero" (the
-    currency was fully settled). No later snapshot is "no data at all" — the
-    series stops at the last observed value and we do not invent a point.
-    Scalar metrics (overdue_count, …) are not carried forward.
+    A subsequent snapshot that lacks the child is "collected as zero" only
+    when that snapshot has at least one ``bookkeeper.*`` counter and the
+    metric is not listed in ``snapshot["dropped"]``. A snapshot with no
+    bookkeeper block (degraded config load) or an explicit drop is "this
+    run collected nothing / couldn't tell" — the series stops. No later
+    snapshot is "no data at all". Scalar metrics are not carried forward.
     """
     if not _is_outstanding_currency_metric(metric) or not window:
         return
@@ -355,13 +357,20 @@ def _append_settled_currency_points(
     epoch = datetime.min.replace(tzinfo=timezone.utc)
     for kind_snaps in by_kind.values():
         kind_snaps.sort(key=lambda item: item[0])
-        latest_dt, latest = kind_snaps[-1]
-        if _counter_value(latest.get("counters"), metric) is not None:
+        latest = kind_snaps[-1][1]
+        counters = latest.get("counters")
+        if not isinstance(counters, dict) or not any(
+            isinstance(k, str) and k.startswith("bookkeeper.") for k in counters
+        ):
+            continue
+        dropped = latest.get("dropped")
+        if isinstance(dropped, list) and metric in dropped:
+            continue
+        if _counter_value(counters, metric) is not None:
             continue
         earlier_had = any(
             _counter_value(snap.get("counters"), metric) is not None
-            for dt, snap in kind_snaps[:-1]
-            if dt <= latest_dt
+            for _dt, snap in kind_snaps[:-1]
         )
         if not earlier_had:
             continue
@@ -488,14 +497,19 @@ def build_trends_section(briefing: dict, config: Mapping) -> dict:
         with StateDB(config) as db:
             snaps = _load_snapshots(db)
         metrics = []
-        dropped_n = 0
+        dropped_keys: set[str] = set()
         for snap in snaps:
+            if snap.get("kind") != "daily":
+                continue
             dt = _parse_ts(snap.get("ts"))
             if dt is None or dt < cutoff:
                 continue
             dropped = snap.get("dropped")
             if isinstance(dropped, list):
-                dropped_n += sum(1 for item in dropped if isinstance(item, str))
+                dropped_keys.update(
+                    item for item in dropped if isinstance(item, str)
+                )
+        dropped_n = len(dropped_keys)
         for metric in _trend_metrics_for(snaps):
             series = _points_from_snaps(snaps, metric, cutoff, kind="daily")
             if not series:
@@ -594,6 +608,16 @@ def render_trends_html(section: dict) -> str:
                 f'<span class="trend-delta">{_esc(delta)}</span>'
                 f'<div class="bar"><div class="bar-fill" style="width: {width}%"></div></div>'
                 f"</div>"
+            )
+        dropped_n = section.get("dropped_count")
+        if (
+            isinstance(dropped_n, int)
+            and not isinstance(dropped_n, bool)
+            and dropped_n > 0
+        ):
+            noun = "key" if dropped_n == 1 else "keys"
+            parts.append(
+                f'<span class="trend-dropped">{_esc(dropped_n)} dropped {noun}</span>'
             )
         return "".join(parts)
     except Exception as exc:

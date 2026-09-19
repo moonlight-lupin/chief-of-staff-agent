@@ -621,6 +621,7 @@ def collect_bookkeeper_stats(config: object) -> dict[str, object]:
             "invoices",
             "invoices",
             invoices_sources,
+            root=root,
         )
         if invoices_sources:
             stats["sources"] = invoices_sources

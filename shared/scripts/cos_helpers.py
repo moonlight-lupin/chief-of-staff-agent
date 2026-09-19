@@ -122,7 +122,7 @@ def _format_outstanding_bucket(bucket: Any) -> str:
             text = str(int(n))
         else:
             text = f"{n:.2f}".rstrip("0").rstrip(".")
-        if text in {"-0", "0", "-0.00"}:
+        if text in {"-0", "0"}:
             return "0"
         return text
 

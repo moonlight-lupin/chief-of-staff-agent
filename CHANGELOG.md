@@ -12,17 +12,32 @@ loader as weekly.
 - **Settled currency series reach 0.** When a later daily snapshot omits a
   previously seen `bookkeeper.outstanding_ar::CCY` / `outstanding_ap::CCY`
   child, trend history appends a synthetic `{value: 0, carried: true}` point
-  at that snapshot's timestamp. A missing later snapshot is "no data yet"
-  (series stops); a later snapshot without the child is "collected as zero".
-  Scalar metrics such as `overdue_count` are not carried forward. No snapshot
-  schema migration: the extra point is computed at series time.
+  at that snapshot's timestamp. Settlement requires the latest snapshot to
+  contain at least one `bookkeeper.*` counter (a degraded run with only
+  summary scalars is "no bookkeeper data", not "collected as zero") and
+  skips any metric listed in that snapshot's `dropped` list (ambiguous
+  flatten ≠ settled). A missing later snapshot is "no data yet" (series
+  stops). Scalar metrics such as `overdue_count` are not carried forward.
+  No snapshot schema migration: the extra point is computed at series time.
+  A non-numeric `::CCY` value is treated as missing and would therefore
+  settle; current collectors only emit numeric flatten values, so this is
+  unreachable without a hand-edited store.
 - **Dropped-key disclosure.** Ambiguous flatten destinations still drop (and
   still `note_exception`); the dest list is now stored as `snapshot["dropped"]`
-  when non-empty. `build_trends_section` surfaces `dropped_count` only.
+  when non-empty. `build_trends_section` surfaces `dropped_count` as the
+  number of distinct dest keys on in-window **daily** snapshots (same kind
+  filter as the series). `render_trends_html` emits that count as a small
+  chip when present.
 - **Daily AR/AP uses `_load_records`.** `collect_bookkeeper_stats` no longer
   `yaml.safe_load`s `invoices.yaml` itself. Malformed YAML falls through to
   the store with a `sources` disclosure; the bare except notes via
-  `note_exception`.
+  `note_exception`. The already-resolved project root (env fallback included)
+  is passed into `_load_records` so daily and weekly no longer disagree on
+  where `invoices.yaml` lives. Daily disclosure stays on
+  `sections.bookkeeper.sources` (not hoisted to top-level `briefing.sources`,
+  which weekly uses and which the other daily path uses for wrap_source
+  hashes); daily HTML/text/markdown read that key. Weekly is unchanged:
+  top-level `briefing.sources`.
 - **Bucket formatting:** `_amt(-0.001)` renders `0`, not `-0`. Empty-bucket
   `"0"` vs `pl_report`'s `"0.00"` is unchanged.
 - **`_DONE_STATUSES`** is the hard set `{done}` (aliases still map

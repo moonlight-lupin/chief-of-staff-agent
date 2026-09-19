@@ -127,8 +127,12 @@ def _load_records(
     store_name: str,
     key: str,
     sources: dict[str, Any] | None = None,
+    root: Path | None = None,
 ) -> list:
-    root = _project_root(config)
+    if root is None:
+        root = _project_root(config)
+    else:
+        root = Path(root)
     yaml_recs: list | None = None
     yaml_ok = False
     if root is not None:

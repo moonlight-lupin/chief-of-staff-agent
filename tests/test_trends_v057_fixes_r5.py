@@ -53,7 +53,7 @@ def test_settled_currency_series_is_100_then_0():
 
     now = _now()
     first = _extract_counters(_summary(outstanding_ar={"USD": 100}))
-    second = _extract_counters(_summary(outstanding_ar={}))
+    second = _extract_counters(_summary(outstanding_ar={}, overdue_count=0))
     snaps = [
         {"ts": (now - timedelta(days=1)).isoformat(), "kind": "daily", "counters": first},
         {"ts": now.isoformat(), "kind": "daily", "counters": second},
@@ -155,7 +155,7 @@ def test_synthetic_zero_does_not_rewrite_stored_counters(tmp_path):
         {
             "ts": now.isoformat(),
             "kind": "daily",
-            "counters": {"needs_attention": 0},
+            "counters": {"needs_attention": 0, "bookkeeper.overdue_count": 0},
         },
     ]})
     series = get_series(config, "bookkeeper.outstanding_ar::USD", days=30, kind="daily")

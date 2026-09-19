@@ -201,6 +201,8 @@ def render_text(briefing: dict[str, Any]) -> str:
 
     # Bookkeeper
     bk = sections.get("bookkeeper", {})
+    if not isinstance(bk, dict):
+        bk = {}
     if bk and (bk.get("candidates_found") or bk.get("pending_record_actions")
                or bk.get("duplicate_warnings") or bk.get("candidates_needs_review")):
         lines.append("Bookkeeper:")
@@ -214,6 +216,7 @@ def render_text(briefing: dict[str, Any]) -> str:
             lines.append(f"  {bk['pending_record_actions']} pending invoice-record action(s).")
         lines.append("  (No invoices written by this briefing.)")
         lines.append("")
+    _append_loader_source_text(lines, bk.get("sources"))
 
     # Pipeline / CRM
     pl = sections.get("pipeline", {})
@@ -377,6 +380,8 @@ def render_markdown(briefing: dict[str, Any]) -> str:
             lines.append(f"- Memory records: {km['total_records']} total")
         lines.append("")
 
+    _append_loader_source_text(lines, _daily_bookkeeper_sources(sections))
+
     lines.append("---")
     lines.append("_No external mutations, approvals, or executions performed._")
 
@@ -429,6 +434,7 @@ _TREND_STYLE = """\
 .trend-delta{color:var(--muted);font-size:.85rem}
 .trend-row .bar{flex:1;min-width:80px;height:8px;background:var(--border);border-radius:4px;overflow:hidden}
 .trend-row .bar-fill{height:100%;background:#2563eb;border-radius:4px}
+.trend-dropped{color:var(--muted);font-size:.85rem;padding:6px 0}
 """
 
 
@@ -527,18 +533,17 @@ def _weekly_badges(summary: dict[str, Any]) -> list[str]:
     return badges
 
 
-def _divergence_badges(sources: Any) -> list[str]:
+def _loader_source_notes(sources: Any) -> list[str]:
+    """Plain-text notes for YAML/store loader disclosure. Empty if nothing to say."""
     if not isinstance(sources, dict):
         return []
-    parts: list[str] = []
+    notes: list[str] = []
     for name, info in sources.items():
         if not isinstance(info, dict):
             continue
         if info.get("fallback") == "store":
             reason = info.get("reason") or "unreadable"
-            parts.append(
-                f"{_esc(name)} YAML unreadable ({_esc(reason)}); using store"
-            )
+            notes.append(f"{name} YAML unreadable ({reason}); using store")
             continue
         if not info.get("divergence"):
             continue
@@ -548,12 +553,36 @@ def _divergence_badges(sources: Any) -> list[str]:
             yaml_n = 0
         if store_n is None:
             store_n = 0
-        parts.append(
-            f"{_esc(name)} YAML {_esc(yaml_n)} / store {_esc(store_n)}"
-        )
-    if not parts:
+        notes.append(f"{name} YAML {yaml_n} / store {store_n}")
+    return notes
+
+
+def _daily_bookkeeper_sources(sections: Any) -> Any:
+    """Daily loader disclosure lives on ``sections.bookkeeper.sources`` only."""
+    if not isinstance(sections, dict):
+        return None
+    bk = sections.get("bookkeeper")
+    if not isinstance(bk, dict):
+        return None
+    return bk.get("sources")
+
+
+def _append_loader_source_text(lines: list[str], sources: Any) -> None:
+    notes = _loader_source_notes(sources)
+    if not notes:
+        return
+    lines.append("Data divergence:")
+    for note in notes:
+        lines.append(f"  {note}")
+    lines.append("")
+
+
+def _divergence_badges(sources: Any) -> list[str]:
+    notes = _loader_source_notes(sources)
+    if not notes:
         return []
-    return [f'<span class="badge badge-medium">Data divergence: {" ; ".join(parts)}</span>']
+    joined = " ; ".join(_esc(note) for note in notes)
+    return [f'<span class="badge badge-medium">Data divergence: {joined}</span>']
 
 
 def _weekly_pipeline_html(pipeline: dict[str, Any]) -> str:
@@ -838,6 +867,7 @@ def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
         badges.append(f'<span class="badge badge-low">{ce_count} classified emails</span>')
     if sw_count:
         badges.append(f'<span class="badge badge-high">{sw_count} warnings</span>')
+    badges.extend(_divergence_badges(_daily_bookkeeper_sources(sections)))
     if not badges:
         badges.append('<span class="badge badge-low">All clear</span>')
 
