@@ -626,7 +626,7 @@ class StateDB:
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA busy_timeout=10000")
-            self.conn.execute("PRAGMA journal_mode=WAL")
+            self._set_wal_with_retry()
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(_SCHEMA_SQL)
@@ -645,6 +645,29 @@ class StateDB:
         # Idempotent: run on every open so a crash between commit and
         # legacy-file rename cannot skip remaining sources.
         self._migrate_legacy()
+
+    def _set_wal_with_retry(self, retries: int = 20, delay: float = 0.05) -> None:
+        """Set journal_mode=WAL with retry.
+
+        ``PRAGMA journal_mode`` is NOT covered by busy_timeout: two
+        connections racing to switch a FRESH database into WAL raise
+        ``OperationalError: database is locked`` immediately. Retrying
+        closes that window; after the first connection wins, the pragma
+        on the second connection is a no-op and succeeds.
+        """
+        last_exc: sqlite3.OperationalError | None = None
+        for attempt in range(max(1, retries)):
+            try:
+                self.conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if "locked" not in msg and "busy" not in msg:
+                    raise
+                last_exc = exc
+                time.sleep(delay)
+                delay = min(delay * 1.5, 0.5)
+        raise last_exc  # type: ignore[misc]
 
     def _ensure_column(self, table: str, column: str, decl: str) -> None:
         cols = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
