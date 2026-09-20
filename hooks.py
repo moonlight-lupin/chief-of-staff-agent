@@ -28,6 +28,12 @@ if str(_SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SHARED_SCRIPTS))
 
 from config_loader import is_default_assistant_name  # noqa: E402
+try:
+    from workflow_hooks import advancement, pointer_strip  # noqa: E402
+except Exception as exc:  # fail-soft: hooks.py must import even if workflow_hooks cannot
+    advancement = None
+    pointer_strip = None
+    print(f"[CoS] Warning: workflow_hooks import failed: {exc}", file=sys.stderr)
 
 
 def _load_company_yaml() -> Optional[dict]:
@@ -848,13 +854,23 @@ def attachment_drive_suggestion(response: str = "", context: dict = None, **kwar
 
 ALL_HOOKS = {
     "pre_llm_call": [
-        ("company_context_primer", company_context_primer),
-        ("deadline_urgency_injection", deadline_urgency_injection),
-        ("wiki_context_injection", wiki_context_injection),
+        pair
+        for pair in (
+            ("company_context_primer", company_context_primer),
+            ("deadline_urgency_injection", deadline_urgency_injection),
+            ("wiki_context_injection", wiki_context_injection),
+            ("workflow_pointer_strip", pointer_strip),
+        )
+        if pair[1] is not None
     ],
     "post_tool_call": [
-        ("yaml_integrity_checker", yaml_integrity_checker),
-        ("self_sign_guard", self_sign_guard),
+        pair
+        for pair in (
+            ("yaml_integrity_checker", yaml_integrity_checker),
+            ("self_sign_guard", self_sign_guard),
+            ("workflow_advancement", advancement),
+        )
+        if pair[1] is not None
     ],
     "on_session_start": [
         ("stale_briefing_detector", stale_briefing_detector),
@@ -871,9 +887,11 @@ ALL_HOOKS = {
 
 
 def register_all_hooks(ctx):
-    """Register all 10 hooks. Called from __init__.py."""
+    """Register every hook in ALL_HOOKS. Called from __init__.py."""
     for event, hooks in ALL_HOOKS.items():
         for name, callback in hooks:
+            if callback is None:
+                continue
             try:
                 ctx.register_hook(event, callback)
             except Exception as e:

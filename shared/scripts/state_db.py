@@ -625,8 +625,8 @@ class StateDB:
         try:
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
-            self.conn.execute("PRAGMA busy_timeout=10000")
-            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute(f"PRAGMA busy_timeout={int(getattr(self, 'busy_timeout_ms', 10000))}")
+            self._set_wal_with_retry()
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(_SCHEMA_SQL)
@@ -645,6 +645,29 @@ class StateDB:
         # Idempotent: run on every open so a crash between commit and
         # legacy-file rename cannot skip remaining sources.
         self._migrate_legacy()
+
+    def _set_wal_with_retry(self, retries: int = 20, delay: float = 0.05) -> None:
+        """Set journal_mode=WAL with retry.
+
+        ``PRAGMA journal_mode`` is NOT covered by busy_timeout: two
+        connections racing to switch a FRESH database into WAL raise
+        ``OperationalError: database is locked`` immediately. Retrying
+        closes that window; after the first connection wins, the pragma
+        on the second connection is a no-op and succeeds.
+        """
+        last_exc: sqlite3.OperationalError | None = None
+        for attempt in range(max(1, retries)):
+            try:
+                self.conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if "locked" not in msg and "busy" not in msg:
+                    raise
+                last_exc = exc
+                time.sleep(delay)
+                delay = min(delay * 1.5, 0.5)
+        raise last_exc  # type: ignore[misc]
 
     def _ensure_column(self, table: str, column: str, decl: str) -> None:
         cols = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
@@ -1512,6 +1535,7 @@ def load_store(
     config: Mapping[str, Any] | None = None,
     *,
     validate: bool = True,
+    open_db: Any = None,
 ) -> dict[str, Any]:
     """Load a KV store from SQLite, creating and returning its empty template if missing.
 
@@ -1519,7 +1543,8 @@ def load_store(
     They are never read as authoritative state after that.
     """
     get_store_path(store_name, config=config)  # validate name
-    with _open_db(config) as db:
+    opener = open_db if open_db is not None else _open_db
+    with opener(config) as db:
         data = db.get_kv(store_name)
         if data is None:
             data = _template(store_name)
@@ -1655,6 +1680,7 @@ def mutate_kv(
     after: Mapping[str, Any] | None = None,
     actor: str = "agent",
     _fill_defaults: bool = False,
+    open_db: Any = None,
 ) -> T:
     """Read-modify-write a KV store under a single BEGIN IMMEDIATE transaction.
 
@@ -1670,7 +1696,8 @@ def mutate_kv(
         after_box["data"] = data
         return result
 
-    with _open_db(config) as db:
+    opener = open_db if open_db is not None else _open_db
+    with opener(config) as db:
         result = db.mutate_kv(store_name, _wrapped, _fill_defaults=_fill_defaults)
         plain_data = _plain(dict(after_box.get("data") or {}))
         if yaml is not None:
@@ -1869,8 +1896,9 @@ def list_pending_actions(
         return db.list_actions(state=state, include_expired=include_expired)
 
 
-def get_pending_action(config: Any, action_id: str) -> dict[str, Any] | None:
-    with _open_db(config) as db:
+def get_pending_action(config: Any, action_id: str, *, open_db: Any = None) -> dict[str, Any] | None:
+    opener = open_db if open_db is not None else _open_db
+    with opener(config) as db:
         return db.get_action(action_id)
 
 

@@ -684,7 +684,7 @@ class TestHookRegistration:
     def test_all_hooks_defined(self):
         from hooks import ALL_HOOKS
         total = sum(len(hooks) for hooks in ALL_HOOKS.values())
-        assert total == 10
+        assert total == 12
 
     def test_all_events_covered(self):
         from hooks import ALL_HOOKS
@@ -696,8 +696,8 @@ class TestHookRegistration:
 
     def test_pre_llm_call_has_two_hooks(self):
         from hooks import ALL_HOOKS
-        assert len(ALL_HOOKS["pre_llm_call"]) == 3
+        assert len(ALL_HOOKS["pre_llm_call"]) == 4
 
     def test_post_tool_call_has_two_hooks(self):
         from hooks import ALL_HOOKS
-        assert len(ALL_HOOKS["post_tool_call"]) == 2
+        assert len(ALL_HOOKS["post_tool_call"]) == 3

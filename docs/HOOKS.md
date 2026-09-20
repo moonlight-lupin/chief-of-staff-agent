@@ -76,6 +76,8 @@ def self_sign_audit(tool_name: str, args: dict, result: str, context: dict) -> s
     return None
 ```
 
+The runtime calls `post_tool_call` as `(tool_name, args, result, context)` — there is no `exit_code` or `config` argument. Command-step success is `exit_code` when a runtime supplies that kwarg; otherwise it is parsed from `result`: a mapping/object with `exit_code`/`returncode` `== 0` or `success: true`, or a JSON string of that shape. File-step hooks load `company.yaml` themselves when `config` is omitted.
+
 ### 4. `on_session_start` — Config Validation
 
 **Purpose:** When a new session starts and the chief-of-staff plugin is active, verify company.yaml exists and is valid. Warn if not configured.

@@ -40,17 +40,53 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PLUGIN_ROOT / "shared" / "config"
 
 
+_FALLBACK_REGISTERED_SKILLS = [
+    "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
+    "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
+    "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
+    "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
+]
+WORKFLOW_SKILL_NAME_MAX = 32
+
+
+def _overlay_skill_names() -> list[str]:
+    """Discover workflow-installed overlay skills: skills.local/*/SKILL.md."""
+    root = PLUGIN_ROOT / "skills.local"
+    if not root.is_dir():
+        return []
+    try:
+        children = sorted(root.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return []
+    names: list[str] = []
+    for child in children:
+        if not child.is_dir():
+            continue
+        name = child.name
+        if not name or name.startswith(".") or len(name) > WORKFLOW_SKILL_NAME_MAX:
+            continue
+        if (child / "SKILL.md").is_file():
+            names.append(name)
+    return names
+
+
+def _with_overlay_skills(skills: list[str]) -> list[str]:
+    """Append overlay skill names not already present (profile order, then sorted overlays)."""
+    merged = list(skills)
+    seen = set(merged)
+    for name in _overlay_skill_names():
+        if name not in seen:
+            merged.append(name)
+            seen.add(name)
+    return merged
+
+
 def _get_registered_skills() -> list[str]:
-    """Read registered skills from plugin.yaml based on active profile."""
+    """Read registered skills from plugin.yaml based on active profile, plus skills.local overlays."""
     import os as _os
     plugin_yaml = PLUGIN_ROOT / "plugin.yaml"
     if not plugin_yaml.exists():
-        return [
-            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
-            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
-            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
-        ]
+        return _with_overlay_skills(list(_FALLBACK_REGISTERED_SKILLS))
     try:
         data = _load_yaml(plugin_yaml) or {}
         # Determine profile: env var > plugin.yaml key > "default"
@@ -59,22 +95,14 @@ def _get_registered_skills() -> list[str]:
         profile_data = profiles.get(profile, {})
         skills = profile_data.get("registered", [])
         if skills:
-            return _filter_configured_skills(skills)
+            return _with_overlay_skills(_filter_configured_skills(skills))
         # Fallback to default profile
         default_data = profiles.get("default", {})
-        return _filter_configured_skills(default_data.get("registered", [
-            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
-            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
-            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
-        ]))
+        return _with_overlay_skills(_filter_configured_skills(default_data.get("registered", [
+            *_FALLBACK_REGISTERED_SKILLS,
+        ])))
     except Exception:
-        return _filter_configured_skills([
-            "daily-briefing", "deadline-tracker", "note-taker", "todo-list",
-            "calendar-manager", "drive-filer", "meeting-prep", "weekly-review",
-            "document-preparer", "pipeline-manager", "bookkeeper", "deep-research",
-            "entity-research", "travel-itinerary", "backup", "email-organisation", "self-sign",
-        ])
+        return _with_overlay_skills(_filter_configured_skills(list(_FALLBACK_REGISTERED_SKILLS)))
 
 
 def _filter_configured_skills(skills: list[str]) -> list[str]:
@@ -1085,6 +1113,42 @@ def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("smoke_test", "warn", "no smoke-test checklist found")
 
 
+def _check_cron_skill_files(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    try:
+        from workflow_cron import check_cron_skill_files
+
+        return check_cron_skill_files(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("cron_skill_files", "warn", f"workflow cron checks unavailable: {exc}")
+
+
+def _check_stale_run(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    try:
+        from workflow_cron import check_stale_run
+
+        return check_stale_run(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("stale_run", "warn", f"workflow cron checks unavailable: {exc}")
+
+
+def _check_unhonored_advancement(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    try:
+        from workflow_cron import check_unhonored_advancement
+
+        return check_unhonored_advancement(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("unhonored_advancement", "warn", f"workflow cron checks unavailable: {exc}")
+
+
+def _check_workflow_crons_doc(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    try:
+        from workflow_cron import check_workflow_crons_doc
+
+        return check_workflow_crons_doc(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("workflow_crons_doc", "warn", f"workflow cron checks unavailable: {exc}")
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_assistant_name,
@@ -1095,6 +1159,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_workspace_provider, _check_composio, _check_m365,
     _check_webhook_config, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,
+    _check_cron_skill_files, _check_stale_run, _check_unhonored_advancement, _check_workflow_crons_doc,
 ]
 
 
