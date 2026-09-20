@@ -56,6 +56,40 @@ def test_all_checks_run(tmp_path):
     assert "audit_runs_dirs" in names
 
 
+def test_cron_check_passes_hermes_home_env(tmp_path, monkeypatch):
+    """_check_cron must resolve the cron store via get_hermes_home().
+
+    Regression: the check shells out to `hermes cron list --all` with the
+    inherited environment. On a nonstandard-HERMES_HOME install
+    (HERMES_HOME=~/hermes while ~/.hermes also exists) the subprocess
+    resolved its jobs store to ~/.hermes and reported phantom
+    `missing references: ['daily-briefing', 'deadline-tracker']` against a
+    healthy install. The env passed to the subprocess must carry the
+    resolved HERMES_HOME and must not carry CHIEF_OF_STAFF_HERMES_HOME
+    (the hermes CLI does not know that override).
+    """
+    captured: dict[str, dict[str, str]] = {}
+
+    class FakeProc:
+        stdout = "CoS Evening Briefing (daily-briefing, deadline-tracker)"
+        stderr = ""
+
+    def fake_run(argv, capture_output, text, timeout, check, env):
+        captured["env"] = env
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("CHIEF_OF_STAFF_HERMES_HOME", str(tmp_path / "override"))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    from doctor_base import _check_cron
+
+    result = _check_cron(False, None, tmp_path / "company.yaml")
+    env = captured["env"]
+    assert env["HERMES_HOME"] == str(tmp_path / "override")
+    assert "CHIEF_OF_STAFF_HERMES_HOME" not in env
+    assert result.status == "pass"
+
+
 def test_json_output_valid(tmp_path):
     config = minimal_config(tmp_path)
     proc = subprocess.run(

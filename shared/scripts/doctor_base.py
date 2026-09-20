@@ -33,7 +33,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for doctor.py") from exc
 
-from config_loader import is_default_assistant_name, load_config, load_dotenv_file
+from config_loader import get_hermes_home, is_default_assistant_name, load_config, load_dotenv_file
 from state_db import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -626,7 +626,17 @@ def _normalise_docuseal_domain(raw: str) -> str:
 
 def _check_cron(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     try:
-        proc = subprocess.run(["hermes", "cron", "list", "--all"], capture_output=True, text=True, timeout=15, check=False)
+        # The cron CLI resolves its jobs store via get_hermes_home(); pass the
+        # same resolution we use everywhere else, or a nonstandard-HERMES_HOME
+        # install (e.g. HERMES_HOME=~/hermes while ~/.hermes also exists)
+        # probes the wrong store and reports phantom missing references.
+        env = dict(os.environ)
+        home = str(get_hermes_home())
+        env.pop("CHIEF_OF_STAFF_HERMES_HOME", None)
+        env["HERMES_HOME"] = home
+        proc = subprocess.run(
+            ["hermes", "cron", "list", "--all"], capture_output=True, text=True, timeout=15, check=False, env=env
+        )
     except Exception as exc:
         return CheckResult("cron_jobs", "warn", f"cannot inspect cron jobs: {exc}")
     out = proc.stdout + proc.stderr
