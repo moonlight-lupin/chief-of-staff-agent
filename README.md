@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.5.7
+> **Status:** v0.6.0
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -81,10 +81,11 @@ The daily loop is deliberately **read-only** — it reports and recommends, it n
 | **Bookkeeping** | Invoice candidates from email, field validation, duplicate detection, AR/AP tracking, P&L snapshots |
 | **Documents & signing** | Fills templates, files to Drive/OneDrive, self-signs locally, or sends for e-signature (self-hosted DocuSeal) |
 | **Knowledge** | Structured memory + a linked Markdown wiki, with autonomous low-risk curation |
+| **Workflows** | Capture a repeating business process as declarative YAML (guided interview), then let the orchestrator run it: cron-fired or manual starts, per-step completion signals, approval gates through the review queue, and live run status via `workflows list`/`runs`/`advance` |
 | **Research** | Cited deep research and entity due-diligence dossiers |
 | **Reliability** | Readiness verdicts, self-diagnosis, redacted support bundles, backups, audit logs |
 
-Nineteen skills across command centre, planning, meetings and email, documents, commercial operations, knowledge, travel, and resilience — eighteen register on a default install, with `esign-connector` appearing once DocuSeal is configured. Start with five (briefing, review queue, pipeline, bookkeeper, notes) and grow from there.
+Twenty skills across command centre, planning, meetings and email, documents, commercial operations, knowledge, workflows, travel, and resilience — nineteen register on a default install, with `esign-connector` appearing once DocuSeal is configured. Start with five (briefing, review queue, pipeline, bookkeeper, notes) and grow from there.
 
 ---
 
@@ -120,6 +121,24 @@ Chief of Staff Readiness
 ```
 
 Full provider walkthroughs (Google service account, Composio, Microsoft 365, DocuSeal e-sign): [`docs/SETUP.md`](docs/SETUP.md).
+
+---
+
+## 🔁 Workflow Orchestrator
+
+Capture a repeating business process once as declarative YAML, and the orchestrator runs it end-to-end — with the same approval gates as everything else.
+
+```bash
+.venv/bin/python shared/scripts/chief_of_staff.py workflows list          # project workflow YAMLs
+.venv/bin/python shared/scripts/chief_of_staff.py workflows install <name>  # validate + register + optional cron
+.venv/bin/python shared/scripts/chief_of_staff.py workflows runs --summary  # live run status
+.venv/bin/python shared/scripts/chief_of_staff.py workflows advance --run-id <id>  # complete the current step
+```
+
+- **The interview, not code:** ask the agent (via the `workflow-architect` skill) to capture a process; it walks a structured interview and writes `workflows/<name>.yaml` after your confirmation.
+- **Per-step completion signals:** command pattern match, project file, review-queue approval, or manual advance.
+- **Approval-gated steps:** a `review_queue` step proposes an action; the run pauses until you approve and execute in the review queue.
+- **Runs are observable:** pointer strips in briefings, structured logs, and `logs diagnose` for failed runs.
 
 ---
 

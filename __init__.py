@@ -33,8 +33,46 @@ def _get_skill_profile() -> str:
     return "default"
 
 
+def _overlay_skill_names() -> list[str]:
+    """Discover workflow-installed overlay skills: skills.local/*/SKILL.md.
+
+    Mirrors doctor_base._overlay_skill_names: a workflow installed via
+    ``workflows install`` writes skills.local/<name>/SKILL.md and must become
+    a registered (invocable) skill without hand-editing plugin.yaml.
+    """
+    root = PLUGIN_ROOT / "skills.local"
+    if not root.is_dir():
+        return []
+    try:
+        children = sorted(root.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return []
+    names: list[str] = []
+    for child in children:
+        if not child.is_dir():
+            continue
+        name = child.name
+        if not name or name.startswith(".") or len(name) > 32:
+            continue
+        if (child / "SKILL.md").is_file():
+            names.append(name)
+    return names
+
+
+def _with_overlay_skills(skills: list[str]) -> list[str]:
+    """Append overlay skill names not already present (profile order, then sorted overlays)."""
+    merged = list(skills)
+    seen = set(merged)
+    for name in _overlay_skill_names():
+        if name not in seen:
+            merged.append(name)
+            seen.add(name)
+    return merged
+
+
 def _get_registered_skills() -> list[str]:
-    """Read the skill list for the active profile from plugin.yaml."""
+    """Read the skill list for the active profile from plugin.yaml, then append
+    workflow-installed skills.local/ overlay skills."""
     plugin_yaml = PLUGIN_ROOT / "plugin.yaml"
     profile_name = _get_skill_profile()
 
@@ -46,12 +84,12 @@ def _get_registered_skills() -> list[str]:
             profile = profiles.get(profile_name, {})
             skills = profile.get("registered", [])
             if skills:
-                return _filter_configured_skills(skills)
+                return _with_overlay_skills(_filter_configured_skills(skills))
         except Exception:
             pass
 
     # Fallback: default skills (mirrors plugin.yaml skill_profiles.default).
-    return _filter_configured_skills([
+    return _with_overlay_skills(_filter_configured_skills([
         "daily-briefing", "deadline-tracker", "note-taker",
         "todo-list", "calendar-manager", "drive-filer",
         "meeting-prep", "weekly-review", "document-preparer",
@@ -59,7 +97,7 @@ def _get_registered_skills() -> list[str]:
         "entity-research", "travel-itinerary", "backup",
         "email-organisation", "self-sign", "esign-connector",
         "news-monitoring",
-    ])
+    ]))
 
 
 def _filter_configured_skills(skills: list[str]) -> list[str]:

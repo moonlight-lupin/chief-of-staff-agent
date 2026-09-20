@@ -1,5 +1,5 @@
 name: chief-of-staff
-version: 0.5.7
+version: 0.6.0
 author: moonlight-lupin
 license: Apache-2.0
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, e-signature, and backups."
@@ -33,6 +33,7 @@ skill_profiles:
       - self-sign
       - esign-connector
       - news-monitoring
+      - workflow-architect
   enterprise:
     registered:
       - daily-briefing
@@ -54,3 +55,4 @@ skill_profiles:
       - self-sign
       - esign-connector
       - news-monitoring
+      - workflow-architect

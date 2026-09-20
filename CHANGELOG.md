@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.6.0 — Workflow Orchestrator
+
+Capture a repeating business process as declarative YAML and run it under the
+same approval gates as every other capability. This is the feature release for
+the Workflow Orchestrator spec (2026-09-20): six build batches, a live smoke
+run, and a three-round review chain (r1 4 MAJOR + 1 minor → r2 cross-thread
+race + fractional exit codes → r3 SHIP).
+
+### Changes
+
+- **`workflow-architect` skill (US-1).** A structured interview captures a
+  repeating business process as `workflows/<name>.yaml`. Nothing is written
+  until the operator confirms the draft; invalid drafts are never written;
+  regeneration is deterministic (identical YAML → byte-identical file).
+- **`workflows` CLI (US-2/US-3/US-6/US-11).** `list`, `runs`, `start`,
+  `advance`, `sync`, `resume`, `abort`, `install`, `uninstall`,
+  `bind-action`, `refresh-facts`, `generate-skill`. Install validates the
+  YAML, writes a `skills.local/<name>/SKILL.md` overlay (never touching the
+  bundled `skills/` tree), refuses to shadow a bundled skill or an
+  operator-edited overlay, and — for scheduled workflows — proposes a
+  `cron.create` review-queue action.
+- **Runtime (US-2).** Cron-fired runs advance via two nonblocking hooks
+  (post-tool-call completion matching with strict success evidence: exact
+  integer exit code 0 or boolean `success: True`; pointer strips in the
+  daily briefing surface active runs). Hook database access uses a scoped
+  connection factory with a short busy timeout — no process-global patching,
+  no cross-thread state leak, no blocking on a locked database.
+- **Approval-gated steps.** A `review_queue` step proposes an action and the
+  run pauses until the operator approves and executes in the review queue;
+  unapproved cron registration is refused.
+- **Optional steps degrade, never strand.** A skipped optional step is
+  recorded and the run continues; the pointer strip reports DEGRADED, and
+  every advancement path (hook, manual advance, review-queue observation)
+  drives one shared helper.
+- **Registration completeness (post-review fix).** The plugin entry point's
+  skill registration now includes the `skills.local/` overlay discovery pass
+  (matching doctor), so installed workflow skills are invocable via normal
+  skill loading, and `workflow-architect` joins both plugin.yaml profiles.
+- **New modules.** `workflows.py` (pure validator/generator),
+  `workflow_runs.py`, `workflow_hooks.py`, `workflow_install.py`,
+  `workflows_cli.py` (parser attach), `readiness_render.py` (extracted
+  render layer); `chief_of_staff.py` stays under the 2500-line contract.
+
+### Evidence
+
+- 2499 tests passed (suite grew by 3: overlay-discovery contract tests),
+  ruff clean, CI green on Python 3.11 + 3.12.
+- Live smoke run on a real install: invoice-nudge workflow driven end-to-end,
+  stopping at the real review-queue approval gate.
+
 ## v0.5.7 — daily + weekly briefing trends, weekly HTML report
 
 Adds operational trend visualization to the daily HTML briefing (pure-CSS bars,

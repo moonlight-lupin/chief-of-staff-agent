@@ -6,7 +6,7 @@ The plugin is designed for a single company/operator per Hermes instance. It use
 
 ## Features
 
-The plugin registers 19 Hermes skills:
+The plugin registers 20 Hermes skills:
 
 1. **daily-briefing** — daily command-center briefing from inbox, calendar, deadlines, pipeline, to-dos, and finance.
 2. **deadline-tracker** — statutory and custom deadline tracking from company config and jurisdiction packs.
@@ -27,6 +27,7 @@ The plugin registers 19 Hermes skills:
 17. **email-organisation** — inspect mail labels/categories, propose a label policy, and apply approved organisation through the review queue.
 18. **esign-connector** — send documents for third-party e-signature via self-hosted DocuSeal.
 19. **news-monitoring** — recurring topic/news monitoring with web search, multi-language sources, and digest delivery via cron.
+20. **workflow-architect** — capture a repeating business process as a declarative workflow YAML draft via a structured interview, then run it with the built-in `workflows` orchestrator CLI.
 
 ## Prerequisites
 
