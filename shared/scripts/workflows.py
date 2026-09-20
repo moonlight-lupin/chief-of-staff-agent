@@ -17,6 +17,7 @@ NAME_PATTERN = re.compile(r"\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\Z")
 
 WORKFLOW_NAME_MAX = 32
 DESCRIPTION_MAX = 200
+DELIVERY_KEY_MAX = 40
 DELIVERY_VALUE_MAX = 200
 STEP_NAME_MAX = 24
 STEP_ID_MAX = 24
@@ -130,7 +131,11 @@ def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
                 raise WorkflowValidationError(f"{field}: must be a mapping")
             normalized[field] = _canonical_copy(raw_block, field)
             for key in normalized[field]:
-                _require_code_span_str(key, f"{field}: key")
+                checked_key = _require_code_span_str(key, f"{field}: key")
+                if len(checked_key) > DELIVERY_KEY_MAX:
+                    raise WorkflowValidationError(
+                        f"{field}: key must be at most {DELIVERY_KEY_MAX} characters"
+                    )
                 _require_delivery_value(normalized[field][key], f"{field}.{key}")
     return _ordered(normalized, TOP_LEVEL_KEY_ORDER)
 
@@ -347,8 +352,14 @@ def _render_delivery_section(workflow: Mapping[str, Any]) -> list[str]:
         for key in sorted(k for k in block if k not in preferred):
             rendered.append(key)
         for key in rendered:
-            label = _KNOWN_DELIVERY_LABELS.get(key, key)
-            lines.append(f"{label}: {block[key]}")
+            label = _KNOWN_DELIVERY_LABELS.get(key)
+            shown_label = label if label is not None else f"`{key}`"
+            value = block[key]
+            if isinstance(value, str):
+                shown = f"`{value}`"
+            else:
+                shown = str(value)
+            lines.append(f"{shown_label}: {shown}")
     lines.append("")
     return lines
 
@@ -401,7 +412,10 @@ def _require_project_relative_path(path: str, field: str) -> str:
 
 
 def _has_disallowed_control_chars(text: str) -> bool:
-    return any(ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F for ch in text)
+    return any(
+        ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F or ord(ch) in (0x2028, 0x2029)
+        for ch in text
+    )
 
 
 def _optional_bool(value: Any, field: str) -> bool:
