@@ -668,7 +668,19 @@ def test_round_trip_three_step_approval_gate_scheduled(temp_project, monkeypatch
     arch.write_workflow(draft, config, confirm=True)
     assert _yaml_path(project, "arch-close").is_file()
     result = install_workflow("arch-close", config=config, session_id="sess-1", now=FROZEN)
-    assert result["cron_installed"] is True
+    # US-9 (round-A C2): first scheduled install proposes a cron.create
+    # review-queue action; the cron registers only after approve + execute.
+    pending_id = result.get("pending_action_id")
+    assert result["cron_installed"] is False
+    assert pending_id
+    from workflow_cron import execute_cron_create
+    from state_db import approve_pending_action
+    approve_pending_action(config, pending_id, "operator", "smoke round-trip")
+    exec_result = execute_cron_create(config, pending_id, now=FROZEN)
+    assert exec_result.get("schedule_id")
+    # Post-approval reinstall now writes the real binding.
+    result2 = install_workflow("arch-close", config=config, session_id="sess-1", now=FROZEN)
+    assert result2["cron_installed"] is True
     skill = _overlay_skill("arch-close")
     assert skill.is_file()
     assert skill.read_text(encoding="utf-8") == markdown
