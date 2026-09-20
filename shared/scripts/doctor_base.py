@@ -1085,6 +1085,30 @@ def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("smoke_test", "warn", "no smoke-test checklist found")
 
 
+def _check_cron_skill_files(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    from workflow_cron import check_cron_skill_files
+
+    return check_cron_skill_files(fix, data, config_path)
+
+
+def _check_stale_run(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    from workflow_cron import check_stale_run
+
+    return check_stale_run(fix, data, config_path)
+
+
+def _check_unhonored_advancement(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    from workflow_cron import check_unhonored_advancement
+
+    return check_unhonored_advancement(fix, data, config_path)
+
+
+def _check_workflow_crons_doc(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    from workflow_cron import check_workflow_crons_doc
+
+    return check_workflow_crons_doc(fix, data, config_path)
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_assistant_name,
@@ -1095,6 +1119,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_workspace_provider, _check_composio, _check_m365,
     _check_webhook_config, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,
+    _check_cron_skill_files, _check_stale_run, _check_unhonored_advancement, _check_workflow_crons_doc,
 ]
 
 
