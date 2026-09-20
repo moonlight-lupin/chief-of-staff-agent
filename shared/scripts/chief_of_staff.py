@@ -1594,113 +1594,14 @@ def build_readiness_payload(config: Any, config_path: str | None) -> dict[str, A
     return payload
 
 
-def _emit_readiness_row_failures(rows: Sequence[Mapping[str, Any]]) -> None:
-    """Emit a ``readiness_row_failed`` error event for each FAIL row (no-op when
-    runtime_log is absent or no run is active)."""
-    if runtime_log is None:
-        return
-    sanitize_detail = getattr(
-        runtime_log,
-        "sanitize_provider_error_detail",
-        lambda value: str(value or "").replace("\n", " ").replace("\r", " ")[:240],
-    )
-    for row in rows:
-        if not isinstance(row, Mapping) or str(row.get("status")) != _R_FAIL:
-            continue
-        try:
-            runtime_log.log_event(
-                "readiness_row_failed",
-                level="error",
-                component="readiness",
-                row=str(row.get("key", "")),
-                message=sanitize_detail(row.get("detail", "") or ""),
-            )
-        except Exception as exc:
-            print(
-                f"readiness_row_failed emission error for "
-                f"{row.get('key', '')!r}: {exc}",
-                file=sys.stderr,
-            )
-
-
-def render_readiness_summary(payload: Mapping[str, Any]) -> str:
-    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
-    verdicts = payload.get("verdicts") if isinstance(payload.get("verdicts"), Mapping) else {}
-    lines: list[str] = ["Chief of Staff Readiness"]
-    label_w = 26
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        label = str(row.get("label", ""))
-        status = str(row.get("status", ""))
-        detail = str(row.get("detail", ""))
-        line = f"  {label.ljust(label_w)}{status}"
-        # Surface the reason (and pointers) for anything not fully passing.
-        if detail and status != _R_PASS:
-            line += f"  — {detail}"
-        lines.append(line)
-    lines.append(
-        f"  Ready for daily read-only operation: {verdicts.get('read_only_ready', 'NO')}"
-    )
-    lines.append(
-        f"  Ready for approved execution: {verdicts.get('approved_execution_ready', 'NO')}"
-    )
-    lines.extend(_readiness_diagnose_pointer(payload, prefix="  "))
-    return "\n".join(lines)
-
-
-def _readiness_has_fail(payload: Mapping[str, Any]) -> bool:
-    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
-    return any(isinstance(r, Mapping) and str(r.get("status")) == _R_FAIL for r in rows)
-
-
-def _readiness_diagnose_pointer(payload: Mapping[str, Any], prefix: str = "") -> list[str]:
-    """When any readiness row FAILed, point the operator at logs diagnose."""
-    if not _readiness_has_fail(payload):
-        return []
-    run_id = payload.get("run_id")
-    if not run_id:
-        return []
-    return [
-        f"{prefix}Run ID: {run_id}",
-        f"{prefix}Diagnose:",
-        f"{prefix}  python shared/scripts/chief_of_staff.py logs diagnose --run-id {run_id}",
-    ]
-
-
-def render_readiness_markdown(payload: Mapping[str, Any]) -> str:
-    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
-    verdicts = payload.get("verdicts") if isinstance(payload.get("verdicts"), Mapping) else {}
-    lines: list[str] = [
-        "# Chief of Staff Readiness",
-        "",
-        "| Check | Status | Detail |",
-        "| --- | --- | --- |",
-    ]
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        label = str(row.get("label", ""))
-        status = str(row.get("status", ""))
-        detail = str(row.get("detail", "")).replace("|", "\\|")
-        lines.append(f"| {label} | {status} | {detail} |")
-    lines.append("")
-    lines.append(
-        f"**Ready for daily read-only operation:** {verdicts.get('read_only_ready', 'NO')}"
-    )
-    lines.append(
-        f"**Ready for approved execution:** {verdicts.get('approved_execution_ready', 'NO')}"
-    )
-    pointer = _readiness_diagnose_pointer(payload)
-    if pointer:
-        lines.append("")
-        lines.append(f"**Run ID:** {payload.get('run_id')}")
-        lines.append("**Diagnose:**")
-        lines.append("")
-        lines.append(
-            f"    python shared/scripts/chief_of_staff.py logs diagnose --run-id {payload.get('run_id')}"
-        )
-    return "\n".join(lines)
+# Readiness rendering lives in readiness_render (extracted, god-file contract);
+# re-exported here so existing imports and tests keep working.
+from readiness_render import (  # noqa: F401 — re-export
+    readiness_diagnose_pointer as _readiness_diagnose_pointer,
+    render_readiness_markdown,
+    render_readiness_summary,
+)
+from readiness_render import _emit_readiness_row_failures  # noqa: F401 — re-export
 
 
 def cmd_readiness(args: argparse.Namespace) -> int:
@@ -2411,38 +2312,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     l_bundle.add_argument("--json", action="store_true")
     l_bundle.set_defaults(func=cmd_logs_bundle)
-    try:
-        from workflow_install import add_workflows_parser
-    except Exception as exc:
-        print(
-            f"Warning: workflow_install unavailable ({type(exc).__name__}: {exc})",
-            file=sys.stderr,
-        )
-    else:
-        try:
-            add_workflows_parser(sub)
-        except Exception as exc:
-            _drop_subparser(sub, "workflows")
-            print(
-                f"Warning: workflows command registration failed ({type(exc).__name__}: {exc})",
-                file=sys.stderr,
-            )
+    from workflows_cli import attach_workflows_command
+
+    attach_workflows_command(sub)
     return parser
-
-
-def _drop_subparser(sub: argparse._SubParsersAction, name: str) -> None:
-    """Remove a partially registered nested command so a failed attach cannot linger."""
-    name_map = getattr(sub, "_name_parser_map", None)
-    if isinstance(name_map, dict):
-        name_map.pop(name, None)
-    choices = getattr(sub, "choices", None)
-    if isinstance(choices, dict):
-        choices.pop(name, None)
-    actions = getattr(sub, "_choices_actions", None)
-    if isinstance(actions, list):
-        sub._choices_actions = [
-            action for action in actions if getattr(action, "dest", None) != name
-        ]
 
 
 def _run_had_warnings() -> bool:
