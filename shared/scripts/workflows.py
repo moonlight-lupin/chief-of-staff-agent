@@ -17,6 +17,7 @@ NAME_PATTERN = re.compile(r"\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\Z")
 
 WORKFLOW_NAME_MAX = 32
 DESCRIPTION_MAX = 200
+DELIVERY_VALUE_MAX = 200
 STEP_NAME_MAX = 24
 STEP_ID_MAX = 24
 STEPS_MAX = 20
@@ -129,6 +130,7 @@ def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
                 raise WorkflowValidationError(f"{field}: must be a mapping")
             normalized[field] = _canonical_copy(raw_block, field)
             for key in normalized[field]:
+                _require_code_span_str(key, f"{field}: key")
                 _require_delivery_value(normalized[field][key], f"{field}.{key}")
     return _ordered(normalized, TOP_LEVEL_KEY_ORDER)
 
@@ -437,7 +439,11 @@ def _require_delivery_value(value: Any, field: str) -> None:
         return
     if isinstance(value, (int, float)):
         return
-    _require_code_span_str(value, f"{field}")
+    text = _require_code_span_str(value, f"{field}")
+    if len(text) > DELIVERY_VALUE_MAX:
+        raise WorkflowValidationError(
+            f"{field}: must be at most {DELIVERY_VALUE_MAX} characters"
+        )
 
 
 def _ordered(data: Mapping[str, Any], key_order: tuple[str, ...]) -> dict[str, Any]:
