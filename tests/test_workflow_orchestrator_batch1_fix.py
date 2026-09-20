@@ -184,8 +184,8 @@ def test_fix_m3_review_queue_defaults_approval_true():
     assert normalized["steps"][0]["requires_approval"] is True
 
 
-def test_fix_m3_review_queue_explicit_false_still_allowed():
-    """M3: an author can still opt out explicitly with requires_approval: false."""
+def test_fix_m3_review_queue_explicit_false_rejected():
+    """M3: a review_queue step cannot opt out of approval — gate-bypass refused."""
     data = _base(
         steps=[
             {
@@ -197,8 +197,8 @@ def test_fix_m3_review_queue_explicit_false_still_allowed():
             }
         ]
     )
-    normalized = validate_workflow(data)
-    assert normalized["steps"][0]["requires_approval"] is False
+    with pytest.raises(WorkflowValidationError):
+        validate_workflow(data)
 
 
 # ── M4: whitespace-only strings refused; values stripped ─────────────────────

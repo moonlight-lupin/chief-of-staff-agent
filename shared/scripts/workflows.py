@@ -16,6 +16,7 @@ from typing import Any, Mapping
 NAME_PATTERN = re.compile(r"\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\Z")
 
 WORKFLOW_NAME_MAX = 32
+DESCRIPTION_MAX = 200
 STEP_NAME_MAX = 24
 STEP_ID_MAX = 24
 STEPS_MAX = 20
@@ -96,7 +97,9 @@ def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
             raise WorkflowValidationError(f"{field}: required")
 
     name = _require_bounded_kebab(data.get("name"), "name", WORKFLOW_NAME_MAX)
-    description = _require_non_empty_str(data.get("description"), "description")
+    description = _require_bounded_str(
+        data.get("description"), "description", DESCRIPTION_MAX
+    )
     steps_in = data.get("steps")
     if not isinstance(steps_in, list):
         raise WorkflowValidationError("steps: must be a non-empty list")
@@ -125,6 +128,8 @@ def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
             if not isinstance(raw_block, Mapping):
                 raise WorkflowValidationError(f"{field}: must be a mapping")
             normalized[field] = _canonical_copy(raw_block, field)
+            for key in normalized[field]:
+                _require_delivery_value(normalized[field][key], f"{field}.{key}")
     return _ordered(normalized, TOP_LEVEL_KEY_ORDER)
 
 
@@ -216,6 +221,10 @@ def _normalize_step(raw_step: Any, index: int, seen_ids: set[str]) -> dict[str, 
     requires_approval = _optional_bool(
         raw_step.get("requires_approval", default_approval), f"{prefix}.requires_approval"
     )
+    if signal_key == "review_queue" and not requires_approval:
+        raise WorkflowValidationError(
+            f"{prefix}.requires_approval: a review_queue step cannot opt out of approval"
+        )
     if requires_approval and signal_key != "review_queue":
         raise WorkflowValidationError(
             f"{prefix}.requires_approval: requires a review_queue signal"
@@ -415,6 +424,20 @@ def _canonical_copy(value: Any, field: str) -> Any:
     if isinstance(value, list):
         return [_canonical_copy(item, field) for item in value]
     return value
+
+
+def _require_delivery_value(value: Any, field: str) -> None:
+    """Delivery-block values must be safe scalars (bool/int/float/str).
+
+    Lists and nested mappings are refused: their Python-repr rendering into
+    the generated SKILL.md was the NEW-2 finding. Scalar strings must pass
+    the single-line, control-character-free, backtick-free gate (NEW-1).
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        return
+    _require_code_span_str(value, f"{field}")
 
 
 def _ordered(data: Mapping[str, Any], key_order: tuple[str, ...]) -> dict[str, Any]:
