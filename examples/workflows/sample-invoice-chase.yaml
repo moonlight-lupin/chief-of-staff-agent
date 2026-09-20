@@ -1,0 +1,38 @@
+name: sample-invoice-chase
+description: >-
+  Chase overdue invoices from listing through an approved reminder send
+  and a closing log entry.
+triggers:
+  message:
+    - run sample-invoice-chase
+    - chase invoices
+steps:
+  - id: list-overdue
+    name: List overdue invoices
+    description: Pull sent invoices that are past due and still unpaid.
+    command:
+      pattern: show overdue invoices
+  - id: draft-reminder
+    name: Draft reminder
+    description: Draft a payment-reminder note for each overdue invoice.
+    file:
+      path: out/invoice-reminders.md
+  - id: approve-send
+    name: Approve reminders
+    description: Operator approves the reminder emails before they go out.
+    review_queue:
+      action_type: gmail.send
+    requires_approval: true
+  - id: send-reminder
+    name: Send reminders
+    description: Send the approved reminder emails to overdue counterparties.
+    command:
+      pattern: send invoice reminders
+  - id: log-chase
+    name: Log the chase
+    description: Record that reminders went out; skip if the log store is unavailable.
+    manual: true
+    required: false
+delivery:
+  channel: briefing
+  target: operator
