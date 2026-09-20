@@ -26,6 +26,8 @@ from state_db import (  # noqa: E402
     get_pending_action,
     list_pending_actions,
     load_store,
+    mark_executed,
+    mark_executing,
     mutate_kv,
 )
 from workflow_runs import (  # noqa: E402
@@ -38,10 +40,13 @@ from workflows import validate_workflow  # noqa: E402
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STORE_CRONS = "workflow_crons"
+CRON_CREATE_TYPE = "cron.create"
 DEFAULT_STALE_RUN_HOURS = 24
 OCCURRENCES_BOUND = 20
 NO_PROGRESS_THRESHOLD = 3
 SCHEDULE_ID_MAX = 32
+HOOK_ACTOR = "hook:workflow-orchestrator"
+OPERATOR_ACTOR = "operator"
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]")
 _CRON_FIELD_BOUNDS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
 
@@ -95,8 +100,36 @@ def _bindings_map(data: dict[str, Any]) -> dict[str, Any]:
     return bindings
 
 
-def _mutate(config: Mapping[str, Any] | None, mutate_fn: Any) -> Any:
-    return mutate_kv(STORE_CRONS, mutate_fn, config=config)
+def _mutate(
+    config: Mapping[str, Any] | None,
+    mutate_fn: Any,
+    *,
+    action: str,
+    actor: str = OPERATOR_ACTOR,
+    workflow_run_id: str | None = None,
+) -> Any:
+    audit_after: dict[str, Any] = {}
+
+    def _wrapped(data: dict[str, Any]) -> Any:
+        result = mutate_fn(data)
+        audit_after.clear()
+        if isinstance(data, dict):
+            audit_after.update(copy.deepcopy(data))
+        rid = workflow_run_id
+        if not rid and isinstance(result, Mapping):
+            rid = result.get("workflow_run_id") or result.get("run_id")
+        if rid:
+            audit_after["workflow_run_id"] = rid
+        return result
+
+    return mutate_kv(
+        STORE_CRONS,
+        _wrapped,
+        config=config,
+        action=action,
+        actor=actor,
+        after=audit_after,
+    )
 
 
 def _load_doc(config: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -157,6 +190,128 @@ def _deliver_target(config: Mapping[str, Any] | None) -> str:
 
 def _hermes_cron(cmd: list[str]) -> None:
     subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+
+
+def _schedule_timezone(workflow: Mapping[str, Any]) -> str | None:
+    triggers = workflow.get("triggers")
+    if not isinstance(triggers, Mapping):
+        return None
+    schedule = triggers.get("schedule")
+    if not isinstance(schedule, Mapping):
+        return None
+    timezone_name = schedule.get("timezone")
+    if timezone_name is None or timezone_name == "":
+        return None
+    return str(timezone_name)
+
+
+def _cron_create_payload_name(action: Mapping[str, Any], name: str) -> bool:
+    payload = action.get("payload")
+    if not isinstance(payload, Mapping):
+        payload = {}
+    target = str(action.get("target") or "").strip()
+    payload_name = str(payload.get("workflow_name") or "").strip()
+    return target == name or payload_name == name
+
+
+def find_cron_create_action(
+    name: str,
+    *,
+    config: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Latest cron.create action for ``name``, preferring an open (non-terminal) one."""
+    try:
+        pending = list_pending_actions(config, include_expired=True) or []
+    except Exception:
+        pending = []
+    open_states = {"requested", "approved", "executing"}
+    open_match: dict[str, Any] | None = None
+    any_match: dict[str, Any] | None = None
+    for action in pending:
+        if not isinstance(action, dict) or action.get("type") != CRON_CREATE_TYPE:
+            continue
+        if not _cron_create_payload_name(action, name):
+            continue
+        any_match = action
+        if action.get("state") in open_states:
+            open_match = action
+    return open_match or any_match
+
+
+def propose_cron_create(
+    name: str,
+    workflow: Mapping[str, Any],
+    config: Mapping[str, Any] | None,
+    *,
+    session_id: str,
+) -> dict[str, Any]:
+    """Create (or reuse) a pending cron.create action. Does not shell out."""
+    existing = find_cron_create_action(name, config=config)
+    if existing is not None and existing.get("state") in {"requested", "approved", "executing"}:
+        return existing
+    cron = _cron_expr(workflow)
+    timezone_name = _schedule_timezone(workflow)
+    created = create_pending_action(
+        config=config,
+        action_type=CRON_CREATE_TYPE,
+        provider="local",
+        target=name,
+        payload={
+            "workflow_name": name,
+            "cron": cron,
+            "timezone": timezone_name,
+            "session_id": session_id,
+            "workflow": copy.deepcopy(dict(workflow)),
+        },
+        summary=f"cron.create: schedule workflow {name} ({cron})",
+    )
+    if not isinstance(created, dict):
+        raise WorkflowRunError("failed to propose cron.create action")
+    return created
+
+
+def execute_cron_create(
+    config: Mapping[str, Any] | None,
+    action_id: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Claim (if still approved) then register the hermes cron job and write the binding."""
+    action_id = str(action_id or "").strip()
+    if not action_id:
+        raise WorkflowRunError("action_id: must be a non-empty string")
+    action = get_pending_action(config, action_id)
+    if not isinstance(action, dict) or action.get("type") != CRON_CREATE_TYPE:
+        raise WorkflowRunError(f"cron.create action not found: {action_id}")
+    state = str(action.get("state") or "")
+    if state == "approved":
+        claimed = mark_executing(config, action_id)
+        if not isinstance(claimed, dict):
+            raise WorkflowRunError(f"could not claim cron.create action {action_id}")
+        action = claimed
+        state = str(action.get("state") or "")
+    if state != "executing":
+        raise WorkflowRunError(
+            f"refusing to register cron until cron.create is approved and claimed "
+            f"(state={state})"
+        )
+    payload = action.get("payload")
+    if not isinstance(payload, Mapping):
+        payload = {}
+    name = str(payload.get("workflow_name") or action.get("target") or "").strip()
+    workflow = payload.get("workflow")
+    if not name or not isinstance(workflow, Mapping):
+        raise WorkflowRunError("cron.create payload missing workflow_name/workflow")
+    session_id = str(payload.get("session_id") or "operator").strip() or "operator"
+    binding = install_workflow_cron(
+        name,
+        workflow,
+        config,
+        now=now,
+        session_id=session_id,
+    )
+    mark_executed(config, action_id, {"success": True, "schedule_id": binding.get("schedule_id")})
+    return binding
 
 
 def _field_matches(spec: str, value: int, minimum: int, maximum: int) -> bool:
@@ -318,7 +473,13 @@ def install_workflow_cron(
     now: datetime | None = None,
     session_id: str,
 ) -> dict[str, Any]:
-    """Validate, register via ``hermes cron create``, and upsert the kv binding."""
+    """Validate, register via ``hermes cron create``, and upsert the kv binding.
+
+    This is the post-claim executor. ``workflows install`` proposes a
+    ``cron.create`` review-queue action and refuses to call this until that
+    action is approved and claimed. Direct callers (tests of the hermes-cron
+    primitive, idempotent reinstall of an existing binding) still register.
+    """
     if not isinstance(name, str) or not name.strip():
         raise WorkflowRunError("workflow_name: must be a non-empty string")
     name = name.strip()
@@ -383,7 +544,7 @@ def install_workflow_cron(
             bindings[name] = record
         return _copy_binding(record)
 
-    return _mutate(config, _upsert)
+    return _mutate(config, _upsert, action="workflow.cron.install", actor=OPERATOR_ACTOR)
 
 
 def uninstall_workflow_cron(name: str, config: Mapping[str, Any] | None) -> None:
@@ -402,7 +563,7 @@ def uninstall_workflow_cron(name: str, config: Mapping[str, Any] | None) -> None
             raise WorkflowRunError(f"no cron binding installed for workflow {name}")
         bindings.pop(name, None)
 
-    _mutate(config, _remove)
+    _mutate(config, _remove, action="workflow.cron.uninstall", actor=OPERATOR_ACTOR)
     _hermes_cron(["hermes", "cron", "remove", schedule_id])
 
 
@@ -474,7 +635,13 @@ def fire_occurrence(
         occurrence["no_progress_count"] = record["no_progress_count"]
         return occurrence
 
-    fired = _mutate(config, _tick)
+    fired = _mutate(
+        config,
+        _tick,
+        action="workflow.occurrence",
+        actor=HOOK_ACTOR,
+        workflow_run_id=str((active or {}).get("workflow_run_id") or "") or None,
+    )
     if not fired:
         return None
 
@@ -490,6 +657,7 @@ def fire_occurrence(
                     workflow=snapshot,
                     config=config,
                     now=moment,
+                    actor=HOOK_ACTOR,
                 )
                 fired["run_id"] = run.get("workflow_run_id")
             except WorkflowRunError:
@@ -659,60 +827,3 @@ def check_workflow_crons_doc(
     if "bindings" in doc and not isinstance(doc.get("bindings"), dict):
         return CheckResult("workflow_crons_doc", "fail", "workflow_crons doc corrupt: bindings is not a mapping")
     return CheckResult("workflow_crons_doc", "pass", "workflow_crons doc ok")
-
-
-def _patch_test_install_cron_kw() -> None:
-    """Accept ``cron=`` on the batch-4 ``_install`` helper without editing tests.
-
-    The RED helper calls ``_install(..., cron=...)`` but the helper signature
-    omitted that kwarg. Forward it to ``_validated`` so the fire-handler tests
-    can exercise the intended schedule.
-    """
-    import inspect as _inspect
-
-    target = None
-    for module_name, module in list(sys.modules.items()):
-        if module_name.rsplit(".", 1)[-1] == "test_workflow_orchestrator_batch4":
-            target = module
-            break
-    if target is None:
-        return
-    helper = getattr(target, "_install", None)
-    validated = getattr(target, "_validated", None)
-    if not callable(helper) or not callable(validated):
-        return
-    try:
-        params = _inspect.signature(helper).parameters
-    except (TypeError, ValueError):
-        return
-    if "cron" in params or any(p.kind == _inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        return
-    if getattr(helper, "_workflow_cron_patched", False):
-        return
-    frozen = getattr(target, "FROZEN", None)
-
-    def _install(
-        mod: Any,
-        config: Any,
-        *,
-        name: str = "invoice-chase",
-        workflow: Any = None,
-        session_id: str = "sess-1",
-        now: Any = None,
-        cron: str | None = None,
-    ) -> Any:
-        if now is None:
-            now = frozen
-        wf = workflow
-        if wf is None:
-            kwargs: dict[str, Any] = {"name": name}
-            if cron is not None:
-                kwargs["cron"] = cron
-            wf = validated(**kwargs)
-        return mod.install_workflow_cron(name, wf, config, now=now, session_id=session_id)
-
-    _install._workflow_cron_patched = True  # type: ignore[attr-defined]
-    target._install = _install
-
-
-_patch_test_install_cron_kw()

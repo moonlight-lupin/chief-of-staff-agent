@@ -115,7 +115,14 @@ def observe_and_advance(
         return run
     if not _review_queue_succeeded(step, config):
         return run
-    return advance_run(run_id, index, {"kind": "review_queue"}, config=config, now=now)
+    return advance_run(
+        run_id,
+        index,
+        {"kind": "review_queue"},
+        config=config,
+        now=now,
+        actor="hook:workflow-orchestrator",
+    )
 
 
 def _pointer_strip(context: dict | None, **kwargs: Any) -> str | None:
@@ -165,6 +172,7 @@ def _advancement(
         {"kind": _signal_key(step) or "event"},
         config=config,
         now=now,
+        actor="hook:workflow-orchestrator",
     )
     return None
 
@@ -355,7 +363,10 @@ def _next_action_text(step: Mapping[str, Any] | None) -> str:
     if "review_queue" in step or step.get("requires_approval"):
         action_id = str(step.get("action_id") or "").strip()
         if action_id:
-            return f"{APPROVE_CMD_PREFIX} {action_id}"
+            return (
+                f"action {action_id} bound — await operator approval; "
+                f"operator: {APPROVE_CMD_PREFIX} {action_id}"
+            )
         return f"{label} {GATE_PHRASE} propose bind-action"
     return label
 

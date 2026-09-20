@@ -28,7 +28,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from config_loader import load_config  # noqa: E402
-from state_db import load_store, mutate_kv  # noqa: E402
+from state_db import get_pending_action, load_store, mutate_kv  # noqa: E402
 from workflows import validate_workflow  # noqa: E402
 
 try:
@@ -42,6 +42,8 @@ ACTIVE_STATES = frozenset({"running", "awaiting-approval"})
 TERMINAL_STATES = frozenset({"completed", "aborted"})
 COMPLETED_RETENTION = 10
 DEFAULT_STALE_HOURS = 48
+HOOK_ACTOR = "hook:workflow-orchestrator"
+OPERATOR_ACTOR = "operator"
 
 RUN_KEY_ORDER = (
     "workflow_run_id",
@@ -129,8 +131,37 @@ def _runs_map(data: dict[str, Any]) -> dict[str, Any]:
     return runs
 
 
-def _mutate(config: Mapping[str, Any] | None, mutate_fn: Callable[[dict[str, Any]], Any]) -> Any:
-    return mutate_kv(STORE_NAME, mutate_fn, config=config)
+def _mutate(
+    config: Mapping[str, Any] | None,
+    mutate_fn: Callable[[dict[str, Any]], Any],
+    *,
+    action: str,
+    actor: str = OPERATOR_ACTOR,
+    workflow_run_id: str | None = None,
+) -> Any:
+    """mutate_kv wrapper that always appends an audit row with workflow_run_id."""
+    audit_after: dict[str, Any] = {}
+
+    def _wrapped(data: dict[str, Any]) -> Any:
+        result = mutate_fn(data)
+        audit_after.clear()
+        if isinstance(data, dict):
+            audit_after.update(copy.deepcopy(data))
+        rid = workflow_run_id
+        if not rid and isinstance(result, Mapping):
+            rid = result.get("workflow_run_id")
+        if rid:
+            audit_after["workflow_run_id"] = rid
+        return result
+
+    return mutate_kv(
+        STORE_NAME,
+        _wrapped,
+        config=config,
+        action=action,
+        actor=actor,
+        after=audit_after,
+    )
 
 
 def _load_runs(config: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -146,6 +177,38 @@ def _get_existing(runs: Mapping[str, Any], run_id: str) -> dict[str, Any]:
     if not isinstance(run, dict):
         raise WorkflowRunError(f"unknown workflow_run_id {run_id}")
     return run
+
+
+def _action_executed_success(action_id: str, config: Mapping[str, Any] | None) -> bool:
+    if not action_id:
+        return False
+    action = get_pending_action(config, action_id)
+    if not isinstance(action, dict) or action.get("state") != "executed":
+        return False
+    result = action.get("result")
+    if not isinstance(result, Mapping):
+        return False
+    return bool(result.get("success"))
+
+
+def _current_step(run: Mapping[str, Any]) -> dict[str, Any] | None:
+    steps = _steps(run)
+    try:
+        index = int(run.get("current_step_index") or 0)
+    except (TypeError, ValueError):
+        index = 0
+    if 0 <= index < len(steps) and isinstance(steps[index], Mapping):
+        return dict(steps[index])
+    return None
+
+
+def _signal_key(step: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(step, Mapping):
+        return None
+    for key in ("command", "file", "review_queue", "manual"):
+        if key in step:
+            return key
+    return None
 
 
 def _require_active(run: Mapping[str, Any], action: str) -> None:
@@ -235,6 +298,7 @@ def start_run(
     workflow: Mapping[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     """Create a running workflow run. Dedup of an active run is inside mutate_kv."""
     if _in_hosted_session():
@@ -277,7 +341,7 @@ def start_run(
         runs[run_id] = record
         return _copy_run(record)
 
-    return _mutate(config, _insert)
+    return _mutate(config, _insert, action="workflow.start", actor=actor or OPERATOR_ACTOR)
 
 
 def get_run(run_id: str, *, config: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
@@ -312,6 +376,7 @@ def advance_run(
     *,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     """Complete the current step. Future indexes error; the prior completed step is a no-op."""
     del evidence
@@ -319,6 +384,23 @@ def advance_run(
     if not isinstance(step_index, int) or isinstance(step_index, bool) or step_index < 0:
         raise WorkflowRunError(f"step_index: must be a non-negative integer, got {step_index!r}")
     stamp = _iso(now)
+    writer = actor if actor else OPERATOR_ACTOR
+    existing = _load_runs(config).get(run_id)
+    approval_ok = True
+    if isinstance(existing, dict) and str(existing.get("state") or "") == "awaiting-approval":
+        try:
+            current_pre = int(existing.get("current_step_index") or 0)
+        except (TypeError, ValueError):
+            current_pre = 0
+        if step_index == current_pre:
+            step = _current_step(existing)
+            bound_id = str((step or {}).get("action_id") or "").strip()
+            approval_ok = _action_executed_success(bound_id, config)
+            if not approval_ok:
+                raise WorkflowRunError(
+                    "cannot advance past an unsatisfied approval gate: "
+                    "bound action is not executed with success"
+                )
 
     def _advance(data: dict[str, Any]) -> dict[str, Any]:
         runs = _runs_map(data)
@@ -331,6 +413,11 @@ def advance_run(
             )
         if step_index < current:
             return _copy_run(run)
+        if str(run.get("state") or "") == "awaiting-approval" and not approval_ok:
+            raise WorkflowRunError(
+                "cannot advance past an unsatisfied approval gate: "
+                "bound action is not executed with success"
+            )
         status = _step_status_list(run)
         if step_index >= len(status):
             raise WorkflowRunError(f"step_index {step_index} is past the end of the run")
@@ -338,7 +425,13 @@ def advance_run(
         _advance_pointer(run, runs, step_index, stamp)
         return _copy_run(run)
 
-    return _mutate(config, _advance)
+    return _mutate(
+        config,
+        _advance,
+        action="workflow.advance",
+        actor=writer,
+        workflow_run_id=run_id,
+    )
 
 
 def skip_step(
@@ -348,6 +441,7 @@ def skip_step(
     *,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     """Skip the current optional step. Required steps are refused."""
     run_id = _require_non_empty_str(run_id, "workflow_run_id")
@@ -385,7 +479,13 @@ def skip_step(
             run["state"] = "running"
         return _copy_run(run)
 
-    return _mutate(config, _skip)
+    return _mutate(
+        config,
+        _skip,
+        action="workflow.skip",
+        actor=actor or OPERATOR_ACTOR,
+        workflow_run_id=run_id,
+    )
 
 
 def bind_action(
@@ -395,6 +495,7 @@ def bind_action(
     *,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     """Write action_id onto the snapshot step once. First bind of an approval step parks."""
     del now
@@ -430,7 +531,13 @@ def bind_action(
                 status[found_index] = "awaiting-approval"
         return _copy_run(run)
 
-    return _mutate(config, _bind)
+    return _mutate(
+        config,
+        _bind,
+        action="workflow.bind",
+        actor=actor or OPERATOR_ACTOR,
+        workflow_run_id=run_id,
+    )
 
 
 def complete_run(
@@ -438,6 +545,7 @@ def complete_run(
     *,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     run_id = _require_non_empty_str(run_id, "workflow_run_id")
     stamp = _iso(now)
@@ -449,7 +557,13 @@ def complete_run(
         _mark_completed(run, runs, stamp)
         return _copy_run(run)
 
-    return _mutate(config, _complete)
+    return _mutate(
+        config,
+        _complete,
+        action="workflow.complete",
+        actor=actor or OPERATOR_ACTOR,
+        workflow_run_id=run_id,
+    )
 
 
 def abort_run(
@@ -457,6 +571,7 @@ def abort_run(
     *,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     run_id = _require_non_empty_str(run_id, "workflow_run_id")
     stamp = _iso(now)
@@ -469,7 +584,13 @@ def abort_run(
         run["last_progress_at"] = stamp
         return _copy_run(run)
 
-    return _mutate(config, _abort)
+    return _mutate(
+        config,
+        _abort,
+        action="workflow.abort",
+        actor=actor or OPERATOR_ACTOR,
+        workflow_run_id=run_id,
+    )
 
 
 def resume_run(
@@ -478,6 +599,7 @@ def resume_run(
     *,
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
 ) -> dict[str, Any]:
     run_id = _require_non_empty_str(run_id, "workflow_run_id")
     owner = _require_non_empty_str(new_session_id, "session_id")
@@ -492,7 +614,13 @@ def resume_run(
         run["last_progress_at"] = stamp
         return _copy_run(run)
 
-    return _mutate(config, _resume)
+    return _mutate(
+        config,
+        _resume,
+        action="workflow.resume",
+        actor=actor or OPERATOR_ACTOR,
+        workflow_run_id=run_id,
+    )
 
 
 def is_stale(

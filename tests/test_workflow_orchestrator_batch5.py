@@ -274,6 +274,25 @@ def _land_executed(config, action_id, *, success=True):
     return mark_executed(config, action_id, {"success": success})
 
 
+def _approve_and_claim(config, action_id):
+    from state_db import approve_pending_action, mark_executing
+
+    approve_pending_action(config, action_id, approver="MH", reason="Reviewed")
+    claimed = mark_executing(config, action_id)
+    assert claimed is not None
+    return claimed
+
+
+def _cron_create_actions(config):
+    from state_db import list_pending_actions
+
+    return [
+        item
+        for item in (list_pending_actions(config, include_expired=True) or [])
+        if item.get("type") == "cron.create"
+    ]
+
+
 def _pending_ids(config):
     from state_db import list_pending_actions
 
@@ -556,7 +575,16 @@ def test_workflows_advance_dispatches_to_advance_run(temp_project):
         "invoice-chase",
         "message",
         "sess-1",
-        workflow=_validated(),
+        workflow=_validated(
+            steps=[
+                _step("talk", "Talk it through", {"manual": True}),
+                _step(
+                    "list-overdue",
+                    "List overdue",
+                    {"command": {"pattern": "show overdue invoices"}},
+                ),
+            ]
+        ),
         config=config,
         now=FROZEN,
     )
@@ -720,7 +748,8 @@ def test_workflows_install_writes_overlay_skill_md(temp_project, monkeypatch):
 
 
 def test_workflows_install_scheduled_calls_cron_idempotent(temp_project, monkeypatch):
-    """Install with a schedule calls install_workflow_cron; reinstall rewrites SKILL.md, same cron id."""
+    """Install with a schedule proposes cron.create; after approve+claim it registers.
+    Reinstall rewrites SKILL.md and keeps the same cron id."""
     import workflow_cron
 
     config, project, config_path = temp_project
@@ -738,6 +767,13 @@ def test_workflows_install_scheduled_calls_cron_idempotent(temp_project, monkeyp
     )
     rc1, _out1, _err1 = _cos(*args)
     assert rc1 == 0
+    assert workflow_cron.get_cron_binding("invoice-chase", config=config) is None
+    assert not any("cron" in cmd and "create" in cmd for cmd in captured)
+    proposed = _cron_create_actions(config)
+    assert len(proposed) == 1
+    _approve_and_claim(config, proposed[0]["id"])
+    rc_exec, _out_exec, _err_exec = _cos(*args)
+    assert rc_exec == 0
     first = workflow_cron.get_cron_binding("invoice-chase", config=config)
     assert first is not None
     schedule_id = first["schedule_id"]
@@ -791,6 +827,18 @@ def test_workflows_uninstall_removes_overlay_and_cron(temp_project, monkeypatch)
         "sess-1",
     )
     assert rc_install == 0
+    proposed = _cron_create_actions(config)
+    assert proposed
+    _approve_and_claim(config, proposed[0]["id"])
+    rc_exec, _out_e, _err_e = _cos(
+        config_path,
+        "workflows",
+        "install",
+        "invoice-chase",
+        "--session-id",
+        "sess-1",
+    )
+    assert rc_exec == 0
     assert _overlay("invoice-chase").is_dir()
     assert workflow_cron.get_cron_binding("invoice-chase", config=config) is not None
     rc, _out, _err = _cos(config_path, "workflows", "uninstall", "invoice-chase")
@@ -834,12 +882,15 @@ def test_workflows_install_invalid_yaml_error_json_no_skill_written(temp_project
 
 
 def test_workflows_install_uninstall_never_mutate_review_queue(temp_project, monkeypatch):
-    """Destructive-surface: install/uninstall never create or mutate review-queue actions."""
+    """No unapproved mutation: install proposes one cron.create; shells out only after approve+claim.
+    Uninstall still never creates review-queue actions."""
     import state_db
+    import workflow_cron
 
     config, project, config_path = temp_project
     _write_workflow_yaml(project, _raw_workflow(schedule=("*/5 * * * *", "UTC")))
-    _fake_subprocess_ok(monkeypatch)
+    captured: list[list[str]] = []
+    _fake_subprocess_ok(monkeypatch, captured)
     mutations: list[str] = []
     original_create = state_db.create_pending_action
     original_approve = state_db.approve_pending_action
@@ -854,7 +905,9 @@ def test_workflows_install_uninstall_never_mutate_review_queue(temp_project, mon
 
     monkeypatch.setattr(state_db, "create_pending_action", _spy_create)
     monkeypatch.setattr(state_db, "approve_pending_action", _spy_approve)
-    before = _pending_ids(config)
+    # workflow_cron imported create_pending_action at module load — patch there too.
+    monkeypatch.setattr(workflow_cron, "create_pending_action", _spy_create)
+    before_ids = set(_pending_ids(config))
     rc_install, _out_i, _err_i = _cos(
         config_path,
         "workflows",
@@ -864,10 +917,29 @@ def test_workflows_install_uninstall_never_mutate_review_queue(temp_project, mon
         "sess-1",
     )
     assert rc_install == 0
+    assert mutations.count("create_pending_action") == 1
+    assert "approve_pending_action" not in mutations
+    assert not any("cron" in cmd and "create" in cmd for cmd in captured)
+    proposed = _cron_create_actions(config)
+    assert len(proposed) == 1
+    assert proposed[0]["id"] not in before_ids
+    _approve_and_claim(config, proposed[0]["id"])
+    rc_exec, _out_e, _err_e = _cos(
+        config_path,
+        "workflows",
+        "install",
+        "invoice-chase",
+        "--session-id",
+        "sess-1",
+    )
+    assert rc_exec == 0
+    assert any("cron" in cmd and "create" in cmd for cmd in captured)
+    mutations_after_install = list(mutations)
     rc_un, _out_u, _err_u = _cos(config_path, "workflows", "uninstall", "invoice-chase")
     assert rc_un == 0
-    assert mutations == []
-    assert _pending_ids(config) == before
+    assert mutations.count("create_pending_action") == mutations_after_install.count(
+        "create_pending_action"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +977,18 @@ def test_install_wiring_reconciles_doctor_cron_skill_files(temp_project, monkeyp
         "sess-1",
     )
     assert rc == 0
+    proposed = _cron_create_actions(config)
+    assert proposed
+    _approve_and_claim(config, proposed[0]["id"])
+    rc_exec, _out_e, _err_e = _cos(
+        config_path,
+        "workflows",
+        "install",
+        "invoice-chase",
+        "--session-id",
+        "sess-1",
+    )
+    assert rc_exec == 0
     passed = workflow_cron.check_cron_skill_files(False, config, config_path)
     assert passed.status == "pass"
     shutil.rmtree(_overlay("invoice-chase"), ignore_errors=True)

@@ -22,8 +22,15 @@ except Exception:  # pragma: no cover
     yaml = None
 
 from cos_helpers import _json_dump, _resolve_project_root, _safe_load_config  # noqa: E402
-from workflow_cron import get_cron_binding, install_workflow_cron, uninstall_workflow_cron  # noqa: E402
-from workflows import generate_skill_md, validate_workflow  # noqa: E402
+from state_db import mark_executed  # noqa: E402
+from workflow_cron import (  # noqa: E402
+    find_cron_create_action,
+    get_cron_binding,
+    install_workflow_cron,
+    propose_cron_create,
+    uninstall_workflow_cron,
+)
+from workflows import WORKFLOW_NAME_MAX, _require_bounded_kebab, generate_skill_md, validate_workflow  # noqa: E402
 
 
 class WorkflowInstallError(Exception):
@@ -38,8 +45,32 @@ def _project_root(config: Mapping[str, Any] | None) -> Path:
     raise WorkflowInstallError("project_root is not configured")
 
 
+def _validated_name(name: str) -> str:
+    if not isinstance(name, str) or not name.strip():
+        raise WorkflowInstallError("name: must be a non-empty string")
+    try:
+        return _require_bounded_kebab(name.strip(), "name", WORKFLOW_NAME_MAX)
+    except Exception as exc:
+        raise WorkflowInstallError(str(exc)) from exc
+
+
 def _overlay_dir(name: str) -> Path:
     return PLUGIN_ROOT / "skills.local" / name
+
+
+def _overlay_under_skills_local(name: str) -> Path:
+    """Resolve skills.local/<name> and refuse anything outside that tree."""
+    overlay = _overlay_dir(name).resolve()
+    root = (PLUGIN_ROOT / "skills.local").resolve()
+    try:
+        overlay.relative_to(root)
+    except ValueError as exc:
+        raise WorkflowInstallError(
+            f"refusing path outside skills.local: {overlay}"
+        ) from exc
+    if overlay == root:
+        raise WorkflowInstallError("refusing to mutate skills.local itself")
+    return overlay
 
 
 def _overlay_skill(name: str) -> Path:
@@ -66,9 +97,7 @@ def install_workflow(
     now: Any = None,
 ) -> dict[str, Any]:
     """Validate YAML, write skills.local overlay SKILL.md, install cron if scheduled."""
-    if not isinstance(name, str) or not name.strip():
-        raise WorkflowInstallError("name: must be a non-empty string")
-    name = name.strip()
+    name = _validated_name(name)
     if yaml is None:
         raise WorkflowInstallError("PyYAML is required to install a workflow")
     path = _yaml_path(config, name)
@@ -88,20 +117,49 @@ def install_workflow(
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(markdown, encoding="utf-8")
     cron_installed = False
+    pending_action_id: str | None = None
     if _has_schedule(workflow):
-        install_workflow_cron(
-            name,
-            workflow,
-            config,
-            now=now,
-            session_id=session_id,
-        )
-        cron_installed = True
-    return {
+        existing_binding = get_cron_binding(name, config=config)
+        if existing_binding is not None:
+            install_workflow_cron(
+                name,
+                workflow,
+                config,
+                now=now,
+                session_id=session_id,
+            )
+            cron_installed = True
+        else:
+            action = find_cron_create_action(name, config=config)
+            if action is not None and action.get("state") == "executing":
+                install_workflow_cron(
+                    name,
+                    workflow,
+                    config,
+                    now=now,
+                    session_id=session_id,
+                )
+                mark_executed(
+                    config,
+                    str(action.get("id") or ""),
+                    {"success": True},
+                )
+                cron_installed = True
+            else:
+                proposed = propose_cron_create(
+                    name, workflow, config, session_id=session_id
+                )
+                pending_action_id = str(proposed.get("id") or "") or None
+                cron_installed = False
+    result: dict[str, Any] = {
         "name": name,
         "skill_path": str(skill_path),
         "cron_installed": cron_installed,
     }
+    if pending_action_id:
+        result["pending_action_id"] = pending_action_id
+        result["pending_action_type"] = "cron.create"
+    return result
 
 
 def uninstall_workflow(
@@ -110,10 +168,8 @@ def uninstall_workflow(
     config: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """Remove skills.local/<name>/ and any cron binding. Missing install is an error."""
-    if not isinstance(name, str) or not name.strip():
-        raise WorkflowInstallError("name: must be a non-empty string")
-    name = name.strip()
-    overlay = _overlay_dir(name)
+    name = _validated_name(name)
+    overlay = _overlay_under_skills_local(name)
     had_overlay = overlay.is_dir()
     had_cron = get_cron_binding(name, config=config) is not None
     if not had_overlay and not had_cron:
@@ -197,7 +253,16 @@ def cmd_advance(args: argparse.Namespace) -> int:
         if run is None:
             raise workflow_runs.WorkflowRunError(f"run not found: {run_id}")
         index = int(run.get("current_step_index") or 0)
-        result = workflow_runs.advance_run(run_id, index, config=config)
+        step = workflow_runs._current_step(run)
+        signal = workflow_runs._signal_key(step)
+        if signal != "manual":
+            raise workflow_runs.WorkflowRunError(
+                "workflows advance is only for manual steps "
+                f"(current signal is {signal or 'unknown'})"
+            )
+        result = workflow_runs.advance_run(
+            run_id, index, config=config, actor=workflow_runs.OPERATOR_ACTOR
+        )
     except Exception as exc:
         return _cli_error(exc)
     return _emit(result, args)

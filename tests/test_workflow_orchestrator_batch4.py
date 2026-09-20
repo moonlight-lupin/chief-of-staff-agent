@@ -158,8 +158,13 @@ def temp_project(tmp_path, monkeypatch):
     return config, project, config_path
 
 
-def _install(mod, config, *, name="invoice-chase", workflow=None, session_id="sess-1", now=FROZEN):
-    wf = workflow if workflow is not None else _validated(name=name)
+def _install(mod, config, *, name="invoice-chase", workflow=None, session_id="sess-1", now=FROZEN, cron=None):
+    wf = workflow
+    if wf is None:
+        kwargs = {"name": name}
+        if cron is not None:
+            kwargs["cron"] = cron
+        wf = _validated(**kwargs)
     return mod.install_workflow_cron(name, wf, config, now=now, session_id=session_id)
 
 
