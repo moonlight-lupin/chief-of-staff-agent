@@ -8,10 +8,12 @@ dicts; this module never reads YAML from disk.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
+# Single-char names are valid; consecutive hyphens (a--b) are permitted.
+# \A...\Z so .match() cannot accept a trailing newline (fullmatch is also used).
+NAME_PATTERN = re.compile(r"\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\Z")
 
 WORKFLOW_NAME_MAX = 32
 STEP_NAME_MAX = 24
@@ -56,6 +58,17 @@ COMMAND_ALLOWED = frozenset({"pattern"})
 FILE_ALLOWED = frozenset({"path"})
 REVIEW_QUEUE_ALLOWED = frozenset({"action_type"})
 
+_DELIVERY_BLOCKS = (
+    ("delivery", ("channel", "target")),
+    ("failure_policy", ("on_failure",)),
+    ("run_log_delivery", ("channel", "target")),
+)
+_KNOWN_DELIVERY_LABELS = {
+    "channel": "Channel",
+    "target": "Target",
+    "on_failure": "On failure",
+}
+
 
 class WorkflowError(Exception):
     """Base error for workflow schema, generation, and name checks."""
@@ -69,14 +82,14 @@ class WorkflowNameConflict(WorkflowError):
     """Workflow name collides with a bundled or local skill directory."""
 
 
-def validate_workflow(data: dict) -> dict:
+def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
     """Validate ``data`` and return a normalized copy. Does not mutate input."""
     if not isinstance(data, Mapping):
         raise WorkflowValidationError("workflow: must be a mapping")
 
     unknown = [key for key in data if key not in TOP_LEVEL_ALLOWED]
     if unknown:
-        raise WorkflowValidationError(f"{unknown[0]}: unknown top-level key")
+        raise WorkflowValidationError(f"{unknown[0]!r}: unknown top-level key")
 
     for field in TOP_LEVEL_REQUIRED:
         if field not in data:
@@ -96,6 +109,8 @@ def validate_workflow(data: dict) -> dict:
     steps: list[dict[str, Any]] = []
     for index, raw_step in enumerate(steps_in):
         steps.append(_normalize_step(raw_step, index, seen_ids))
+    if not any(step["required"] for step in steps):
+        raise WorkflowValidationError("steps: at least one required step")
 
     normalized: dict[str, Any] = {
         "name": name,
@@ -106,36 +121,57 @@ def validate_workflow(data: dict) -> dict:
     normalized["steps"] = steps
     for field in ("delivery", "failure_policy", "run_log_delivery"):
         if field in data:
-            normalized[field] = _canonical_copy(data[field])
+            raw_block = data[field]
+            if not isinstance(raw_block, Mapping):
+                raise WorkflowValidationError(f"{field}: must be a mapping")
+            normalized[field] = _canonical_copy(raw_block, field)
     return _ordered(normalized, TOP_LEVEL_KEY_ORDER)
 
 
-def generate_skill_md(workflow: dict) -> str:
+def generate_skill_md(workflow: Mapping[str, Any]) -> str:
     """Render deterministic SKILL.md markdown from a validated workflow dict."""
+    if not isinstance(workflow, Mapping):
+        raise WorkflowValidationError("workflow: must be a mapping")
+    for field in ("name", "description", "steps"):
+        if field not in workflow:
+            raise WorkflowValidationError(f"{field}: required")
+    steps = workflow["steps"]
+    if not isinstance(steps, list):
+        raise WorkflowValidationError("steps: must be a list")
+
     name = workflow["name"]
     description = workflow["description"]
+    quoted = _quote_frontmatter_description(description)
     header = (
         f"<!-- Generated from workflows/{name}.yaml. "
         f"Regenerate with: chief_of_staff.py workflows generate-skill {name} -->"
     )
     lines = [
+        "---",
+        f"name: {name}",
+        f"description: {quoted}",
+        "---",
         header,
         "",
         f"# {name}",
         "",
-        description,
+        str(description),
         "",
         "## Steps",
         "",
     ]
-    for index, step in enumerate(workflow["steps"], start=1):
+    for index, step in enumerate(steps, start=1):
         lines.extend(_render_step(index, step))
+        lines.append("")
+    lines.extend(_render_delivery_section(workflow))
+    if lines[-1] != "":
         lines.append("")
     return "\n".join(lines)
 
 
 def check_skill_name_free(workflow_name: str, plugin_root: str | Path) -> None:
     """Refuse names that shadow ``skills/`` or ``skills.local/`` directories."""
+    _require_bounded_kebab(workflow_name, "name", WORKFLOW_NAME_MAX)
     root = Path(plugin_root)
     bundled = root / "skills" / workflow_name
     local = root / "skills.local" / workflow_name
@@ -152,7 +188,7 @@ def _normalize_step(raw_step: Any, index: int, seen_ids: set[str]) -> dict[str, 
 
     unknown = [key for key in raw_step if key not in STEP_ALLOWED]
     if unknown:
-        raise WorkflowValidationError(f"{prefix}.{unknown[0]}: unknown key")
+        raise WorkflowValidationError(f"{prefix}.{unknown[0]!r}: unknown key")
 
     for field in STEP_REQUIRED:
         if field not in raw_step:
@@ -176,8 +212,9 @@ def _normalize_step(raw_step: Any, index: int, seen_ids: set[str]) -> dict[str, 
     signal_payload = _normalize_signal(prefix, signal_key, raw_step[signal_key])
 
     required = _optional_bool(raw_step.get("required", True), f"{prefix}.required")
+    default_approval = True if signal_key == "review_queue" else False
     requires_approval = _optional_bool(
-        raw_step.get("requires_approval", False), f"{prefix}.requires_approval"
+        raw_step.get("requires_approval", default_approval), f"{prefix}.requires_approval"
     )
     if requires_approval and signal_key != "review_queue":
         raise WorkflowValidationError(
@@ -209,18 +246,16 @@ def _normalize_signal(prefix: str, signal_key: str, payload: Any) -> Any:
 
     if signal_key == "command":
         _reject_unknown_keys(payload, COMMAND_ALLOWED, field)
-        pattern = _require_non_empty_str(payload.get("pattern"), f"{field}.pattern")
+        pattern = _require_code_span_str(payload.get("pattern"), f"{field}.pattern")
         return {"pattern": pattern}
 
     if signal_key == "file":
         _reject_unknown_keys(payload, FILE_ALLOWED, field)
-        path = _require_non_empty_str(payload.get("path"), f"{field}.path")
-        if path.startswith("/"):
-            raise WorkflowValidationError(f"{field}.path: must be a relative path")
-        return {"path": path}
+        path = _require_code_span_str(payload.get("path"), f"{field}.path")
+        return {"path": _require_project_relative_path(path, f"{field}.path")}
 
     _reject_unknown_keys(payload, REVIEW_QUEUE_ALLOWED, field)
-    action_type = _require_non_empty_str(payload.get("action_type"), f"{field}.action_type")
+    action_type = _require_code_span_str(payload.get("action_type"), f"{field}.action_type")
     return {"action_type": action_type}
 
 
@@ -229,14 +264,17 @@ def _normalize_triggers(raw: Any) -> dict[str, Any]:
         raise WorkflowValidationError("triggers: must be a mapping")
     unknown = [key for key in raw if key not in TRIGGER_ALLOWED]
     if unknown:
-        raise WorkflowValidationError(f"triggers.{unknown[0]}: unknown key")
+        raise WorkflowValidationError(f"triggers.{unknown[0]!r}: unknown key")
 
     triggers: dict[str, Any] = {}
     if "message" in raw:
         messages = raw.get("message")
-        if not isinstance(messages, list) or not all(isinstance(item, str) and item for item in messages):
+        if not isinstance(messages, list) or not all(isinstance(item, str) for item in messages):
             raise WorkflowValidationError("triggers.message: must be a list of non-empty strings")
-        triggers["message"] = list(messages)
+        stripped = [item.strip() for item in messages]
+        if not all(stripped):
+            raise WorkflowValidationError("triggers.message: must be a list of non-empty strings")
+        triggers["message"] = stripped
     if "schedule" in raw:
         triggers["schedule"] = _normalize_schedule(raw.get("schedule"))
     return _ordered(triggers, TRIGGER_KEY_ORDER)
@@ -247,13 +285,15 @@ def _normalize_schedule(raw: Any) -> dict[str, Any]:
         raise WorkflowValidationError("triggers.schedule: must be a mapping")
     unknown = [key for key in raw if key not in SCHEDULE_ALLOWED]
     if unknown:
-        raise WorkflowValidationError(f"triggers.schedule.{unknown[0]}: unknown key")
+        raise WorkflowValidationError(f"triggers.schedule.{unknown[0]!r}: unknown key")
     if "cron" not in raw:
         raise WorkflowValidationError("triggers.schedule.cron: required")
     cron = _require_non_empty_str(raw.get("cron"), "triggers.schedule.cron")
     timezone = raw.get("timezone", None)
     if timezone is not None and not isinstance(timezone, str):
         raise WorkflowValidationError("triggers.schedule.timezone: must be a string or null")
+    if isinstance(timezone, str):
+        timezone = timezone.strip()
     return _ordered({"cron": cron, "timezone": timezone}, SCHEDULE_KEY_ORDER)
 
 
@@ -284,6 +324,30 @@ def _render_step(index: int, step: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _render_delivery_section(workflow: Mapping[str, Any]) -> list[str]:
+    if not any(key in workflow for key in ("delivery", "failure_policy", "run_log_delivery")):
+        return []
+    lines = ["## Delivery", ""]
+    for block_key, preferred in _DELIVERY_BLOCKS:
+        block = workflow.get(block_key)
+        if not isinstance(block, Mapping):
+            continue
+        rendered: list[str] = [key for key in preferred if key in block]
+        for key in sorted(k for k in block if k not in preferred):
+            rendered.append(key)
+        for key in rendered:
+            label = _KNOWN_DELIVERY_LABELS.get(key, key)
+            lines.append(f"{label}: {block[key]}")
+    lines.append("")
+    return lines
+
+
+def _quote_frontmatter_description(description: Any) -> str:
+    text = " ".join(str(description).split())
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _require_bounded_kebab(value: Any, field: str, max_len: int) -> str:
     text = _require_bounded_str(value, field, max_len)
     if NAME_PATTERN.fullmatch(text) is None:
@@ -299,9 +363,34 @@ def _require_bounded_str(value: Any, field: str, max_len: int) -> str:
 
 
 def _require_non_empty_str(value: Any, field: str) -> str:
-    if not isinstance(value, str) or value == "":
+    if not isinstance(value, str):
         raise WorkflowValidationError(f"{field}: must be a non-empty string")
-    return value
+    if _has_disallowed_control_chars(value):
+        raise WorkflowValidationError(f"{field}: must be a single line without control characters")
+    text = value.strip()
+    if text == "":
+        raise WorkflowValidationError(f"{field}: must be a non-empty string")
+    return text
+
+
+def _require_code_span_str(value: Any, field: str) -> str:
+    text = _require_non_empty_str(value, field)
+    if "`" in text:
+        raise WorkflowValidationError(f"{field}: must not contain backticks")
+    return text
+
+
+def _require_project_relative_path(path: str, field: str) -> str:
+    if path.startswith("/"):
+        raise WorkflowValidationError(f"{field}: must be a relative path")
+    drive_letter = len(path) >= 2 and path[0].isalpha() and path[1] == ":"
+    if path.startswith("~") or "\\" in path or drive_letter or ".." in PurePosixPath(path).parts:
+        raise WorkflowValidationError(f"{field}: must stay within the project root")
+    return path
+
+
+def _has_disallowed_control_chars(text: str) -> bool:
+    return any(ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F for ch in text)
 
 
 def _optional_bool(value: Any, field: str) -> bool:
@@ -313,14 +402,18 @@ def _optional_bool(value: Any, field: str) -> bool:
 def _reject_unknown_keys(payload: Mapping[str, Any], allowed: frozenset[str], field: str) -> None:
     unknown = [key for key in payload if key not in allowed]
     if unknown:
-        raise WorkflowValidationError(f"{field}.{unknown[0]}: unknown key")
+        raise WorkflowValidationError(f"{field}.{unknown[0]!r}: unknown key")
 
 
-def _canonical_copy(value: Any) -> Any:
+def _canonical_copy(value: Any, field: str) -> Any:
     if isinstance(value, Mapping):
-        return {key: _canonical_copy(value[key]) for key in sorted(value)}
+        keys = list(value)
+        for key in keys:
+            if not isinstance(key, str):
+                raise WorkflowValidationError(f"{field}: keys must be strings")
+        return {key: _canonical_copy(value[key], field) for key in sorted(keys)}
     if isinstance(value, list):
-        return [_canonical_copy(item) for item in value]
+        return [_canonical_copy(item, field) for item in value]
     return value
 
 

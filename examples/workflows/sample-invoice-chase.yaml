@@ -17,17 +17,19 @@ steps:
     description: Draft a payment-reminder note for each overdue invoice.
     file:
       path: out/invoice-reminders.md
-  - id: approve-send
-    name: Approve reminders
-    description: Operator approves the reminder emails before they go out.
+  - id: send-reminders
+    name: Send reminders
+    description: >-
+      Operator approves the reminder emails; sending happens through the
+      approved action execution after claim and record-execution.
     review_queue:
       action_type: gmail.send
     requires_approval: true
-  - id: send-reminder
-    name: Send reminders
-    description: Send the approved reminder emails to overdue counterparties.
+  - id: fetch-payment-status
+    name: Fetch payment status
+    description: Check whether overdue invoices have been paid since the last listing.
     command:
-      pattern: send invoice reminders
+      pattern: show payment status
   - id: log-chase
     name: Log the chase
     description: Record that reminders went out; skip if the log store is unavailable.
