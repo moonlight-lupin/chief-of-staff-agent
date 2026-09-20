@@ -7,11 +7,12 @@ event-driven; review_queue steps are re-observed via observe_and_advance.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
-from state_db import ConcurrencyError, get_pending_action, load_store
+from state_db import ConcurrencyError, StateDB, get_pending_action, load_store
 from workflow_runs import (
     ACTIVE_STATES,
     HOOK_ACTOR,
@@ -28,6 +29,25 @@ STRIP_MAX = 200
 GATE_PHRASE = "[APPROVAL REQUIRED — propose, do not execute]"
 APPROVE_CMD_PREFIX = "review_queue.py approve --action-id"
 VERDICTS = frozenset({"GO", "DEGRADED", "HALT"})
+
+
+class _HookStateDB(StateDB):
+    """Hook-local store: immediate-fail on lock."""
+
+    busy_timeout_ms = 0
+
+    def _set_wal_with_retry(self, retries: int = 1, delay: float = 0.0) -> None:
+        super()._set_wal_with_retry(retries=1, delay=0.0)
+
+
+@contextmanager
+def _hook_open_db(config: Any) -> Iterator[StateDB]:
+    """Open a hook-scoped store. Does not patch process-global sqlite helpers."""
+    db = _HookStateDB(config)
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def pointer_strip(context: dict | None = None, **kwargs: Any) -> str | None:
@@ -109,7 +129,12 @@ def observe_and_advance(
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Re-observe the current review_queue step and advance if executed+success."""
-    run = get_run(run_id, config=config)
+    run = get_run(run_id, config=config, open_db=_hook_open_db)
+    if not isinstance(run, dict) or run.get("state") not in ACTIVE_STATES:
+        return run
+    skipped = _apply_degraded_skips(run, config, now=now)
+    if isinstance(skipped, Mapping):
+        run = skipped
     if not isinstance(run, dict) or run.get("state") not in ACTIVE_STATES:
         return run
     index = _current_index(run)
@@ -118,14 +143,19 @@ def observe_and_advance(
         return run
     if not _review_queue_succeeded(step, config):
         return run
-    return advance_run(
+    advanced = advance_run(
         run_id,
         index,
         {"kind": "review_queue"},
         config=config,
         now=now,
         actor=HOOK_ACTOR,
+        open_db=_hook_open_db,
     )
+    if isinstance(advanced, Mapping):
+        after = _apply_degraded_skips(advanced, config, now=now)
+        return after if isinstance(after, Mapping) else advanced
+    return advanced
 
 
 def _pointer_strip(context: dict | None, **kwargs: Any) -> str | None:
@@ -137,11 +167,23 @@ def _pointer_strip(context: dict | None, **kwargs: Any) -> str | None:
     run = _owned_active_run(config, session_id)
     if run is None:
         return None
+    skipped = _apply_degraded_skips(run, config, now=now)
+    if isinstance(skipped, Mapping):
+        run = skipped
+    if not isinstance(run, Mapping) or run.get("state") not in ACTIVE_STATES:
+        return None
     step = _step_at(run, _current_index(run))
     if step is not None and "review_queue" in step:
-        observe_and_advance(str(run.get("workflow_run_id") or ""), config, now=now)
-        run = _owned_active_run(config, session_id)
-        if run is None:
+        observed = observe_and_advance(
+            str(run.get("workflow_run_id") or ""), config, now=now
+        )
+        if isinstance(observed, Mapping):
+            run = observed
+        else:
+            run = _owned_active_run(config, session_id)
+            if run is None:
+                return None
+        if not isinstance(run, Mapping) or run.get("state") not in ACTIVE_STATES:
             return None
     facts = _load_facts(config)
     verdict = compute_verdict(run, facts, now=now)
@@ -188,6 +230,7 @@ def _advancement(
             config=config,
             now=now,
             actor=HOOK_ACTOR,
+            open_db=_hook_open_db,
         )
     except ConcurrencyError:
         return None
@@ -247,12 +290,9 @@ def _command_matches(
 
 
 def _command_succeeded(result: Any, exit_code: Any) -> bool:
-    """exit_code kwarg wins when present; otherwise parse result (HOOKS.md post_tool_call)."""
+    """Success requires integer zero, or mapping success is True. Booleans are not codes."""
     if exit_code is not None:
-        try:
-            return int(exit_code) == 0
-        except (TypeError, ValueError):
-            return False
+        return _is_integer_zero(exit_code)
     if result is None:
         return False
     if isinstance(result, Mapping):
@@ -261,7 +301,7 @@ def _command_succeeded(result: Any, exit_code: Any) -> bool:
         if "returncode" in result:
             return _command_succeeded(None, result.get("returncode"))
         if "success" in result:
-            return bool(result.get("success"))
+            return result.get("success") is True
         return False
     code = getattr(result, "exit_code", None)
     if code is None:
@@ -279,12 +319,23 @@ def _command_succeeded(result: Any, exit_code: Any) -> bool:
                 parsed = None
             if parsed is not None:
                 return _command_succeeded(parsed, None)
-        lowered = text.lower()
-        if lowered in {"failed", "error", "failure"}:
+        return False
+    return False
+
+
+def _is_integer_zero(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, int):
+        return value == 0
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
             return False
-        if "traceback" in lowered or "exit_code=1" in lowered or "returncode=1" in lowered:
+        try:
+            return int(text, 10) == 0
+        except ValueError:
             return False
-        return True
     return False
 
 
@@ -292,11 +343,13 @@ def _apply_degraded_skips(
     run: Mapping[str, Any],
     config: Mapping[str, Any] | None,
     *,
-    now: datetime | None,
-) -> None:
-    """After advancement, skip the current step when a DEGRADED verdict names it."""
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Skip the current step when a DEGRADED verdict names it. Returns the resulting run."""
+    if not isinstance(run, Mapping):
+        return None
     facts = _load_facts(config)
-    current = dict(run)
+    current: Any = run
     seen: set[str] = set()
     while isinstance(current, Mapping) and current.get("state") in ACTIVE_STATES:
         verdict = compute_verdict(current, facts, now=now)
@@ -306,13 +359,13 @@ def _apply_degraded_skips(
             if str(item).strip()
         ]
         if not skip_ids:
-            return
+            return dict(current)
         step = _step_at(current, _current_index(current))
         if step is None:
-            return
+            return dict(current)
         step_id = str(step.get("id") or "").strip()
         if not step_id or step_id not in skip_ids or step_id in seen:
-            return
+            return dict(current)
         seen.add(step_id)
         try:
             current = skip_step(
@@ -322,11 +375,15 @@ def _apply_degraded_skips(
                 config=config,
                 now=now,
                 actor=HOOK_ACTOR,
+                open_db=_hook_open_db,
             )
         except ConcurrencyError:
-            return
+            return dict(current)
         except Exception:
-            return
+            return dict(current)
+    if isinstance(current, Mapping):
+        return dict(current)
+    return None
 
 
 def _file_matches(
@@ -369,7 +426,7 @@ def _review_queue_succeeded(step: Mapping[str, Any], config: Mapping[str, Any] |
     action_id = str(step.get("action_id") or "").strip()
     if not action_id:
         return False
-    action = get_pending_action(config, action_id)
+    action = get_pending_action(config, action_id, open_db=_hook_open_db)
     if not isinstance(action, dict) or action.get("state") != "executed":
         return False
     result = action.get("result")
@@ -379,7 +436,7 @@ def _review_queue_succeeded(step: Mapping[str, Any], config: Mapping[str, Any] |
 
 
 def _owned_active_run(config: Mapping[str, Any] | None, session_id: str) -> dict[str, Any] | None:
-    data = load_store(STORE_RUNS, config=config, validate=False)
+    data = load_store(STORE_RUNS, config=config, validate=False, open_db=_hook_open_db)
     if not isinstance(data, dict):
         return None
     runs = data.get("runs")
@@ -394,7 +451,7 @@ def _owned_active_run(config: Mapping[str, Any] | None, session_id: str) -> dict
 
 
 def _load_facts(config: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    return get_facts(config=config)
+    return get_facts(config=config, open_db=_hook_open_db)
 
 
 def _facts_are_stale(facts: Mapping[str, Any], now: datetime | None) -> bool:

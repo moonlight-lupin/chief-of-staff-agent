@@ -141,6 +141,7 @@ def _mutate(
     action: str,
     actor: str = OPERATOR_ACTOR,
     workflow_run_id: str | None = None,
+    open_db: Any = None,
 ) -> Any:
     """mutate_kv wrapper that always appends an audit row with workflow_run_id."""
     audit_after: dict[str, Any] = {}
@@ -164,11 +165,12 @@ def _mutate(
         action=action,
         actor=actor,
         after=audit_after,
+        open_db=open_db,
     )
 
 
-def _load_runs(config: Mapping[str, Any] | None) -> dict[str, Any]:
-    data = load_store(STORE_NAME, config=config, validate=False)
+def _load_runs(config: Mapping[str, Any] | None, *, open_db: Any = None) -> dict[str, Any]:
+    data = load_store(STORE_NAME, config=config, validate=False, open_db=open_db)
     runs = data.get("runs") if isinstance(data, dict) else None
     if isinstance(runs, dict):
         return runs
@@ -182,10 +184,15 @@ def _get_existing(runs: Mapping[str, Any], run_id: str) -> dict[str, Any]:
     return run
 
 
-def _action_executed_success(action_id: str, config: Mapping[str, Any] | None) -> bool:
+def _action_executed_success(
+    action_id: str,
+    config: Mapping[str, Any] | None,
+    *,
+    open_db: Any = None,
+) -> bool:
     if not action_id:
         return False
-    action = get_pending_action(config, action_id)
+    action = get_pending_action(config, action_id, open_db=open_db)
     if not isinstance(action, dict) or action.get("state") != "executed":
         return False
     result = action.get("result")
@@ -350,9 +357,14 @@ def start_run(
     return _mutate(config, _insert, action="workflow.start", actor=actor or OPERATOR_ACTOR)
 
 
-def get_run(run_id: str, *, config: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+def get_run(
+    run_id: str,
+    *,
+    config: Mapping[str, Any] | None = None,
+    open_db: Any = None,
+) -> dict[str, Any] | None:
     run_id = _require_non_empty_str(run_id, "workflow_run_id")
-    run = _load_runs(config).get(run_id)
+    run = _load_runs(config, open_db=open_db).get(run_id)
     if not isinstance(run, dict):
         return None
     return _copy_run(run)
@@ -383,6 +395,7 @@ def advance_run(
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     actor: str = OPERATOR_ACTOR,
+    open_db: Any = None,
 ) -> dict[str, Any]:
     """Complete the current step. Future indexes error; the prior completed step is a no-op."""
     del evidence
@@ -391,7 +404,7 @@ def advance_run(
         raise WorkflowRunError(f"step_index: must be a non-negative integer, got {step_index!r}")
     stamp = _iso(now)
     writer = actor if actor else OPERATOR_ACTOR
-    existing = _load_runs(config).get(run_id)
+    existing = _load_runs(config, open_db=open_db).get(run_id)
     approval_ok = True
     if isinstance(existing, dict) and str(existing.get("state") or "") == "awaiting-approval":
         try:
@@ -401,7 +414,7 @@ def advance_run(
         if step_index == current_pre:
             step = _current_step(existing)
             bound_id = str((step or {}).get("action_id") or "").strip()
-            approval_ok = _action_executed_success(bound_id, config)
+            approval_ok = _action_executed_success(bound_id, config, open_db=open_db)
             if not approval_ok:
                 raise WorkflowRunError(
                     "cannot advance past an unsatisfied approval gate: "
@@ -437,6 +450,7 @@ def advance_run(
         action="workflow.advance",
         actor=writer,
         workflow_run_id=run_id,
+        open_db=open_db,
     )
 
 
@@ -448,6 +462,7 @@ def skip_step(
     config: Mapping[str, Any] | None = None,
     now: datetime | None = None,
     actor: str = OPERATOR_ACTOR,
+    open_db: Any = None,
 ) -> dict[str, Any]:
     """Skip the current optional step. Required steps are refused."""
     run_id = _require_non_empty_str(run_id, "workflow_run_id")
@@ -491,6 +506,7 @@ def skip_step(
         action="workflow.skip",
         actor=actor or OPERATOR_ACTOR,
         workflow_run_id=run_id,
+        open_db=open_db,
     )
 
 
@@ -665,9 +681,9 @@ def _facts_project_root(config: Mapping[str, Any] | None) -> Path | None:
     return Path(str(paths["project_root"])).expanduser()
 
 
-def get_facts(*, config: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+def get_facts(*, config: Mapping[str, Any] | None = None, open_db: Any = None) -> dict[str, Any] | None:
     """Load the workflow_facts kv doc. Missing or empty docs return None."""
-    data = load_store(STORE_FACTS, config=config, validate=False)
+    data = load_store(STORE_FACTS, config=config, validate=False, open_db=open_db)
     if not isinstance(data, dict) or not data:
         return None
     return copy.deepcopy(data)

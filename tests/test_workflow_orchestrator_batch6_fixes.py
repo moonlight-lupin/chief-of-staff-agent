@@ -2,12 +2,17 @@
 """Fix-round A+B: reachability (I4/H5/C4/skip/H1/H2) and fail-soft (J1/K1/D1/W6/C3/C5/C6/C7/W4)."""
 from __future__ import annotations
 
+import argparse
 import importlib
 import io
 import json
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -586,6 +591,59 @@ def test_command_signal_four_arg_post_tool_call(temp_project):
     assert fetched["step_status"][0] == "completed"
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        "Error: command timed out",
+        "Process exited with code 2",
+        {"success": "false"},
+        json.dumps({"success": "false"}),
+        "ok",
+        "{not-json",
+        {"exit_code": 0.5},
+        {"exit_code": -0.5},
+        {"exit_code": "0.5"},
+        json.dumps({"exit_code": 0.5}),
+        {"exit_code": True},
+        {"exit_code": False},
+    ],
+)
+def test_command_signal_ambiguous_result_does_not_advance(temp_project, result):
+    """F1: four-arg post_tool_call without validated exit_code/boolean success stays pending."""
+    import workflow_hooks
+    import workflow_runs
+
+    config, _project, _config_path = temp_project
+    workflow = _validated(
+        steps=[
+            _step(
+                "list-overdue",
+                "List overdue",
+                {"command": {"pattern": "show overdue invoices"}},
+            ),
+        ]
+    )
+    run = workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=workflow,
+        config=config,
+        now=FROZEN,
+    )
+    hook_result = workflow_hooks.advancement(
+        "terminal",
+        {"command": "python invoices.py show overdue invoices --json"},
+        result,
+        {"session_id": "sess-1"},
+    )
+    assert hook_result is None
+    fetched = workflow_runs.get_run(run["workflow_run_id"], config=config)
+    assert fetched["current_step_index"] == 0
+    assert fetched["step_status"][0] == "pending"
+    assert fetched["state"] == "running"
+
+
 def test_file_signal_four_arg_post_tool_call(temp_project):
     """H2: documented 4-arg post_tool_call (no config kwarg) advances a file step via load_config()."""
     import workflow_hooks
@@ -826,3 +884,589 @@ def test_failed_is_terminal(temp_project):
         now=FROZEN + timedelta(minutes=1),
     )
     assert second["workflow_run_id"] != run_id
+
+
+def _hold_immediate_lock(db_path: Path):
+    holder = sqlite3.connect(str(db_path), timeout=0, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    return holder
+
+
+def test_pointer_strip_locked_db_returns_quickly(temp_project):
+    """F2/H6: pointer_strip drops in <100ms against a real BEGIN IMMEDIATE lock."""
+    import workflow_hooks
+    import workflow_runs
+
+    config, project, _config_path = temp_project
+    run = workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=_validated(
+            steps=[
+                _step(
+                    "list-overdue",
+                    "List overdue",
+                    {"command": {"pattern": "show overdue invoices"}},
+                ),
+            ]
+        ),
+        config=config,
+        now=FROZEN,
+    )
+    db_path = project / "state.db"
+    assert db_path.is_file()
+    holder = _hold_immediate_lock(db_path)
+    try:
+        t0 = time.monotonic()
+        strip = workflow_hooks.pointer_strip({"session_id": "sess-1"}, config=config, now=FROZEN)
+        elapsed = time.monotonic() - t0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert strip is None
+    assert elapsed < 0.1
+    fetched = workflow_runs.get_run(run["workflow_run_id"], config=config)
+    assert fetched["state"] == "running"
+    assert fetched["step_status"][0] == "pending"
+
+
+def test_advancement_locked_db_returns_quickly(temp_project):
+    """F2/H6: advancement drops in <100ms against a real BEGIN IMMEDIATE lock."""
+    import workflow_hooks
+    import workflow_runs
+
+    config, project, _config_path = temp_project
+    run = workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=_validated(
+            steps=[
+                _step(
+                    "list-overdue",
+                    "List overdue",
+                    {"command": {"pattern": "show overdue invoices"}},
+                ),
+            ]
+        ),
+        config=config,
+        now=FROZEN,
+    )
+    db_path = project / "state.db"
+    holder = _hold_immediate_lock(db_path)
+    try:
+        t0 = time.monotonic()
+        result = workflow_hooks.advancement(
+            "terminal",
+            {"command": "python show overdue invoices"},
+            json.dumps({"exit_code": 0}),
+            {"session_id": "sess-1"},
+            config=config,
+            now=FROZEN + timedelta(minutes=1),
+        )
+        elapsed = time.monotonic() - t0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert result is None
+    assert elapsed < 0.1
+    fetched = workflow_runs.get_run(run["workflow_run_id"], config=config)
+    assert fetched["current_step_index"] == 0
+    assert fetched["step_status"][0] == "pending"
+
+
+def _command_step_run(config):
+    import workflow_runs
+
+    return workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=_validated(
+            steps=[
+                _step(
+                    "list-overdue",
+                    "List overdue",
+                    {"command": {"pattern": "show overdue invoices"}},
+                ),
+            ]
+        ),
+        config=config,
+        now=FROZEN,
+    )
+
+
+def test_overlapping_hook_store_access_stays_nonblocking(temp_project):
+    """D1: overlapping hook store accesses stay nonblocking; later hooks still do."""
+    import state_db as sdb
+    import workflow_hooks
+
+    config, project, _config_path = temp_project
+    _command_step_run(config)
+    orig_connect = sqlite3.connect
+    orig_open = sdb._open_db
+    original_owned = workflow_hooks._owned_active_run
+    a_in = threading.Event()
+    b_in = threading.Event()
+    a_done = threading.Event()
+    b_may_read = threading.Event()
+    errors = []
+
+    def gated(config_arg, session_id):
+        name = threading.current_thread().name
+        if name == "hook-A":
+            a_in.set()
+            assert b_in.wait(5)
+            return original_owned(config_arg, session_id)
+        if name == "hook-B":
+            b_in.set()
+            assert a_in.wait(5)
+            assert a_done.wait(5)
+            assert b_may_read.wait(5)
+            return original_owned(config_arg, session_id)
+        return original_owned(config_arg, session_id)
+
+    workflow_hooks._owned_active_run = gated
+    try:
+        def run_a():
+            try:
+                workflow_hooks.pointer_strip(
+                    {"session_id": "sess-1"}, config=config, now=FROZEN
+                )
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                a_done.set()
+
+        def run_b():
+            try:
+                workflow_hooks.pointer_strip(
+                    {"session_id": "sess-1"}, config=config, now=FROZEN
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        t_a = threading.Thread(target=run_a, name="hook-A")
+        t_b = threading.Thread(target=run_b, name="hook-B")
+        t_a.start()
+        t_b.start()
+        assert a_in.wait(5) and b_in.wait(5)
+        assert a_done.wait(5)
+        holder = _hold_immediate_lock(project / "state.db")
+        try:
+            t0 = time.monotonic()
+            b_may_read.set()
+            t_b.join(2)
+            elapsed_b = time.monotonic() - t0
+            assert not t_b.is_alive()
+            assert elapsed_b < 0.1
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+        t_a.join(5)
+        t_b.join(5)
+        assert errors == []
+    finally:
+        workflow_hooks._owned_active_run = original_owned
+
+    assert sqlite3.connect is orig_connect
+    assert sdb._open_db is orig_open
+    assert getattr(workflow_hooks, "_HOOK_DB_DEPTH", 0) == 0
+    holder = _hold_immediate_lock(project / "state.db")
+    try:
+        t0 = time.monotonic()
+        strip = workflow_hooks.pointer_strip(
+            {"session_id": "sess-1"}, config=config, now=FROZEN
+        )
+        elapsed = time.monotonic() - t0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert strip is None
+    assert elapsed < 0.1
+
+
+def test_hook_store_window_does_not_affect_unrelated_callers(temp_project):
+    """D1: sqlite3.connect and ordinary StateDB stay on default policy during a hook."""
+    import state_db as sdb
+    import workflow_hooks
+
+    config, _project, _config_path = temp_project
+    _command_step_run(config)
+    orig_connect = sqlite3.connect
+    orig_open = sdb._open_db
+    original_owned = workflow_hooks._owned_active_run
+    inside = threading.Event()
+    release = threading.Event()
+    errors = []
+    probed = {}
+
+    def gated(config_arg, session_id):
+        inside.set()
+        assert release.wait(5)
+        return original_owned(config_arg, session_id)
+
+    workflow_hooks._owned_active_run = gated
+    try:
+        def run_hook():
+            try:
+                workflow_hooks.pointer_strip(
+                    {"session_id": "sess-1"}, config=config, now=FROZEN
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        t = threading.Thread(target=run_hook)
+        t.start()
+        assert inside.wait(5)
+        probed["connect_is_original"] = sqlite3.connect is orig_connect
+        probed["open_is_original"] = sdb._open_db is orig_open
+        conn = sqlite3.connect(":memory:")
+        probed["memory_timeout"] = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.close()
+        conn = sqlite3.connect(":memory:", 5.0)
+        probed["positional_timeout"] = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.close()
+        with sdb.StateDB(config) as db:
+            probed["store_timeout"] = db.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        release.set()
+        t.join(5)
+        assert not t.is_alive()
+        assert errors == []
+    finally:
+        release.set()
+        workflow_hooks._owned_active_run = original_owned
+
+    assert probed["connect_is_original"] is True
+    assert probed["open_is_original"] is True
+    assert probed["memory_timeout"] == 5000
+    assert probed["positional_timeout"] == 5000
+    assert probed["store_timeout"] == 10000
+
+
+def test_hook_store_exception_does_not_leak_override(temp_project):
+    """D1: exception during hook store access leaves later hooks nonblocking."""
+    import state_db as sdb
+    import workflow_hooks
+
+    config, project, _config_path = temp_project
+    _command_step_run(config)
+    orig_connect = sqlite3.connect
+    orig_open = sdb._open_db
+
+    def boom(config_arg, session_id):
+        raise RuntimeError("hook store boom")
+
+    original_owned = workflow_hooks._owned_active_run
+    workflow_hooks._owned_active_run = boom
+    try:
+        strip = workflow_hooks.pointer_strip(
+            {"session_id": "sess-1"}, config=config, now=FROZEN
+        )
+    finally:
+        workflow_hooks._owned_active_run = original_owned
+    assert strip is None
+    assert sqlite3.connect is orig_connect
+    assert sdb._open_db is orig_open
+    assert getattr(workflow_hooks, "_HOOK_DB_DEPTH", 0) == 0
+    holder = _hold_immediate_lock(project / "state.db")
+    try:
+        t0 = time.monotonic()
+        strip = workflow_hooks.pointer_strip(
+            {"session_id": "sess-1"}, config=config, now=FROZEN
+        )
+        elapsed = time.monotonic() - t0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert strip is None
+    assert elapsed < 0.1
+
+
+def test_pointer_strip_skips_optional_first_step(temp_project):
+    """F3: optional-first step with absent capability is skipped on pointer render."""
+    import workflow_hooks
+    import workflow_runs
+
+    config, _project, _config_path = temp_project
+    workflow = _validated(
+        steps=[
+            _step(
+                "optional-nudge",
+                "Optional nudge",
+                {"review_queue": {"action_type": "drive.upload"}},
+                required=False,
+            ),
+            _step(
+                "list-overdue",
+                "List overdue",
+                {"command": {"pattern": "show overdue invoices"}},
+            ),
+        ]
+    )
+    run = workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=workflow,
+        config=config,
+        now=FROZEN,
+    )
+    facts = _facts_payload(
+        capabilities={"gmail.send": True, "drive.upload": False},
+        state_files={"pipeline.yaml": True, "invoices.yaml": True},
+    )
+    workflow_runs.refresh_facts(
+        facts, config=config, workflow_name="invoice-chase", run_id=run["workflow_run_id"]
+    )
+    strip = workflow_hooks.pointer_strip({"session_id": "sess-1"}, config=config, now=FROZEN)
+    fetched = workflow_runs.get_run(run["workflow_run_id"], config=config)
+    assert fetched["step_status"][0] == "skipped"
+    assert fetched["current_step_index"] == 1
+    assert fetched["step_status"][1] == "pending"
+    assert fetched["state"] == "running"
+    assert isinstance(strip, str)
+    assert "list-overdue" in strip or "List overdue" in strip
+    assert "APPROVAL REQUIRED" not in strip
+
+
+def test_manual_advance_skips_following_optional_step(temp_project):
+    """F3: manual CLI advancement then skips a following optional step."""
+    import workflow_runs
+
+    config, _project, config_path = temp_project
+    workflow = _validated(
+        steps=[
+            _step("ack", "Ack", {"manual": True}),
+            _step(
+                "optional-nudge",
+                "Optional nudge",
+                {"review_queue": {"action_type": "drive.upload"}},
+                required=False,
+            ),
+            _step(
+                "list-overdue",
+                "List overdue",
+                {"command": {"pattern": "show overdue invoices"}},
+            ),
+        ]
+    )
+    run = workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=workflow,
+        config=config,
+        now=FROZEN,
+    )
+    facts = _facts_payload(
+        capabilities={"gmail.send": True, "drive.upload": False},
+        state_files={"pipeline.yaml": True, "invoices.yaml": True},
+    )
+    workflow_runs.refresh_facts(
+        facts, config=config, workflow_name="invoice-chase", run_id=run["workflow_run_id"]
+    )
+    rc, out, err = _cos(config_path, "workflows", "advance", "--run-id", run["workflow_run_id"])
+    assert rc == 0, err or out
+    payload = json.loads(out)
+    assert payload["step_status"][0] == "completed"
+    assert payload["step_status"][1] == "skipped"
+    assert payload["current_step_index"] == 2
+    fetched = workflow_runs.get_run(run["workflow_run_id"], config=config)
+    assert fetched["step_status"][1] == "skipped"
+    assert fetched["current_step_index"] == 2
+
+
+def test_observe_and_advance_skips_following_optional_step(temp_project):
+    """F3: review-queue observation advances, then skips the following optional step."""
+    import workflow_hooks
+    import workflow_runs
+
+    config, _project, _config_path = temp_project
+    workflow = _validated(
+        steps=[
+            _step(
+                "propose-send",
+                "Propose send",
+                {"review_queue": {"action_type": "gmail.send"}},
+            ),
+            _step(
+                "optional-nudge",
+                "Optional nudge",
+                {"review_queue": {"action_type": "drive.upload"}},
+                required=False,
+            ),
+        ]
+    )
+    run = workflow_runs.start_run(
+        "invoice-chase",
+        "message",
+        "sess-1",
+        workflow=workflow,
+        config=config,
+        now=FROZEN,
+    )
+    facts = _facts_payload(
+        capabilities={"gmail.send": True, "drive.upload": False},
+        state_files={"pipeline.yaml": True, "invoices.yaml": True},
+    )
+    workflow_runs.refresh_facts(
+        facts, config=config, workflow_name="invoice-chase", run_id=run["workflow_run_id"]
+    )
+    action = _create_action(config)
+    workflow_runs.bind_action(
+        run["workflow_run_id"], "propose-send", action["id"], config=config
+    )
+    _land_executed(config, action["id"], success=True)
+    updated = workflow_hooks.observe_and_advance(
+        run["workflow_run_id"], config, now=FROZEN + timedelta(minutes=3)
+    )
+    fetched = workflow_runs.get_run(run["workflow_run_id"], config=config)
+    assert fetched["step_status"][0] == "completed"
+    assert fetched["step_status"][1] == "skipped"
+    assert fetched["state"] == "completed"
+    assert fetched.get("degraded") is True
+    assert isinstance(updated, dict)
+    assert updated["step_status"][1] == "skipped"
+
+
+def test_uninstall_rejects_symlink_alias_inside_tree(temp_project):
+    """F4: skills.local alias to another overlay is refused; target directory kept."""
+    import workflow_install
+
+    config, _project, _config_path = temp_project
+    skills_local = PLUGIN_ROOT / "skills.local"
+    skills_local.mkdir(parents=True, exist_ok=True)
+    other = skills_local / "f4c-other-flow"
+    alias = skills_local / "f4c-alias-flow"
+    try:
+        other.mkdir(parents=True, exist_ok=True)
+        sentinel = other / "SKILL.md"
+        sentinel.write_text("keep-other\n", encoding="utf-8")
+        if alias.exists() or alias.is_symlink():
+            alias.unlink()
+        alias.symlink_to(other)
+        with pytest.raises(workflow_install.WorkflowInstallError):
+            workflow_install.uninstall_workflow("f4c-alias-flow", config=config)
+        assert other.is_dir()
+        assert sentinel.read_text(encoding="utf-8") == "keep-other\n"
+        assert alias.is_symlink()
+    finally:
+        if alias.is_symlink() or alias.exists():
+            alias.unlink()
+        shutil.rmtree(other, ignore_errors=True)
+
+
+def test_uninstall_rejects_symlink_alias_escaping_tree(temp_project):
+    """F4: skills.local alias pointing outside skills.local is refused; target kept."""
+    import workflow_install
+
+    config, project, _config_path = temp_project
+    outside = project / "escaped-target"
+    outside.mkdir()
+    sentinel = outside / "SKILL.md"
+    sentinel.write_text("keep-outside\n", encoding="utf-8")
+    skills_local = PLUGIN_ROOT / "skills.local"
+    skills_local.mkdir(parents=True, exist_ok=True)
+    alias = skills_local / "f4c-escape-flow"
+    try:
+        if alias.exists() or alias.is_symlink():
+            alias.unlink()
+        alias.symlink_to(outside)
+        with pytest.raises(workflow_install.WorkflowInstallError):
+            workflow_install.uninstall_workflow("f4c-escape-flow", config=config)
+        assert outside.is_dir()
+        assert sentinel.read_text(encoding="utf-8") == "keep-outside\n"
+        assert alias.is_symlink()
+    finally:
+        if alias.is_symlink() or alias.exists():
+            alias.unlink()
+
+
+def test_uninstall_real_directory_still_works(temp_project):
+    """F4: a real skills.local directory overlay still uninstalls."""
+    import workflow_install
+
+    config, _project, _config_path = temp_project
+    overlay = PLUGIN_ROOT / "skills.local" / "f4c-real-flow"
+    try:
+        overlay.mkdir(parents=True, exist_ok=True)
+        (overlay / "SKILL.md").write_text("remove-me\n", encoding="utf-8")
+        result = workflow_install.uninstall_workflow("f4c-real-flow", config=config)
+        assert result.get("removed") is True
+        assert not overlay.exists()
+    finally:
+        shutil.rmtree(overlay, ignore_errors=True)
+
+
+def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction | None:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
+
+
+def test_build_parser_poisoned_workflow_install_records_diagnostic():
+    """F5: optional import failure is fail-soft and records a diagnostic."""
+    import chief_of_staff
+
+    saved = sys.modules.get("workflow_install")
+    sys.modules["workflow_install"] = None
+    try:
+        buf = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            parser = chief_of_staff.build_parser()
+        assert parser is not None
+        diagnostic = (err.getvalue() + buf.getvalue()).lower()
+        assert "workflow_install" in diagnostic
+    finally:
+        if saved is not None:
+            sys.modules["workflow_install"] = saved
+        else:
+            sys.modules.pop("workflow_install", None)
+
+
+def test_build_parser_surfaces_workflows_registration_failure(monkeypatch):
+    """F5: add_workflows_parser exception is surfaced and incomplete command is removed."""
+    import chief_of_staff
+    import workflow_install
+
+    def boom(sub):
+        sub.add_parser("workflows", help="incomplete")
+        raise RuntimeError("registration exploded")
+
+    monkeypatch.setattr(workflow_install, "add_workflows_parser", boom)
+    buf = io.StringIO()
+    err = io.StringIO()
+    with redirect_stdout(buf), redirect_stderr(err):
+        parser = chief_of_staff.build_parser()
+    combined = buf.getvalue() + err.getvalue()
+    assert "registration exploded" in combined
+    root = _subparsers(parser)
+    assert root is not None
+    assert "workflows" not in root.choices
+
+
+def test_hooks_poisoned_workflow_hooks_records_diagnostic():
+    """F5: workflow_hooks import failure is fail-soft and records a diagnostic."""
+    saved_wh = sys.modules.get("workflow_hooks")
+    sys.modules["workflow_hooks"] = None
+    sys.modules.pop("hooks", None)
+    try:
+        buf = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(err):
+            hooks_mod = importlib.import_module("hooks")
+        total = sum(len(items) for items in hooks_mod.ALL_HOOKS.values())
+        assert total == 10
+        diagnostic = (err.getvalue() + buf.getvalue()).lower()
+        assert "workflow_hooks" in diagnostic
+    finally:
+        if saved_wh is not None:
+            sys.modules["workflow_hooks"] = saved_wh
+        else:
+            sys.modules.pop("workflow_hooks", None)
+        sys.modules.pop("hooks", None)
+        importlib.import_module("hooks")

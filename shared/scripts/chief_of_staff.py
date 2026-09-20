@@ -2411,9 +2411,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     l_bundle.add_argument("--json", action="store_true")
     l_bundle.set_defaults(func=cmd_logs_bundle)
-    try: __import__("workflow_install").add_workflows_parser(sub)  # noqa: E701
-    except Exception: pass  # noqa: E701
+    try:
+        from workflow_install import add_workflows_parser
+    except Exception as exc:
+        print(
+            f"Warning: workflow_install unavailable ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            add_workflows_parser(sub)
+        except Exception as exc:
+            _drop_subparser(sub, "workflows")
+            print(
+                f"Warning: workflows command registration failed ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
     return parser
+
+
+def _drop_subparser(sub: argparse._SubParsersAction, name: str) -> None:
+    """Remove a partially registered nested command so a failed attach cannot linger."""
+    name_map = getattr(sub, "_name_parser_map", None)
+    if isinstance(name_map, dict):
+        name_map.pop(name, None)
+    choices = getattr(sub, "choices", None)
+    if isinstance(choices, dict):
+        choices.pop(name, None)
+    actions = getattr(sub, "_choices_actions", None)
+    if isinstance(actions, list):
+        sub._choices_actions = [
+            action for action in actions if getattr(action, "dest", None) != name
+        ]
 
 
 def _run_had_warnings() -> bool:

@@ -59,18 +59,21 @@ def _overlay_dir(name: str) -> Path:
 
 
 def _overlay_under_skills_local(name: str) -> Path:
-    """Resolve skills.local/<name> and refuse anything outside that tree."""
-    overlay = _overlay_dir(name).resolve()
+    """Return skills.local/<name> after containment checks. Never follow a symlink overlay."""
+    overlay = _overlay_dir(name)
     root = (PLUGIN_ROOT / "skills.local").resolve()
+    if overlay.is_symlink():
+        raise WorkflowInstallError(f"refusing symlink overlay: {overlay}")
     try:
-        overlay.relative_to(root)
+        resolved = overlay.resolve()
+        resolved.relative_to(root)
     except ValueError as exc:
         raise WorkflowInstallError(
             f"refusing path outside skills.local: {overlay}"
         ) from exc
-    if overlay == root:
+    if resolved == root:
         raise WorkflowInstallError("refusing to mutate skills.local itself")
-    return overlay
+    return resolved
 
 
 def _overlay_skill(name: str) -> Path:
@@ -263,6 +266,12 @@ def cmd_advance(args: argparse.Namespace) -> int:
         result = workflow_runs.advance_run(
             run_id, index, config=config, actor=workflow_runs.OPERATOR_ACTOR
         )
+        if isinstance(result, Mapping):
+            import workflow_hooks
+
+            skipped = workflow_hooks._apply_degraded_skips(result, config)
+            if isinstance(skipped, Mapping):
+                result = skipped
     except Exception as exc:
         return _cli_error(exc)
     return _emit(result, args)

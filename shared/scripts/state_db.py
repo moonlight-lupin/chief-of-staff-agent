@@ -625,7 +625,7 @@ class StateDB:
         try:
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
-            self.conn.execute("PRAGMA busy_timeout=10000")
+            self.conn.execute(f"PRAGMA busy_timeout={int(getattr(self, 'busy_timeout_ms', 10000))}")
             self._set_wal_with_retry()
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.execute("PRAGMA synchronous=NORMAL")
@@ -1535,6 +1535,7 @@ def load_store(
     config: Mapping[str, Any] | None = None,
     *,
     validate: bool = True,
+    open_db: Any = None,
 ) -> dict[str, Any]:
     """Load a KV store from SQLite, creating and returning its empty template if missing.
 
@@ -1542,7 +1543,8 @@ def load_store(
     They are never read as authoritative state after that.
     """
     get_store_path(store_name, config=config)  # validate name
-    with _open_db(config) as db:
+    opener = open_db if open_db is not None else _open_db
+    with opener(config) as db:
         data = db.get_kv(store_name)
         if data is None:
             data = _template(store_name)
@@ -1678,6 +1680,7 @@ def mutate_kv(
     after: Mapping[str, Any] | None = None,
     actor: str = "agent",
     _fill_defaults: bool = False,
+    open_db: Any = None,
 ) -> T:
     """Read-modify-write a KV store under a single BEGIN IMMEDIATE transaction.
 
@@ -1693,7 +1696,8 @@ def mutate_kv(
         after_box["data"] = data
         return result
 
-    with _open_db(config) as db:
+    opener = open_db if open_db is not None else _open_db
+    with opener(config) as db:
         result = db.mutate_kv(store_name, _wrapped, _fill_defaults=_fill_defaults)
         plain_data = _plain(dict(after_box.get("data") or {}))
         if yaml is not None:
@@ -1892,8 +1896,9 @@ def list_pending_actions(
         return db.list_actions(state=state, include_expired=include_expired)
 
 
-def get_pending_action(config: Any, action_id: str) -> dict[str, Any] | None:
-    with _open_db(config) as db:
+def get_pending_action(config: Any, action_id: str, *, open_db: Any = None) -> dict[str, Any] | None:
+    opener = open_db if open_db is not None else _open_db
+    with opener(config) as db:
         return db.get_action(action_id)
 
 

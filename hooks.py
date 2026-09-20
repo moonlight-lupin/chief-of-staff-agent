@@ -30,9 +30,10 @@ if str(_SHARED_SCRIPTS) not in sys.path:
 from config_loader import is_default_assistant_name  # noqa: E402
 try:
     from workflow_hooks import advancement, pointer_strip  # noqa: E402
-except Exception:  # fail-soft: hooks.py must import even if workflow_hooks cannot
+except Exception as exc:  # fail-soft: hooks.py must import even if workflow_hooks cannot
     advancement = None
     pointer_strip = None
+    print(f"[CoS] Warning: workflow_hooks import failed: {exc}", file=sys.stderr)
 
 
 def _load_company_yaml() -> Optional[dict]:
