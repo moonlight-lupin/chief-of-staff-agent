@@ -6,16 +6,20 @@ event-driven; review_queue steps are re-observed via observe_and_advance.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from state_db import get_pending_action, load_store
+from state_db import ConcurrencyError, get_pending_action, load_store
 from workflow_runs import (
     ACTIVE_STATES,
+    HOOK_ACTOR,
     STORE_NAME as STORE_RUNS,
     advance_run,
+    get_facts,
     get_run,
+    skip_step,
 )
 
 STORE_FACTS = "workflow_facts"
@@ -42,9 +46,8 @@ def advancement(
     **kwargs: Any,
 ) -> str | None:
     """post_tool_call: advance the current step when its completion signal is met."""
-    del result
     try:
-        return _advancement(tool_name, args, context, **kwargs)
+        return _advancement(tool_name, args, result, context, **kwargs)
     except Exception:
         return None
 
@@ -121,7 +124,7 @@ def observe_and_advance(
         {"kind": "review_queue"},
         config=config,
         now=now,
-        actor="hook:workflow-orchestrator",
+        actor=HOOK_ACTOR,
     )
 
 
@@ -129,7 +132,7 @@ def _pointer_strip(context: dict | None, **kwargs: Any) -> str | None:
     session_id = _session_id(context)
     if not session_id:
         return None
-    config = kwargs.get("config")
+    config = _resolve_config(kwargs.get("config"))
     now = kwargs.get("now")
     run = _owned_active_run(config, session_id)
     if run is None:
@@ -148,13 +151,14 @@ def _pointer_strip(context: dict | None, **kwargs: Any) -> str | None:
 def _advancement(
     tool_name: str,
     args: dict | None,
+    result: Any,
     context: dict | None,
     **kwargs: Any,
 ) -> str | None:
     session_id = _session_id(context)
     if not session_id:
         return None
-    config = kwargs.get("config")
+    config = _resolve_config(kwargs.get("config"))
     now = kwargs.get("now")
     run = _owned_active_run(config, session_id)
     if run is None:
@@ -164,16 +168,31 @@ def _advancement(
     if step is None:
         return None
     payload = args if isinstance(args, dict) else {}
-    if not _event_matches_step(step, tool_name, payload, run, config, now=now, exit_code=kwargs.get("exit_code")):
-        return None
-    advance_run(
-        str(run.get("workflow_run_id") or ""),
-        index,
-        {"kind": _signal_key(step) or "event"},
-        config=config,
+    if not _event_matches_step(
+        step,
+        tool_name,
+        payload,
+        run,
+        config,
         now=now,
-        actor="hook:workflow-orchestrator",
-    )
+        exit_code=kwargs.get("exit_code"),
+        result=result,
+    ):
+        return None
+    run_id = str(run.get("workflow_run_id") or "")
+    try:
+        advanced = advance_run(
+            run_id,
+            index,
+            {"kind": _signal_key(step) or "event"},
+            config=config,
+            now=now,
+            actor=HOOK_ACTOR,
+        )
+    except ConcurrencyError:
+        return None
+    if isinstance(advanced, Mapping):
+        _apply_degraded_skips(advanced, config, now=now)
     return None
 
 
@@ -186,11 +205,14 @@ def _event_matches_step(
     *,
     now: datetime | None,
     exit_code: Any,
+    result: Any = None,
 ) -> bool:
     if "manual" in step:
         return False
     if "command" in step:
-        return _command_matches(step, tool_name, args, run, now=now, exit_code=exit_code)
+        return _command_matches(
+            step, tool_name, args, run, now=now, exit_code=exit_code, result=result
+        )
     if "file" in step:
         return _file_matches(step, tool_name, args, run, config)
     if "review_queue" in step:
@@ -206,8 +228,9 @@ def _command_matches(
     *,
     now: datetime | None,
     exit_code: Any,
+    result: Any = None,
 ) -> bool:
-    if tool_name != "terminal" or exit_code != 0:
+    if tool_name != "terminal" or not _command_succeeded(result, exit_code):
         return False
     command = str(args.get("command") or "")
     pattern = ""
@@ -221,6 +244,89 @@ def _command_matches(
     if started is not None and event_time < started:
         return False
     return True
+
+
+def _command_succeeded(result: Any, exit_code: Any) -> bool:
+    """exit_code kwarg wins when present; otherwise parse result (HOOKS.md post_tool_call)."""
+    if exit_code is not None:
+        try:
+            return int(exit_code) == 0
+        except (TypeError, ValueError):
+            return False
+    if result is None:
+        return False
+    if isinstance(result, Mapping):
+        if "exit_code" in result:
+            return _command_succeeded(None, result.get("exit_code"))
+        if "returncode" in result:
+            return _command_succeeded(None, result.get("returncode"))
+        if "success" in result:
+            return bool(result.get("success"))
+        return False
+    code = getattr(result, "exit_code", None)
+    if code is None:
+        code = getattr(result, "returncode", None)
+    if code is not None:
+        return _command_succeeded(None, code)
+    if isinstance(result, str):
+        text = result.strip()
+        if not text:
+            return False
+        if text[:1] in "{[":
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if parsed is not None:
+                return _command_succeeded(parsed, None)
+        lowered = text.lower()
+        if lowered in {"failed", "error", "failure"}:
+            return False
+        if "traceback" in lowered or "exit_code=1" in lowered or "returncode=1" in lowered:
+            return False
+        return True
+    return False
+
+
+def _apply_degraded_skips(
+    run: Mapping[str, Any],
+    config: Mapping[str, Any] | None,
+    *,
+    now: datetime | None,
+) -> None:
+    """After advancement, skip the current step when a DEGRADED verdict names it."""
+    facts = _load_facts(config)
+    current = dict(run)
+    seen: set[str] = set()
+    while isinstance(current, Mapping) and current.get("state") in ACTIVE_STATES:
+        verdict = compute_verdict(current, facts, now=now)
+        skip_ids = [
+            str(item).strip()
+            for item in (verdict.get("skip") or verdict.get("skip_list") or [])
+            if str(item).strip()
+        ]
+        if not skip_ids:
+            return
+        step = _step_at(current, _current_index(current))
+        if step is None:
+            return
+        step_id = str(step.get("id") or "").strip()
+        if not step_id or step_id not in skip_ids or step_id in seen:
+            return
+        seen.add(step_id)
+        try:
+            current = skip_step(
+                str(current.get("workflow_run_id") or ""),
+                _current_index(current),
+                "preflight degraded",
+                config=config,
+                now=now,
+                actor=HOOK_ACTOR,
+            )
+        except ConcurrencyError:
+            return
+        except Exception:
+            return
 
 
 def _file_matches(
@@ -288,10 +394,7 @@ def _owned_active_run(config: Mapping[str, Any] | None, session_id: str) -> dict
 
 
 def _load_facts(config: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    data = load_store(STORE_FACTS, config=config, validate=False)
-    if not isinstance(data, dict) or not data:
-        return None
-    return data
+    return get_facts(config=config)
 
 
 def _facts_are_stale(facts: Mapping[str, Any], now: datetime | None) -> bool:
@@ -440,10 +543,23 @@ def _session_id(context: dict | None) -> str:
     return value.strip()
 
 
-def _project_root(config: Mapping[str, Any] | None) -> Path | None:
-    if not isinstance(config, Mapping):
+def _resolve_config(config: Any) -> Mapping[str, Any] | None:
+    if isinstance(config, Mapping):
+        return config
+    try:
+        from config_loader import load_config
+
+        loaded = load_config()
+    except Exception:
         return None
-    paths = config.get("paths")
+    return loaded if isinstance(loaded, Mapping) else None
+
+
+def _project_root(config: Mapping[str, Any] | None) -> Path | None:
+    resolved = config if isinstance(config, Mapping) else _resolve_config(config)
+    if not isinstance(resolved, Mapping):
+        return None
+    paths = resolved.get("paths")
     if not isinstance(paths, Mapping):
         return None
     raw = paths.get("project_root")

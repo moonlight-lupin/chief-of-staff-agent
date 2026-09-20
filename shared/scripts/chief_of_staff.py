@@ -2411,8 +2411,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     l_bundle.add_argument("--json", action="store_true")
     l_bundle.set_defaults(func=cmd_logs_bundle)
-    __import__("workflow_install").add_workflows_parser(sub)
-
+    try: __import__("workflow_install").add_workflows_parser(sub)  # noqa: E701
+    except Exception: pass  # noqa: E701
     return parser
 
 

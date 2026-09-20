@@ -1114,27 +1114,39 @@ def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path)
 
 
 def _check_cron_skill_files(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    from workflow_cron import check_cron_skill_files
+    try:
+        from workflow_cron import check_cron_skill_files
 
-    return check_cron_skill_files(fix, data, config_path)
+        return check_cron_skill_files(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("cron_skill_files", "warn", f"workflow cron checks unavailable: {exc}")
 
 
 def _check_stale_run(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    from workflow_cron import check_stale_run
+    try:
+        from workflow_cron import check_stale_run
 
-    return check_stale_run(fix, data, config_path)
+        return check_stale_run(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("stale_run", "warn", f"workflow cron checks unavailable: {exc}")
 
 
 def _check_unhonored_advancement(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    from workflow_cron import check_unhonored_advancement
+    try:
+        from workflow_cron import check_unhonored_advancement
 
-    return check_unhonored_advancement(fix, data, config_path)
+        return check_unhonored_advancement(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("unhonored_advancement", "warn", f"workflow cron checks unavailable: {exc}")
 
 
 def _check_workflow_crons_doc(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    from workflow_cron import check_workflow_crons_doc
+    try:
+        from workflow_cron import check_workflow_crons_doc
 
-    return check_workflow_crons_doc(fix, data, config_path)
+        return check_workflow_crons_doc(fix, data, config_path)
+    except Exception as exc:
+        return CheckResult("workflow_crons_doc", "warn", f"workflow cron checks unavailable: {exc}")
 
 
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [

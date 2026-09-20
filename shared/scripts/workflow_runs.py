@@ -37,11 +37,14 @@ except Exception:  # pragma: no cover
     yaml = None
 
 STORE_NAME = "workflow_runs"
+STORE_FACTS = "workflow_facts"
 HOSTED_SESSION_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
 ACTIVE_STATES = frozenset({"running", "awaiting-approval"})
-TERMINAL_STATES = frozenset({"completed", "aborted"})
+TERMINAL_STATES = frozenset({"completed", "aborted", "failed"})
 COMPLETED_RETENTION = 10
 DEFAULT_STALE_HOURS = 48
+DEFAULT_FACTS_MAX_AGE_HOURS = 1
+STATE_FILE_NAMES = ("pipeline.yaml", "invoices.yaml", "expenses.yaml", "todos.yaml")
 HOOK_ACTOR = "hook:workflow-orchestrator"
 OPERATOR_ACTOR = "operator"
 
@@ -271,7 +274,10 @@ def _prune_completed(runs: dict[str, Any], workflow_name: str) -> None:
 
 
 def _mark_completed(run: dict[str, Any], runs: dict[str, Any], stamp: str) -> None:
+    status = _step_status_list(run)
+    degraded = any(token == "skipped" for token in status)
     run["state"] = "completed"
+    run["degraded"] = degraded
     run["last_progress_at"] = stamp
     _prune_completed(runs, str(run.get("workflow_name") or ""))
 
@@ -650,6 +656,107 @@ def is_stale(
     return stale, step_name, age
 
 
+def _facts_project_root(config: Mapping[str, Any] | None) -> Path | None:
+    if not isinstance(config, Mapping):
+        return None
+    paths = config.get("paths")
+    if not isinstance(paths, Mapping) or not paths.get("project_root"):
+        return None
+    return Path(str(paths["project_root"])).expanduser()
+
+
+def get_facts(*, config: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """Load the workflow_facts kv doc. Missing or empty docs return None."""
+    data = load_store(STORE_FACTS, config=config, validate=False)
+    if not isinstance(data, dict) or not data:
+        return None
+    return copy.deepcopy(data)
+
+
+def build_facts(
+    config: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    workflow_name: str | None = None,
+) -> dict[str, Any]:
+    """Rebuild a facts payload from capabilities + state-file presence. Does not write."""
+    capabilities: dict[str, Any] = {}
+    try:
+        from capability_report import build_capability_report
+
+        report = build_capability_report(config or {})
+        supported = report.get("supported") if isinstance(report, Mapping) else None
+        if isinstance(supported, list):
+            capabilities = {str(name): True for name in supported if str(name).strip()}
+        unsupported = report.get("unsupported") if isinstance(report, Mapping) else None
+        if isinstance(unsupported, list):
+            for name in unsupported:
+                key = str(name).strip()
+                if key:
+                    capabilities.setdefault(key, False)
+    except Exception:
+        capabilities = {}
+    root = _facts_project_root(config)
+    state_files: dict[str, bool] = {}
+    for name in STATE_FILE_NAMES:
+        state_files[name] = bool(root is not None and (root / name).is_file())
+    payload: dict[str, Any] = {
+        "refreshed_at": _iso(now),
+        "facts_max_age_hours": DEFAULT_FACTS_MAX_AGE_HOURS,
+        "capabilities": capabilities,
+        "state_files": state_files,
+    }
+    if workflow_name:
+        payload["workflow_name"] = workflow_name
+    return payload
+
+
+def refresh_facts(
+    facts: Mapping[str, Any] | None = None,
+    *,
+    config: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    actor: str = OPERATOR_ACTOR,
+    workflow_name: str | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Write the workflow_facts kv doc via mutate_kv with audit fields."""
+    stamp = _iso(now)
+    if isinstance(facts, Mapping) and facts:
+        payload = copy.deepcopy(dict(facts))
+    else:
+        payload = build_facts(config, now=now, workflow_name=workflow_name)
+    payload["refreshed_at"] = stamp
+    try:
+        payload["facts_max_age_hours"] = float(
+            payload.get("facts_max_age_hours", DEFAULT_FACTS_MAX_AGE_HOURS)
+        )
+    except (TypeError, ValueError):
+        payload["facts_max_age_hours"] = float(DEFAULT_FACTS_MAX_AGE_HOURS)
+    if not isinstance(payload.get("capabilities"), dict):
+        payload["capabilities"] = {}
+    if not isinstance(payload.get("state_files"), dict):
+        payload["state_files"] = {}
+    if workflow_name:
+        payload["workflow_name"] = workflow_name
+    if run_id:
+        payload["workflow_run_id"] = run_id
+
+    def _write(data: dict[str, Any]) -> dict[str, Any]:
+        data.clear()
+        data.update(copy.deepcopy(payload))
+        return copy.deepcopy(data)
+
+    return mutate_kv(
+        STORE_FACTS,
+        _write,
+        config=config,
+        action="workflow.refresh-facts",
+        actor=actor or OPERATOR_ACTOR,
+        after=payload,
+    )
+
+
 def _json_dump(value: Any) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False, default=str)
 
@@ -692,7 +799,7 @@ def _load_config_or_exit(config_path: str | None) -> Any | None:
 
 
 def _cli_error(exc: BaseException) -> int:
-    print(str(exc), file=sys.stderr)
+    print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
     return 1
 
 
@@ -741,7 +848,7 @@ def cmd_abort(args: argparse.Namespace) -> int:
         return 1
     try:
         run = abort_run(args.run_id, config=config)
-    except WorkflowRunError as exc:
+    except Exception as exc:
         return _cli_error(exc)
     if getattr(args, "summary", False):
         _print_table([run])
@@ -756,7 +863,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return 1
     try:
         run = resume_run(args.run_id, args.session_id, config=config)
-    except WorkflowRunError as exc:
+    except Exception as exc:
         return _cli_error(exc)
     if getattr(args, "summary", False):
         _print_table([run])

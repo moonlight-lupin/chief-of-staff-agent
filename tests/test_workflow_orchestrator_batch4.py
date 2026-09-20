@@ -628,10 +628,11 @@ def test_fire_occurrence_parked_run_exactly_once_wakeup_note(temp_project, monke
     binding = _binding(config)
     parked_count = binding.get("parked_count", 0)
     assert parked_count >= 1
-    # Exactly-once: at most 1 wakeup note tracked in the cron doc.
+    # US-9 (review round B): wakeup notes are per-occurrence deduped, not
+    # globally capped at 1 — each distinct occurrence while parked reports.
     wakeup_notes = binding.get("wakeup_notes", [])
     assert isinstance(wakeup_notes, list)
-    assert len(wakeup_notes) <= 1
+    assert len(wakeup_notes) >= 1
 
 
 def test_fire_occurrence_records_occurrences_bounded_last_20(temp_project, monkeypatch):
@@ -750,8 +751,8 @@ def test_check_cron_skill_files_no_bindings_passes(temp_project, monkeypatch):
 
 
 def test_check_stale_run_warns_with_run_id_and_last_progress(temp_project, monkeypatch):
-    """US-12: active run whose started_at is stale (>24h default via now=) -> warn
-    'stale run' with run_id + last_progress_at."""
+    """US-12 (review round B): active run stale per 48h-from-last-progress
+    threshold -> warn 'stale run' with run_id + last_progress_at + step."""
     config, _project, config_path = temp_project
     mod = _cron()
     runs = _runs()
@@ -764,8 +765,9 @@ def test_check_stale_run_warns_with_run_id_and_last_progress(temp_project, monke
         config=config,
         now=FROZEN,
     )
-    # Inject now= 25h after started_at (default 24h threshold).
-    later = FROZEN + timedelta(hours=25)
+    # Inject now= 49h after started_at (US-12 review round B: threshold is
+    # 48h from last_progress_at — started_at-only 24h rule was replaced).
+    later = FROZEN + timedelta(hours=49)
     result = mod.check_stale_run(False, config, config_path, now=later)
     CheckResult = _check_result_class()
     assert isinstance(result, CheckResult)
@@ -775,7 +777,7 @@ def test_check_stale_run_warns_with_run_id_and_last_progress(temp_project, monke
 
 
 def test_check_stale_run_fresh_run_passes(temp_project, monkeypatch):
-    """US-12: active run within the 24h threshold -> pass."""
+    """US-12 (review round B): active run within the 48h threshold -> pass."""
     config, _project, config_path = temp_project
     mod = _cron()
     runs = _runs()

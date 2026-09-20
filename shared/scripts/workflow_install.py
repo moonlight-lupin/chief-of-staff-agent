@@ -347,6 +347,155 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     return _emit(result, args)
 
 
+def cmd_bind_action(args: argparse.Namespace) -> int:
+    import workflow_runs
+
+    try:
+        config = _safe_load_config(getattr(args, "config", None))
+        workflow_name = str(getattr(args, "workflow", "") or "").strip()
+        step_id = str(getattr(args, "step", "") or "").strip()
+        action_id = str(getattr(args, "action_id", "") or "").strip()
+        if not workflow_name or not step_id or not action_id:
+            raise WorkflowInstallError("bind-action requires --workflow, --step, and --action-id")
+        active = None
+        for run in workflow_runs.list_runs(config=config):
+            if run.get("workflow_name") == workflow_name and run.get("state") in workflow_runs.ACTIVE_STATES:
+                active = run
+                break
+        if active is None:
+            raise WorkflowInstallError(f"no active run for workflow {workflow_name}")
+        step = None
+        definition = active.get("definition") if isinstance(active, Mapping) else None
+        steps = definition.get("steps") if isinstance(definition, Mapping) else []
+        if isinstance(steps, list):
+            for raw in steps:
+                if isinstance(raw, Mapping) and str(raw.get("id") or "") == step_id:
+                    step = raw
+                    break
+        if step is None:
+            raise WorkflowInstallError(f"step {step_id!r} is not in the active run")
+        approval_gated = bool(step.get("requires_approval")) or "review_queue" in step
+        if not approval_gated:
+            raise WorkflowInstallError(f"step {step_id} is not approval-gated")
+        if str(active.get("state") or "") not in {"running", "awaiting-approval"}:
+            raise WorkflowInstallError(
+                f"run is not awaiting-approval (state={active.get('state')})"
+            )
+        result = workflow_runs.bind_action(
+            str(active.get("workflow_run_id") or ""),
+            step_id,
+            action_id,
+            config=config,
+            actor=workflow_runs.OPERATOR_ACTOR,
+        )
+    except Exception as exc:
+        return _cli_error(exc)
+    return _emit(result, args)
+
+
+def cmd_refresh_facts(args: argparse.Namespace) -> int:
+    import workflow_runs
+
+    try:
+        config = _safe_load_config(getattr(args, "config", None))
+        workflow_name = str(getattr(args, "workflow", "") or "").strip() or None
+        run_id = str(getattr(args, "run_id", "") or "").strip() or None
+        facts_path = Path(str(getattr(args, "facts", "") or "")).expanduser()
+        if not facts_path.is_file():
+            raise WorkflowInstallError(f"facts file not found: {facts_path}")
+        raw = json.loads(facts_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise WorkflowInstallError("facts file must contain a JSON object")
+        result = workflow_runs.refresh_facts(
+            raw,
+            config=config,
+            workflow_name=workflow_name,
+            run_id=run_id,
+            actor=workflow_runs.OPERATOR_ACTOR,
+        )
+    except Exception as exc:
+        return _cli_error(exc)
+    return _emit(result, args)
+
+
+def cmd_fire(args: argparse.Namespace) -> int:
+    from workflow_cron import fire_by_schedule_id
+
+    try:
+        config = _safe_load_config(getattr(args, "config", None))
+        schedule_id = str(getattr(args, "schedule_id", "") or "").strip()
+        if not schedule_id:
+            raise WorkflowInstallError("fire requires --schedule-id")
+        result = fire_by_schedule_id(schedule_id, config)
+        if result is None:
+            result = {"fired": False, "schedule_id": schedule_id}
+    except Exception as exc:
+        return _cli_error(exc)
+    return _emit(result, args)
+
+
+def cmd_install_cron(args: argparse.Namespace) -> int:
+    try:
+        config = _safe_load_config(getattr(args, "config", None))
+        name = _validated_name(str(args.name))
+        if yaml is None:
+            raise WorkflowInstallError("PyYAML is required to install-cron")
+        path = _yaml_path(config, name)
+        if not path.is_file():
+            raise WorkflowInstallError(f"workflow YAML not found: {path}")
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        workflow = validate_workflow(raw)
+        if workflow["name"] != name:
+            raise WorkflowInstallError(
+                f"workflow name {workflow['name']!r} does not match install name {name!r}"
+            )
+        if not _has_schedule(workflow):
+            raise WorkflowInstallError(f"workflow {name} has no triggers.schedule.cron")
+        existing_binding = get_cron_binding(name, config=config)
+        session_id = str(getattr(args, "session_id", "") or "") or "operator"
+        if existing_binding is not None:
+            binding = install_workflow_cron(
+                name, workflow, config, session_id=session_id
+            )
+            result = {"name": name, "cron_installed": True, "schedule_id": binding.get("schedule_id")}
+        else:
+            action = find_cron_create_action(name, config=config)
+            if action is not None and action.get("state") == "executing":
+                binding = install_workflow_cron(
+                    name, workflow, config, session_id=session_id
+                )
+                mark_executed(config, str(action.get("id") or ""), {"success": True})
+                result = {
+                    "name": name,
+                    "cron_installed": True,
+                    "schedule_id": binding.get("schedule_id"),
+                }
+            else:
+                proposed = propose_cron_create(
+                    name, workflow, config, session_id=session_id
+                )
+                result = {
+                    "name": name,
+                    "cron_installed": False,
+                    "pending_action_id": str(proposed.get("id") or ""),
+                    "pending_action_type": "cron.create",
+                }
+    except Exception as exc:
+        return _cli_error(exc)
+    return _emit(result, args)
+
+
+def cmd_uninstall_cron(args: argparse.Namespace) -> int:
+    try:
+        config = _safe_load_config(getattr(args, "config", None))
+        name = _validated_name(str(args.name))
+        uninstall_workflow_cron(name, config)
+        result = {"name": name, "cron_removed": True}
+    except Exception as exc:
+        return _cli_error(exc)
+    return _emit(result, args)
+
+
 def _add_summary(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--summary", action="store_true", help="Human-readable table instead of JSON")
 
@@ -402,3 +551,33 @@ def add_workflows_parser(sub: argparse._SubParsersAction) -> None:
     wf_uninstall.add_argument("name", help="Workflow name to uninstall")
     _add_summary(wf_uninstall)
     wf_uninstall.set_defaults(func=cmd_uninstall)
+
+    wf_bind = wf_sub.add_parser("bind-action", help="Bind a review-queue action_id onto an approval step")
+    wf_bind.add_argument("--workflow", required=True, help="Workflow name whose active run to bind")
+    wf_bind.add_argument("--step", required=True, help="Step id to bind")
+    wf_bind.add_argument("--action-id", required=True, dest="action_id", help="Pending action id")
+    _add_summary(wf_bind)
+    wf_bind.set_defaults(func=cmd_bind_action)
+
+    wf_facts = wf_sub.add_parser("refresh-facts", help="Write the workflow_facts kv document")
+    wf_facts.add_argument("--workflow", required=True, help="Workflow name")
+    wf_facts.add_argument("--run-id", required=True, dest="run_id", help="workflow_run_id")
+    wf_facts.add_argument("--facts", required=True, help="Path to facts JSON")
+    _add_summary(wf_facts)
+    wf_facts.set_defaults(func=cmd_refresh_facts)
+
+    wf_fire = wf_sub.add_parser("fire", help="Fire a due cron occurrence for a schedule id")
+    wf_fire.add_argument("--schedule-id", required=True, dest="schedule_id", help="Cron schedule id")
+    _add_summary(wf_fire)
+    wf_fire.set_defaults(func=cmd_fire)
+
+    wf_install_cron = wf_sub.add_parser("install-cron", help="Install or re-install the hermes cron job")
+    wf_install_cron.add_argument("name", help="Workflow name (workflows/<name>.yaml)")
+    wf_install_cron.add_argument("--session-id", default="", help="Session id for the cron job")
+    _add_summary(wf_install_cron)
+    wf_install_cron.set_defaults(func=cmd_install_cron)
+
+    wf_uninstall_cron = wf_sub.add_parser("uninstall-cron", help="Remove the hermes cron binding")
+    wf_uninstall_cron.add_argument("name", help="Workflow name to uninstall-cron")
+    _add_summary(wf_uninstall_cron)
+    wf_uninstall_cron.set_defaults(func=cmd_uninstall_cron)

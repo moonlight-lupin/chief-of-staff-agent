@@ -12,7 +12,7 @@ import hashlib
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -32,7 +32,10 @@ from state_db import (  # noqa: E402
 )
 from workflow_runs import (  # noqa: E402
     ACTIVE_STATES,
+    DEFAULT_STALE_HOURS,
     WorkflowRunError,
+    get_facts,
+    is_stale,
     list_runs,
     start_run,
 )
@@ -41,7 +44,6 @@ from workflows import validate_workflow  # noqa: E402
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STORE_CRONS = "workflow_crons"
 CRON_CREATE_TYPE = "cron.create"
-DEFAULT_STALE_RUN_HOURS = 24
 OCCURRENCES_BOUND = 20
 NO_PROGRESS_THRESHOLD = 3
 SCHEDULE_ID_MAX = 32
@@ -189,7 +191,17 @@ def _deliver_target(config: Mapping[str, Any] | None) -> str:
 
 
 def _hermes_cron(cmd: list[str]) -> None:
-    subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+    except Exception as exc:
+        raise WorkflowRunError(f"hermes cron failed: {exc}") from exc
+    if int(getattr(proc, "returncode", 1) or 0) != 0:
+        err = str(getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "").strip()
+        if len(err) > 400:
+            err = err[:400]
+        verb = cmd[2] if len(cmd) > 2 else "command"
+        detail = f": {err}" if err else f" (exit {proc.returncode})"
+        raise WorkflowRunError(f"hermes cron {verb} failed{detail}")
 
 
 def _schedule_timezone(workflow: Mapping[str, Any]) -> str | None:
@@ -381,8 +393,10 @@ def _cron_matches(expr: str, now: datetime, origin: datetime | None = None) -> b
         (moment.weekday() + 1) % 7,
     )
     standard = True
-    for spec, value, bounds in zip(fields, values, _CRON_FIELD_BOUNDS, strict=True):
-        if spec == fields[4] and value == 0 and _field_matches(spec, 7, *bounds):
+    for index, (spec, value, bounds) in enumerate(
+        zip(fields, values, _CRON_FIELD_BOUNDS, strict=True)
+    ):
+        if index == 4 and value == 0 and _field_matches(spec, 7, *bounds):
             continue
         if not _field_matches(spec, value, *bounds):
             standard = False
@@ -400,8 +414,11 @@ def _cron_matches(expr: str, now: datetime, origin: datetime | None = None) -> b
         return False
     if not any(delta_min % step == 0 for step in minute_steps):
         return False
-    for spec, value, bounds in zip(fields[1:], values[1:], _CRON_FIELD_BOUNDS[1:], strict=True):
-        if spec == fields[4] and value == 0 and _field_matches(spec, 7, *bounds):
+    for index, (spec, value, bounds) in enumerate(
+        zip(fields[1:], values[1:], _CRON_FIELD_BOUNDS[1:], strict=True),
+        start=1,
+    ):
+        if index == 4 and value == 0 and _field_matches(spec, 7, *bounds):
             continue
         if not _field_matches(spec, value, *bounds):
             return False
@@ -495,7 +512,8 @@ def install_workflow_cron(
     stamp = _iso(now)
     prompt = (
         f"Run the Chief-of-Staff workflow {name}. Load the generated skill and execute the workflow. "
-        "This is a scheduled run; do not rely on conversation history."
+        "This is a scheduled run; do not rely on conversation history. "
+        f"Then run: chief_of_staff.py workflows fire --schedule-id {schedule_id}"
     )
     cmd = [
         "hermes",
@@ -556,6 +574,7 @@ def uninstall_workflow_cron(name: str, config: Mapping[str, Any] | None) -> None
     if existing is None:
         raise WorkflowRunError(f"no cron binding installed for workflow {name}")
     schedule_id = str(existing.get("schedule_id") or name)
+    _hermes_cron(["hermes", "cron", "remove", schedule_id])
 
     def _remove(data: dict[str, Any]) -> None:
         bindings = _bindings_map(data)
@@ -564,7 +583,52 @@ def uninstall_workflow_cron(name: str, config: Mapping[str, Any] | None) -> None
         bindings.pop(name, None)
 
     _mutate(config, _remove, action="workflow.cron.uninstall", actor=OPERATOR_ACTOR)
-    _hermes_cron(["hermes", "cron", "remove", schedule_id])
+
+
+def _record_wakeup_note(
+    name: str,
+    config: Mapping[str, Any] | None,
+    run: Mapping[str, Any],
+    moment: datetime,
+    *,
+    occurrence_count: int,
+) -> dict[str, Any] | None:
+    target = _deliver_target(config)
+    run_id = str(run.get("workflow_run_id") or "")
+    count = max(int(occurrence_count or 0), 1)
+
+    def _note(data: dict[str, Any]) -> dict[str, Any] | None:
+        bindings = _bindings_map(data)
+        record = bindings.get(name)
+        if not isinstance(record, dict):
+            return None
+        notes = record.get("wakeup_notes")
+        if not isinstance(notes, list):
+            notes = []
+        for existing in notes:
+            if isinstance(existing, Mapping) and _same_minute(existing.get("at"), moment):
+                return dict(existing)
+        note = {
+            "at": _iso(moment),
+            "run_id": run_id,
+            "occurrence_count": count,
+            "delivery_target": target,
+            "message": (
+                f"parked at awaiting-approval (occurrence {count}); "
+                f"wait reported to {target}"
+            ),
+        }
+        notes.append(note)
+        record["wakeup_notes"] = notes[-OCCURRENCES_BOUND:]
+        return dict(note)
+
+    return _mutate(
+        config,
+        _note,
+        action="workflow.wakeup",
+        actor=HOOK_ACTOR,
+        workflow_run_id=run_id or None,
+    )
 
 
 def fire_occurrence(
@@ -616,23 +680,12 @@ def fire_occurrence(
         )
         if str(active.get("state") or "") == "awaiting-approval":
             record["parked_count"] = int(record.get("parked_count") or 0) + 1
-            notes = record.get("wakeup_notes")
-            if not isinstance(notes, list):
-                notes = []
-            if len(notes) < 1:
-                notes.append(
-                    {
-                        "at": _iso(moment),
-                        "run_id": active.get("workflow_run_id"),
-                        "message": "parked at awaiting-approval",
-                    }
-                )
-            record["wakeup_notes"] = notes[:1]
         if progressed:
             record["no_progress_count"] = 0
         else:
             record["no_progress_count"] = int(record.get("no_progress_count") or 0) + 1
         occurrence["no_progress_count"] = record["no_progress_count"]
+        occurrence["parked_count"] = record.get("parked_count")
         return occurrence
 
     fired = _mutate(
@@ -644,6 +697,16 @@ def fire_occurrence(
     )
     if not fired:
         return None
+
+    def _observe(run_id: str) -> None:
+        if not run_id:
+            return
+        try:
+            from workflow_hooks import observe_and_advance
+
+            observe_and_advance(run_id, config, now=moment)
+        except Exception:
+            return
 
     if active is None:
         snapshot = binding.get("workflow")
@@ -660,9 +723,28 @@ def fire_occurrence(
                     actor=HOOK_ACTOR,
                 )
                 fired["run_id"] = run.get("workflow_run_id")
+                _observe(str(run.get("workflow_run_id") or ""))
             except WorkflowRunError:
                 pass
         return fired
+
+    run_id = str(active.get("workflow_run_id") or "")
+    _observe(run_id)
+    parked_now = None
+    try:
+        parked_now = _active_for_workflow(config, name)
+    except Exception:
+        parked_now = active
+    if parked_now is not None and str(parked_now.get("state") or "") == "awaiting-approval":
+        _record_wakeup_note(
+            name,
+            config,
+            parked_now,
+            moment,
+            occurrence_count=int(fired.get("parked_count") or 0),
+        )
+        fired["wakeup_delivered"] = True
+        fired["delivery_target"] = _deliver_target(config)
 
     no_progress = int(fired.get("no_progress_count") or 0)
     if no_progress >= NO_PROGRESS_THRESHOLD:
@@ -721,6 +803,23 @@ def get_cron_binding(name: str, *, config: Mapping[str, Any] | None = None) -> d
     return _get_binding(config, name.strip())
 
 
+def fire_by_schedule_id(
+    schedule_id: str,
+    config: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    sid = str(schedule_id or "").strip()
+    if not sid:
+        return None
+    for binding in list_cron_bindings(config=config):
+        if str(binding.get("schedule_id") or "") == sid:
+            return fire_occurrence(str(binding.get("workflow_name") or ""), config, now=now)
+        if str(binding.get("workflow_name") or "") == sid:
+            return fire_occurrence(sid, config, now=now)
+    return None
+
+
 def check_cron_skill_files(
     fix: bool,
     data: dict[str, Any] | None,
@@ -764,19 +863,22 @@ def check_stale_run(
     except Exception as exc:
         return CheckResult("stale_run", "warn", f"cannot inspect workflow runs: {exc}")
     moment = _aware(now)
-    threshold = timedelta(hours=DEFAULT_STALE_RUN_HOURS)
     stale: list[str] = []
     for run in runs:
         if run.get("state") not in ACTIVE_STATES:
             continue
-        started = _parse_dt(run.get("started_at"))
-        if started is None:
+        try:
+            flagged, step_name, age = is_stale(run, DEFAULT_STALE_HOURS, now=moment)
+        except Exception:
             continue
-        if moment - started < threshold:
+        if not flagged:
             continue
         run_id = str(run.get("workflow_run_id") or "")
-        last_progress = run.get("last_progress_at")
-        stale.append(f"stale run {run_id} last_progress_at={last_progress}")
+        hours = age.total_seconds() / 3600.0
+        stale.append(
+            f"stale run {run_id} stuck on {step_name or 'unknown step'} "
+            f"for {hours:.1f}h (last progress)"
+        )
     if not stale:
         return CheckResult("stale_run", "pass", "no stale active runs")
     return CheckResult("stale_run", "warn", "; ".join(stale))
@@ -799,7 +901,15 @@ def check_unhonored_advancement(
             continue
         step = _current_step(run)
         action_id = str((step or {}).get("action_id") or "").strip()
-        if not _action_succeeded(action_id, cfg):
+        try:
+            succeeded = _action_succeeded(action_id, cfg)
+        except Exception as exc:
+            return CheckResult(
+                "unhonored_advancement",
+                "warn",
+                f"cannot read review-queue action {action_id}: {exc}",
+            )
+        if not succeeded:
             continue
         run_id = str(run.get("workflow_run_id") or "")
         flagged.append(run_id)
@@ -817,13 +927,127 @@ def check_workflow_crons_doc(
     data: dict[str, Any] | None,
     config_path: Path,
 ) -> CheckResult:
-    del fix, config_path
+    del fix
+    cfg = _config_or_none(data)
     try:
-        doc = load_store(STORE_CRONS, config=_config_or_none(data), validate=False)
+        doc = load_store(STORE_CRONS, config=cfg, validate=False)
     except Exception as exc:
         return CheckResult("workflow_crons_doc", "fail", f"workflow_crons doc unreadable: {exc}")
     if not isinstance(doc, dict):
         return CheckResult("workflow_crons_doc", "fail", "workflow_crons doc corrupt")
     if "bindings" in doc and not isinstance(doc.get("bindings"), dict):
         return CheckResult("workflow_crons_doc", "fail", "workflow_crons doc corrupt: bindings is not a mapping")
+    warnings = _cron_reconciliation_warnings(cfg, config_path)
+    warnings.extend(_facts_doctor_warnings(cfg))
+    if warnings:
+        return CheckResult("workflow_crons_doc", "warn", "; ".join(warnings))
     return CheckResult("workflow_crons_doc", "pass", "workflow_crons doc ok")
+
+
+def _workflows_dir(config: Mapping[str, Any] | None, config_path: Path | None = None) -> Path | None:
+    if isinstance(config, Mapping):
+        paths = config.get("paths")
+        if isinstance(paths, Mapping) and paths.get("project_root"):
+            return Path(str(paths["project_root"])).expanduser() / "workflows"
+    if config_path is not None:
+        try:
+            from config_loader import get_project_root, load_config
+
+            loaded = load_config(str(config_path), quiet=True)
+            root = get_project_root(loaded) if loaded is not None else None
+            if root is not None:
+                return Path(root) / "workflows"
+        except Exception:
+            return None
+    return None
+
+
+def _scheduled_workflow_names(workflows_dir: Path | None) -> tuple[set[str], set[str]]:
+    """Return (all yaml names, names that declare a cron schedule)."""
+    names: set[str] = set()
+    scheduled: set[str] = set()
+    if workflows_dir is None or not workflows_dir.is_dir():
+        return names, scheduled
+    try:
+        import yaml as _yaml
+    except Exception:
+        _yaml = None
+    if _yaml is None:
+        return names, scheduled
+    for path in workflows_dir.glob("*.yaml"):
+        names.add(path.stem)
+        try:
+            raw = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(raw, Mapping) and raw.get("name"):
+            names.add(str(raw["name"]))
+        try:
+            workflow = validate_workflow(raw)
+        except Exception:
+            continue
+        name = str(workflow.get("name") or path.stem)
+        names.add(name)
+        triggers = workflow.get("triggers")
+        schedule = triggers.get("schedule") if isinstance(triggers, Mapping) else None
+        if isinstance(schedule, Mapping) and str(schedule.get("cron") or "").strip():
+            scheduled.add(name)
+    return names, scheduled
+
+
+def _cron_reconciliation_warnings(
+    config: Mapping[str, Any] | None,
+    config_path: Path,
+) -> list[str]:
+    warnings: list[str] = []
+    try:
+        bindings = list_cron_bindings(config=config)
+    except Exception as exc:
+        return [f"cannot inspect cron bindings: {exc}"]
+    yaml_names, scheduled = _scheduled_workflow_names(_workflows_dir(config, config_path))
+    bound_names = {
+        str(item.get("workflow_name") or "").strip()
+        for item in bindings
+        if str(item.get("workflow_name") or "").strip()
+    }
+    for name in sorted(scheduled - bound_names):
+        warnings.append(f"scheduled workflow without cron binding: {name}")
+    for name in sorted(bound_names - yaml_names):
+        warnings.append(f"cron binding whose workflow YAML was deleted: {name}")
+    try:
+        runs = list_runs(config=config)
+    except Exception:
+        runs = []
+    for run in runs:
+        if run.get("state") not in ACTIVE_STATES:
+            continue
+        name = str(run.get("workflow_name") or "").strip()
+        if name and name not in yaml_names:
+            run_id = str(run.get("workflow_run_id") or "")
+            warnings.append(
+                f"active run whose workflow disappeared: {run_id or name}"
+            )
+    return warnings
+
+
+def _facts_doctor_warnings(config: Mapping[str, Any] | None) -> list[str]:
+    """Report-only: missing/corrupt facts. Rebuilds a preview from YAML, does not write."""
+    facts = None
+    try:
+        facts = get_facts(config=config)
+    except Exception as exc:
+        return [f"workflow_facts unreadable: {exc}"]
+    yaml_names, _scheduled = _scheduled_workflow_names(_workflows_dir(config, None))
+    if facts is None:
+        if not yaml_names:
+            return []
+        try:
+            from workflow_runs import build_facts
+
+            build_facts(config)
+        except Exception:
+            pass
+        return ["workflow_facts missing or corrupt; rebuilt preview from workflow YAML (not written)"]
+    if not isinstance(facts, dict):
+        return ["workflow_facts missing or corrupt; rebuilt preview from workflow YAML (not written)"]
+    return []

@@ -324,15 +324,28 @@ def test_hooks_py_imports_cleanly_with_workflow_hooks_present():
 
 
 def test_hooks_py_imports_workflow_hooks_at_module_level():
-    """Module-level import required; lazy import inside ALL_HOOKS construction is forbidden."""
+    """Module-level import required; lazy import inside ALL_HOOKS construction is forbidden.
+
+    Review round B (K1): the import may sit inside a module-level try/except
+    (guarded import with None fallbacks) — it must still execute at module
+    load, not lazily inside a function or ALL_HOOKS construction.
+    """
     tree = ast.parse((PLUGIN_ROOT / "hooks.py").read_text(encoding="utf-8"))
     found = False
     for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module == "workflow_hooks":
-            found = True
-            break
-        if isinstance(node, ast.Import) and any(alias.name == "workflow_hooks" for alias in node.names):
-            found = True
+        candidates = [node]
+        if isinstance(node, ast.Try):
+            candidates = node.body + node.orelse + node.finalbody
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue  # function-level lazy import is forbidden here
+        for cand in candidates:
+            if isinstance(cand, ast.ImportFrom) and cand.module == "workflow_hooks":
+                found = True
+                break
+            if isinstance(cand, ast.Import) and any(alias.name == "workflow_hooks" for alias in cand.names):
+                found = True
+                break
+        if found:
             break
     if not found:
         pytest.fail("RED: hooks.py must import workflow_hooks at module level")
