@@ -127,6 +127,15 @@ needs_event_date: false
 
 If the script is not present, perform the workflow directly using `config_loader.py`, the jurisdiction YAML, and `date_utils.py`; do not fail the user request solely because the helper script is absent.
 
+Installation note (Phronesis, verified 2026-09-18): `scan_deadlines.py` does not exist. The working engine is `shared/scripts/deadlines.py`:
+
+```bash
+python3 ~/hermes/plugins/chief-of-staff/shared/scripts/deadlines.py \
+  --config ~/hermes/plugins/chief-of-staff/shared/config/company.yaml --json
+```
+
+It merges statutory (jurisdiction pack) + custom deadlines, sorts by due date, excludes `status: done` entries via `filter_actionable()`, and uses `date.today()` (server local time) for `days_until`. `date_utils.py` and `config_loader.py` live in the same `shared/scripts/` directory. Plugin root is `~/hermes/plugins/chief-of-staff/` (not `~/.hermes/...`).
+
 ## Output Format
 
 Use this table shape for human-facing replies:
