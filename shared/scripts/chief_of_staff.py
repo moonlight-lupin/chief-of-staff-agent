@@ -2411,6 +2411,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     l_bundle.add_argument("--json", action="store_true")
     l_bundle.set_defaults(func=cmd_logs_bundle)
+    __import__("workflow_install").add_workflows_parser(sub)
 
     return parser
 

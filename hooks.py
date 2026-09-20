@@ -28,6 +28,7 @@ if str(_SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SHARED_SCRIPTS))
 
 from config_loader import is_default_assistant_name  # noqa: E402
+from workflow_hooks import advancement, pointer_strip  # noqa: E402
 
 
 def _load_company_yaml() -> Optional[dict]:
@@ -851,10 +852,12 @@ ALL_HOOKS = {
         ("company_context_primer", company_context_primer),
         ("deadline_urgency_injection", deadline_urgency_injection),
         ("wiki_context_injection", wiki_context_injection),
+        ("workflow_pointer_strip", pointer_strip),
     ],
     "post_tool_call": [
         ("yaml_integrity_checker", yaml_integrity_checker),
         ("self_sign_guard", self_sign_guard),
+        ("workflow_advancement", advancement),
     ],
     "on_session_start": [
         ("stale_briefing_detector", stale_briefing_detector),
@@ -871,7 +874,7 @@ ALL_HOOKS = {
 
 
 def register_all_hooks(ctx):
-    """Register all 10 hooks. Called from __init__.py."""
+    """Register every hook in ALL_HOOKS. Called from __init__.py."""
     for event, hooks in ALL_HOOKS.items():
         for name, callback in hooks:
             try:
