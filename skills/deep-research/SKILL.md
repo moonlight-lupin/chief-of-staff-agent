@@ -1,7 +1,7 @@
 ---
 name: deep-research
 description: "Use when the user asks for deep research or a written multi-source report. For entity dossiers use entity-research; for news digests use news-monitoring."
-version: 1.6.0
+version: 1.7.9
 author: moonlight-lupin
 license: MIT
 platforms: [linux, macos, windows]
@@ -161,13 +161,11 @@ Generate queries that target the **gaps**, not repeat what's already found.
 
 **Refute polarity requirement:** Round 2+ must include at least one query targeting counter-evidence, opposing viewpoints, or criticisms of the leading hypothesis. If no counter-evidence is found after searching, note it explicitly in the synthesis — refute count = 0 usually means you didn't search well, not that no counter-evidence exists. This prevents confirmation-biased research.
 
-**Progressive empty-search refinement:** When a search returns no useful results, escalate the refinement strategy across consecutive empty results:
-1. **First empty result:** Try a broader query or different keywords (synonyms, related terms, different phrasing)
-2. **Second consecutive empty:** Try a fundamentally different angle — different domain, different language, or reframe the sub-question entirely. Inject: *"Previous search also returned no results. Try a very different query with different keywords, or broaden your search terms."*
-3. **Third consecutive empty:** Move on. This sub-question may not have publicly searchable answers. Document it as a gap in the synthesis rather than burning more rounds on dead-end queries.
+**Progressive empty-search refinement:** 1st empty → broader query or synonyms. 2nd consecutive → fundamentally different angle/domain/language. 3rd → move on; document as a gap rather than burning rounds on dead-end queries.
 
 ### 3b — Search and Fetch
 
+**Provider preference (optional, user-set):** On request, use the donsetch MCP search/fetch tools, falling back to `web_search`/`web_extract` if unavailable. Never abort over a provider preference. Record the provider used in the run manifest and stats block.
 ```
 web_search(query="...", limit=10)
 ```
@@ -179,6 +177,10 @@ web_extract(urls=["url1", "url2", "url3"])
 ```
 
 **Track URLs already fetched** — do not re-fetch the same URL across rounds. Maintain a mental list of analyzed URLs.
+
+### 3b.1 — Evidence Persistence (mandatory for 5+ source reports)
+
+Persist evidence to disk from the first round so it survives context compaction: `init-run`, `register-source`, `add-claim`, `add-evidence` subcommands of `scripts/research_validation.py`. Add claims and evidence **during** the loop (§3d), not at the end — the append-only `claims.jsonl` is the fabrication-detection backbone for the gates. On context compaction, re-read `claims.jsonl` instead of trusting compressed memory. Full contract: `references/validation-gates.md`.
 
 ### 3c — Quality Filter and Extraction
 
@@ -373,8 +375,12 @@ After the report, output a compact stats block:
 
 ```
 ---
-📊 Research stats: [duration] · [N] rounds · [N] queries · [N] URLs fetched · [N] sources cited
+📊 Research stats: [duration] · [N] rounds · [N] queries · [N] URLs fetched · [N] sources cited · provider: [donsetch/built-in]
 ```
+
+## Step 5.5 — Validation Gates (mandatory before delivery)
+
+**Deterministic gates** — `scripts/research_validation.py`, stdlib-only, checks structure not judgment. Every report with 5+ sources passes three gates before delivery: `validate-report` (structure), `verify-citations` (inline `[N]` ↔ Sources rows), and `verify-claims --strict` (stored evidence must support each factual claim). **Loop:** validate → fix → re-run all three, max 3 cycles; still failing → stop and report the remaining problems to the user honestly. Never skip the gates, never deliver with a red gate. Quick 2-3 source reports (no store): `verify-claims` warns instead of failing — record it in the stats block. Full contract, flags, and the failure loop: `references/validation-gates.md`.
 
 ## Follow-on Investment Analysis (optional)
 
@@ -415,8 +421,7 @@ delegate_task(
 
 - Fetch 3-5 URLs per round (not all 10 search results) to avoid rate-limiting
 - If `web_extract` fails on a URL, note it and move on — don't retry endlessly
-- If `web_search` returns no results, apply the progressive empty-search refinement protocol (§3a) — first try broader keywords, then a fundamentally different angle, then move on
-- Track fetched URLs across rounds to avoid re-processing
+- If `web_search` returns no results, apply the progressive empty-search refinement protocol (§3a)
 
 ## Pitfalls
 
@@ -438,9 +443,7 @@ delegate_task(
 
 ## Evals
 
-`evals/routing-fixtures.json` holds lightweight contract fixtures — sample
-request → expected routing (including when a request should go to
-`entity-research` / `notebooklm-mode` / `news-monitoring` instead), required
-output fields, and forbidden output patterns. They are specs, not run against a
-live model; the repo-root `tests/test_routing_fixtures.py` validates they stay well-formed and
-route to real skills.
+`evals/routing-fixtures.json` holds lightweight contract fixtures — sample request →
+expected routing, required output fields, and forbidden output patterns. They are
+specs, not run against a live model; the repo-root `tests/test_routing_fixtures.py`
+validates they stay well-formed and route to real skills.
