@@ -18,6 +18,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+import state_sync  # noqa: E402
 import workspace_guardrails  # noqa: E402
 
 # Providers whose write paths have been exercised against a live account.
@@ -77,6 +78,26 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     hosted = workspace_guardrails.in_hosted_session()
     refusal = workspace_guardrails.hosted_session_refusal(provider)
 
+    # A git-backed project_root outlives the VM once pushed, so a hosted
+    # session with one is durable — on the condition the note spells out.
+    sync = state_sync.sync_status(project_root) if project_root else {"git_backed": False}
+    git_durable = bool(sync.get("git_backed") and sync.get("has_remote") and not sync.get("sync_refusal"))
+    if git_durable:
+        state_note = (
+            f"State is git-backed ({sync.get('remote')}) and survives only once pushed: "
+            "run chief_of_staff.py sync push before the session ends. "
+            f"Currently: {sync.get('note')}"
+        )
+    elif hosted:
+        state_note = (
+            "State lives on an ephemeral cloud VM and will NOT survive this "
+            "session. Anything worth keeping must be committed and pushed, or "
+            "written back through a connector, before the session ends. Make "
+            "project_root a clone of a private data repo to keep it (docs/CLAUDE_CODE.md)."
+        )
+    else:
+        state_note = f"State persists on local disk under {project_root or '<project_root>'}."
+
     verified = provider in _LIVE_VERIFIED_PROVIDERS
     return {
         "version": version,
@@ -89,14 +110,9 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         "project_root": project_root,
         "hosted_session": hosted,
         "hosted_session_refusal": refusal or "",
-        "state_persistent": not hosted,
-        "state_note": (
-            "State lives on an ephemeral cloud VM and will NOT survive this "
-            "session. Anything worth keeping must be committed and pushed, or "
-            "written back through a connector, before the session ends."
-            if hosted else
-            f"State persists on local disk under {project_root or '<project_root>'}."
-        ),
+        "state_persistent": (not hosted) or git_durable,
+        "state_note": state_note,
+        "state_sync": sync,
         "execution_seam": (
             "Guarded Python path: review_queue.py execute. Agent path (agent "
             "provider): review_queue.py claim → perform the action with your own "

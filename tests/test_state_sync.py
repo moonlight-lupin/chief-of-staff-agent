@@ -278,6 +278,25 @@ class TestWiring:
         assert report["state_sync"]["git_backed"] is True
         assert "sync push" in report["state_note"]
 
+    def test_capabilities_never_call_the_plugin_checkout_durable(self, tmp_path, monkeypatch):
+        """A root inside the plugin repo is git-backed, but syncing it is refused,
+        so it must not be reported as durable storage."""
+        import chief_of_staff
+
+        plugin = tmp_path / "plugin3"
+        _git(tmp_path, "init", "-b", "main", str(plugin))
+        _git(plugin, "remote", "add", "origin", "https://github.com/acme/chief-of-staff-agent")
+        monkeypatch.setattr(state_sync, "PLUGIN_ROOT", plugin)
+        inside = plugin / "examples"
+        inside.mkdir()
+        monkeypatch.setenv("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_abc123")
+        report = chief_of_staff.build_capability_report(
+            {"integrations": {"workspace": {"provider": "agent"}},
+             "paths": {"project_root": str(inside)}}
+        )
+        assert report["state_persistent"] is False
+        assert "plugin" in report["state_sync"]["sync_refusal"]
+
     def test_capabilities_still_warn_without_git(self, tmp_path, monkeypatch):
         import chief_of_staff
 

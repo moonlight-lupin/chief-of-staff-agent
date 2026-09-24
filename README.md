@@ -202,6 +202,7 @@ Failed readiness rows print the exact diagnose command. No stack-trace archaeolo
 | Document | Purpose |
 |---|---|
 | [`docs/SETUP.md`](docs/SETUP.md) | Fastest path + all provider walkthroughs |
+| [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md) | Running in Claude Code on the web: session hooks + a private git data repo |
 | [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) | Run IDs, logs, diagnosis, support bundles |
 | [`docs/REVIEW_QUEUE.md`](docs/REVIEW_QUEUE.md) | Review, approve, execute, audit |
 | [`docs/BETA_DAILY_LOOP.md`](docs/BETA_DAILY_LOOP.md) | The daily operating loop |

@@ -83,6 +83,8 @@ chief_of_staff.py knowledge        # memory + wiki
 chief_of_staff.py smoke-test       # subsystem check
 chief_of_staff.py demo             # sample data, no credentials
 chief_of_staff.py logs diagnose --latest-failed
+chief_of_staff.py sync status      # git-backed project state (cloud sessions)
+chief_of_staff.py sync push        # checkpoint state.db, commit, push the data repo
 ```
 
 `daily` is externally read-only: it reports and recommends, it never acts. It
@@ -150,9 +152,15 @@ Two things change, and `capabilities` will tell you both:
   readable by anyone who uses the environment, and there is no secrets store.
   Use the `agent` provider — it holds no credentials because your connectors do
   the I/O. Do not ask the user to paste a client secret into the environment.
-- **State does not survive the session.** Anything written under
-  `project_root` is lost at teardown. Say so before the user invests work in
-  it, and commit anything worth keeping.
+- **State does not survive the session unless it is git-backed.** Anything
+  written under `project_root` is lost at teardown. When the SessionStart hook
+  has linked a private data repo (`capabilities` → `state_sync.git_backed`),
+  run `chief_of_staff.py sync push` after changing state and before you stop.
+  The Stop hook will block if you forget. Without a data repo, say so before
+  the user invests work, and point them at [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
+- **Never commit Chief-of-Staff data into this repository.** It may be public.
+  Data goes only to the private data repo, through `sync`, and never with
+  `git add` in the plugin checkout.
 
 ## Talking to the user
 
