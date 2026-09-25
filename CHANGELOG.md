@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.7.2 — Deep-research gate hardening
+
+A review of deep-research after v0.7.0 found gates that could be fooled,
+rules the skill states but never checked, and routing to skills this plugin
+does not ship. deep-research 1.7.9 → 1.8.0.
+
+### Changes
+
+- **`validate-report` can no longer be fooled by look-alike headings.** A
+  required section is now a `##` heading that *starts with* its name.
+  Before, `### Sources of revenue` counted as the Sources table and
+  `## Mind the Gaps` as the Gaps section. The evidence-key check used to be
+  skipped when there was no real `## Sources`; a missing Sources section now
+  also fails that check.
+- **`verify-citations`** no longer treats a bracketed year (`fiscal [2024]`)
+  as a citation, unless the Sources list really has an entry with that
+  number.
+- **The evidence store validates its enumerations.** `quality`
+  (primary / secondary / tertiary), `polarity` (support / refute / neutral)
+  and the new optional `basis` (verified / sourced / reasoned / estimated)
+  are case-normalised. Typos are rejected instead of silently dropping out
+  of the counts.
+- **Figure matching** normalises magnitude abbreviations: `2.4bn` =
+  `2.4b` = `2.4 billion`, `mn`/`mln`/`mm` = `m`, `tn`/`trn` = `t`. A
+  correctly sourced "$2.4 billion" no longer fails against "US$2.4bn".
+- **`verify-claims` checks three rules the skill only stated.** Each is a
+  warning by default and a failure under `--strict`:
+  - A `basis: verified` claim needs sources on ≥2 different hosts.
+  - A store with 5+ sources needs at least one `polarity: refute` claim, or
+    `--refute-none "<what was searched>"`, which is recorded in the manifest.
+  - The source-quality mix is reported as `source_quality` with a
+    healthy / acceptable / weak rating. `weak` is a warning only, never a
+    failure.
+- **Routing matches this plugin.**
+  - `related_skills` and "When NOT to use" no longer point at
+    `notebooklm-mode`, `fact-checker`, `source-tracker` or
+    `youtube-topic-research`, which are not shipped here.
+  - A single claim to fact-check stays in deep-research's fact-check
+    category. Q&A over user-supplied documents needs no skill.
+  - New `tests/test_routing_fixtures.py` keeps every
+    `skills/*/evals/routing-fixtures.json` pointed at shipped skills. The
+    skill already cited this test, but it did not exist.
+- **Research is saved with the user's data.** The run folder is now
+  `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/`, holding `report.md`
+  and the evidence store. Under git storage, `sync push` carries it across
+  cloud sessions. This replaces the `notebooklm-mode` vault section.
+- **Consistency fixes.**
+  - `init-run --mode` uses the skill's simple / moderate / complex
+    vocabulary; the default is now `moderate`.
+  - The gates reference no longer calls the plugin MIT-licensed. The skill
+    is MIT per NOTICE; the plugin is Apache-2.0.
+- Version 0.7.1 → 0.7.2 in all six locations.
+
 ## v0.7.1 — Contacts on the workspace client
 
 Adds Google Contacts (People API) to the provider-neutral workspace layer,
