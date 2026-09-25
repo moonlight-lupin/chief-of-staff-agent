@@ -22,6 +22,10 @@ Guarantees, each with a test in ``tests/test_state_sync.py``:
   ``state.db`` is binary and a textual merge would corrupt it.
 * Credentials embedded in a remote URL are never echoed.
 
+Git storage is opt-in. Onboarding records the operator's choice as
+``storage.mode`` (``local`` or ``git``; see ``prepare_git_storage``), and
+``local`` is honoured here: ``sync pull``/``push`` refuse to run.
+
 Stdlib only, so the Stop hook can run it with any Python 3.11+.
 """
 from __future__ import annotations
@@ -185,6 +189,78 @@ def _checkpoint_databases(root: Path) -> list[str]:
     return warnings
 
 
+# ─── storage choice (onboarding) ─────────────────────────────────────────────
+
+STORAGE_MODES = ("local", "git")
+
+
+def storage_mode(config: Any) -> str | None:
+    """The operator's recorded choice, or None when onboarding never asked."""
+    storage = config.get("storage") if isinstance(config, dict) else None
+    mode = storage.get("mode") if isinstance(storage, dict) else None
+    return str(mode).strip().lower() if mode else None
+
+
+def data_repo_url(repo: str) -> str:
+    """``owner/name`` → GitHub HTTPS URL; URLs, SSH remotes and paths pass through."""
+    repo = repo.strip()
+    if "://" in repo or repo.startswith(("/", "git@", ".", "~")) or repo.count("/") != 1:
+        return repo
+    return f"https://github.com/{repo}"
+
+
+def _inside_plugin(path: Path) -> bool:
+    plugin_top = _toplevel(Path(PLUGIN_ROOT))
+    if plugin_top is None:
+        return False
+    resolved = path.expanduser().resolve()
+    return resolved == plugin_top or plugin_top in resolved.parents
+
+
+def prepare_git_storage(root: Path | str, data_repo: str | None) -> dict[str, Any]:
+    """Make ``root`` a git working copy for ``storage.mode: git``.
+
+    Clones ``data_repo`` into a missing or empty root, keeps an existing clone,
+    or — with no repo given — initialises one and says how to add a remote.
+    Refuses a root inside the plugin checkout and never clones over files.
+    """
+    root = Path(root).expanduser()
+    if _inside_plugin(root):
+        raise SyncError(
+            f"project_root {root} is inside the plugin checkout; git storage there would "
+            "commit your data into the plugin repository. Choose a root outside it."
+        )
+    notices: list[str] = []
+    if _toplevel(root) == root.resolve():
+        if data_repo and not _origin(root):
+            _git(root, "remote", "add", "origin", data_repo_url(data_repo))
+        _require_repo(root)
+        return {"action": "existing", "project_root": str(root), "notices": notices}
+    if root.exists() and any(root.iterdir()):
+        raise SyncError(
+            f"project_root {root} already has files and is not a git repository. Move them "
+            "aside, or point --project-root at an empty directory for the data repo."
+        )
+    if data_repo:
+        root.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(
+            ["git", "clone", "-q", data_repo_url(data_repo), str(root)],
+            capture_output=True, text=True, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        if proc.returncode != 0:
+            detail = redact_url((proc.stderr or "").strip().splitlines()[-1:] or [""])
+            raise SyncError(f"Could not clone the data repo: {detail}")
+        _require_repo(root)
+        return {"action": "cloned", "project_root": str(root), "notices": notices}
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q", "-b", "main")
+    notices.append(
+        f"Initialised a git repo at {root} with no remote. Create a PRIVATE repo and run: "
+        f"git -C {root} remote add origin <url>, then chief_of_staff.py sync push."
+    )
+    return {"action": "initialised", "project_root": str(root), "notices": notices}
+
+
 # ─── public API ──────────────────────────────────────────────────────────────
 
 def sync_status(root: Path | str) -> dict[str, Any]:
@@ -314,10 +390,27 @@ def _resolve_root(explicit: str | None) -> Path:
     raise SyncError("No project root: pass --project-root or set paths.project_root.")
 
 
+def _configured_mode() -> str | None:
+    """Read storage.mode straight from company.yaml; full validation is not needed
+    to honour an opt-out, and must not be able to mask one."""
+    try:
+        from config_loader import _default_config_path, _load_yaml
+
+        path = _default_config_path()
+        return storage_mode(_load_yaml(path)) if path.is_file() else None
+    except Exception:
+        return None
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     try:
         root = _resolve_root(getattr(args, "project_root", None))
         action = args.sync_command
+        if action in ("pull", "push") and _configured_mode() == "local":
+            raise SyncError(
+                "storage.mode is local in company.yaml, so project data is not synced. "
+                "Re-run bootstrap with --storage git to opt in."
+            )
         if action == "status":
             result = sync_status(root)
         elif action == "pull":

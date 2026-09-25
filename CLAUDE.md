@@ -158,6 +158,11 @@ Two things change, and `capabilities` will tell you both:
   run `chief_of_staff.py sync push` after changing state and before you stop.
   The Stop hook will block if you forget. Without a data repo, say so before
   the user invests work, and point them at [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
+- **Git storage is the user's choice, not yours.** When onboarding, ask
+  whether they want their data in a private git repo (needed to keep it
+  across cloud sessions) or as local files. Then pass `--storage git
+  --data-repo <owner/name>` or `--storage local` to `bootstrap.py`. Never
+  create the data repo or choose its visibility for them.
 - **Never commit Chief-of-Staff data into this repository.** It may be public.
   Data goes only to the private data repo, through `sync`, and never with
   `git add` in the plugin checkout.

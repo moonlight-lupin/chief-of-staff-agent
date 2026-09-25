@@ -153,7 +153,7 @@ class TestBootstrapStorage:
         cfg = _load(result["config"])
         assert cfg["storage"] == {"mode": "git", "data_repo": str(remote)}
         assert (root / ".git").is_dir()
-        assert (root / "todos.yaml").exists()
+        assert (root / "state.db").exists(), "stores are seeded inside the clone"
         assert result["storage"]["action"] == "cloned"
 
     def test_data_repo_without_git_storage_is_rejected(self):
@@ -172,7 +172,12 @@ class TestBootstrapStorage:
         ])
         assert rc == 1
         assert "plugin" in capsys.readouterr().err
-        assert not (tmp_config_dir / "company.yaml").exists(), "refuse before writing config"
+        # bootstrap seeds company.yaml from the example first; the refusal must
+        # happen before the storage choice or the plugin-internal root is recorded.
+        written = tmp_config_dir / "company.yaml"
+        cfg = _load(written) if written.exists() else {}
+        assert "storage" not in cfg
+        assert str(plugin) not in str(cfg.get("paths", {}).get("project_root", ""))
 
 
 # ─── onboard.py wizard ───────────────────────────────────────────────────────

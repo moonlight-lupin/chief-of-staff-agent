@@ -81,8 +81,20 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     # A git-backed project_root outlives the VM once pushed, so a hosted
     # session with one is durable — on the condition the note spells out.
     sync = state_sync.sync_status(project_root) if project_root else {"git_backed": False}
-    git_durable = bool(sync.get("git_backed") and sync.get("has_remote") and not sync.get("sync_refusal"))
-    if git_durable:
+    # storage.mode is the operator's onboarding choice; None means never asked,
+    # in which case a syncable clone is detected rather than required.
+    mode = state_sync.storage_mode(config)
+    sync["mode"] = mode
+    git_durable = mode != "local" and bool(
+        sync.get("git_backed") and sync.get("has_remote") and not sync.get("sync_refusal")
+    )
+    if mode == "git" and not git_durable:
+        state_note = (
+            "storage.mode is git but project_root is not a syncable clone of a data repo "
+            f"({sync.get('sync_refusal') or sync.get('note')}). Re-run bootstrap with "
+            "--storage git --data-repo <owner/name>."
+        )
+    elif git_durable:
         state_note = (
             f"State is git-backed ({sync.get('remote')}) and survives only once pushed: "
             "run chief_of_staff.py sync push before the session ends. "

@@ -20,6 +20,8 @@ python shared/scripts/bootstrap.py \
   --operator you@yourcompany.com \
   --workspace-provider m365 \
   --assistant-name "Ada"
+# Optional: --storage git --data-repo you/private-data-repo keeps project data
+# in a private git repo (see docs/CLAUDE_CODE.md). The default is local files.
 
 # 5. Set secrets in .env (auto-loaded from the plugin root) or the shell env
 echo 'M365_CLIENT_SECRET=...' >> .env      # shell env wins if both are set

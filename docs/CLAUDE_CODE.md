@@ -39,19 +39,22 @@ remote *is* the plugin repo.
 4. **Start a session and bootstrap once.** Ask Claude:
 
    > Bootstrap Chief of Staff for **\<company\>**, jurisdiction **\<SG\>**,
-   > operator **\<me@company.com\>**, using the agent provider and the data repo
-   > as project root. Then run `capabilities` and `sync push`.
+   > operator **\<me@company.com\>**, using the agent provider and **git
+   > storage** in the data repo. Then run `capabilities` and `sync push`.
 
    Claude will run the equivalent of:
 
    ```bash
    printf 'integrations:\n  workspace:\n    provider: agent\n' > /tmp/agent.yaml
    .venv/bin/python shared/scripts/bootstrap.py --company "<company>" --jurisdiction SG \
-       --operator me@company.com --project-root "$CHIEF_OF_STAFF_DATA_DIR" --config /tmp/agent.yaml
+       --operator me@company.com --project-root "$CHIEF_OF_STAFF_DATA_DIR" --config /tmp/agent.yaml \
+       --storage git
    .venv/bin/python shared/scripts/chief_of_staff.py capabilities --summary
    .venv/bin/python shared/scripts/chief_of_staff.py sync push
    ```
 
+   `--storage git` records `storage.mode: git` in `company.yaml`. The data
+   repo is already cloned by the hook here, so bootstrap keeps it as it is.
    `company.yaml` is written through the `shared/config/company.yaml` symlink
    into `<data repo>/config/company.yaml`, so your config is saved along with
    your data.
@@ -102,8 +105,17 @@ is uncommitted or unpushed, Claude is told to run `sync push` before stopping.
 - Two sessions writing to the same data repo at once will diverge. `sync pull`
   and `sync push` refuse rather than merge, so run one session at a time.
 
-## Local installs are unaffected
+## Git storage is optional
 
-Both hooks exit immediately unless `CLAUDE_CODE_REMOTE=true`. `sync` is
-optional anywhere: a local `project_root` that is a clone of a private repo
-can use it too, but nothing requires it.
+Onboarding asks where your data lives, and **local files are the default**:
+
+| Choice | How to pick it | What happens |
+|---|---|---|
+| `local` | `bootstrap.py --storage local`, or answer "no" in `onboard.py` | Plain files under `project_root`. `sync pull`/`push` refuse to run. |
+| `git` | `bootstrap.py --storage git [--data-repo owner/name]`, or answer "yes" in `onboard.py` | `project_root` becomes a clone of your private data repo. With no `--data-repo`, a local repo is created and you add a remote later. |
+| not chosen | older installs, or bootstrap without `--storage` | Nothing changes. `sync` works if `project_root` happens to be a clone. |
+
+Bootstrap refuses git storage when `project_root` is inside the plugin
+checkout, and it never clones over existing files. On a local machine you
+can use either mode. Both hooks exit immediately unless
+`CLAUDE_CODE_REMOTE=true`.

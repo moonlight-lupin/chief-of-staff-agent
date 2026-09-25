@@ -28,6 +28,14 @@ See [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
 - **Test suite runs green inside a cloud session.** An autouse fixture clears
   `CLAUDE_CODE_REMOTE_SESSION_ID`. Before this, 114 tests failed when pytest
   inherited it from the session.
+- **Storage is chosen at onboarding, and git is opt-in.**
+  `bootstrap.py --storage local|git [--data-repo owner/name]` and a new
+  `onboard.py` "Data storage" step record `storage.mode`. Choosing `git`
+  clones the data repo into `project_root`, or initialises one with no
+  remote, before any store is seeded. It refuses a root inside the plugin
+  checkout and never clones over existing files. `local` is honoured
+  afterwards: `sync pull`/`push` refuse, and `capabilities` never reports it
+  as git-durable. Bootstrap without `--storage` is unchanged.
 - `.venv/` is gitignored.
 
 ## v0.6.1 — Deep-research validation gates
