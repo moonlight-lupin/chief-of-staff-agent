@@ -49,6 +49,9 @@ WRITE_ACTIONS: frozenset[str] = frozenset({
     "files.untrash",     # restore from Drive trash / OneDrive recycle bin
     "drive.trash",
     "drive.untrash",
+    "contacts.create",
+    "contacts.update",
+    "contacts.delete",
     "mail.archive",      # m365 move -> Archive (reversible)
     "mail.unarchive",    # m365 move -> Inbox
     "mail.trash",        # m365 move -> Deleted Items (30-day recoverable)
@@ -86,6 +89,7 @@ READ_ACTIONS: frozenset[str] = frozenset({
     "files.search",
     "files.list",
     "files.read",
+    "contacts.list",
     # NOTE: "unknown" is intentionally NOT in READ_ACTIONS. Unknown action
     # IDs must be denied by default-deny, not allowed as reads. Event
     # classification's "unknown" category is separate from executable
@@ -99,6 +103,7 @@ DESTRUCTIVE_ACTIONS: frozenset[str] = frozenset({
     "calendar.delete",
     "drive.delete",
     "files.delete",
+    "contacts.delete",   # permanent People API deleteContact — no trash step
 })
 
 # Actions that create new objects but don't destroy existing ones, OR whose
@@ -136,6 +141,8 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "gmail.untrash",
     "gmail.label",
     "gmail.create_label",
+    "contacts.create",   # creates a new contact, destroys nothing
+    "contacts.update",   # merge-safe (fetch-merge-etag); reversible by re-update
 })
 
 

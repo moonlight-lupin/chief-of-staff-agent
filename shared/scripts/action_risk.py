@@ -13,6 +13,7 @@ HIGH_RISK_TYPES: set[str] = {
     "gmail.trash",
     "drive.trash",
     "calendar.cancel",
+    "contacts.delete",
     "bookkeeper.invoice.mark_paid",
     "bookkeeper.invoice.delete",
     "pipeline.deal.delete",
@@ -21,6 +22,8 @@ HIGH_RISK_TYPES: set[str] = {
 MEDIUM_RISK_TYPES: set[str] = {
     "calendar.create",
     "calendar.update",
+    "contacts.create",
+    "contacts.update",
     "drive.upload",
     "gmail.archive",
     "mail.move",
@@ -33,6 +36,7 @@ MEDIUM_RISK_TYPES: set[str] = {
 LOW_RISK_TYPES: set[str] = {
     "gmail.label",
     "gmail.create_label",
+    "contacts.list",
     "drive.search",
     "gmail.search",
     "drive.download",

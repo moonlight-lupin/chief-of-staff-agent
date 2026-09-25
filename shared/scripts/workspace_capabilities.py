@@ -54,6 +54,14 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # via drive delete (default is trash, reversible)
         "files.untrash": True,      # Drive REST files.update trashed=False (SA) — mirrors soft-delete restore
+        # Contacts (People API via google_api.py contacts subcommands) — all four
+        # execution-verified 2026-09-25 against the live Phronesis Workspace
+        # account (DWD contacts write scope granted; create → merge-update →
+        # delete cycle green, zero residue).
+        "contacts.list": True,
+        "contacts.create": True,
+        "contacts.update": True,
+        "contacts.delete": True,
     },
     # Google Composio family — v0.3.13/v0.3.14.
     # Execution-verified 2026-07-16 (live Gmail): mail.list_tags
@@ -96,6 +104,13 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
         "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
+        # Contacts — NOT wired: GOOGLECONTACTS toolkit (BYO OAuth) not connected,
+        # no slugs mapped. False until live-verified (tripwire convention).
+        # Toolkit exists: docs.composio.dev/toolkits/googlecontacts (24 tools).
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     "composio:mcp": {
         "mail.search": True,
@@ -121,6 +136,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
         "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
+        # Contacts — NOT wired (see "composio" above); False until live-verified.
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client

@@ -820,6 +820,87 @@ class GoogleWorkspaceClient(WorkspaceClient):
             raise RuntimeError(err.strip() or out.strip())
         return {"output": out.strip()}
 
+    # ── Contacts (People API via google_api.py, live-verified 2026-09-25) ──
+
+    def contacts_list(self, max_results: int = 50) -> list[dict[str, Any]]:
+        """List contacts (name/emails/phones). Read-only."""
+        cmd = self._build_cmd("contacts", "list", "--max", str(max_results))
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            warnings.warn(f"contacts_list failed: {err.strip() or out.strip()}")
+            return []
+        result = self._parse_json(out)
+        return result if isinstance(result, list) else []
+
+    @guarded("contacts.create", target_arg="given_name", audit_provider="google_api")
+    def contacts_create(self, given_name: str = "", family_name: str = "",
+                        email: str = "", phone: str = "",
+                        organization: str = "", note: str = "") -> dict[str, Any]:
+        """Create a contact. Requires a name (given or family)."""
+        if not (given_name or family_name):
+            raise ValueError("contacts.create requires given_name or family_name")
+        args: list[str] = ["contacts", "create"]
+        if given_name:
+            args += ["--given-name", given_name]
+        if family_name:
+            args += ["--family-name", family_name]
+        if email:
+            args += ["--email", email]
+        if phone:
+            args += ["--phone", phone]
+        if organization:
+            args += ["--organization", organization]
+        if note:
+            args += ["--note", note]
+        cmd = self._build_cmd(*args)
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            raise RuntimeError(err.strip() or out.strip())
+        try:
+            return json.loads(out) if out.strip() else {}
+        except json.JSONDecodeError:
+            return {"output": out.strip()}
+
+    @guarded("contacts.update", target_arg="person_id", audit_provider="google_api")
+    def contacts_update(self, person_id: str, **fields: Any) -> dict[str, Any]:
+        """Update a contact. Merge-safe: omitted field types are preserved
+        (google_api.py fetches the current record and merges before update)."""
+        if not person_id:
+            raise ValueError("contacts.update requires person_id")
+        supported = ("given_name", "family_name", "email", "phone", "organization", "note")
+        supplied = {k: v for k, v in fields.items() if k in supported and v}
+        if not supplied:
+            raise ValueError(
+                "contacts.update requires at least one field: "
+                + ", ".join(supported)
+            )
+        args: list[str] = ["contacts", "update", "--person-id", person_id]
+        flag_map = {"given_name": "--given-name", "family_name": "--family-name",
+                    "email": "--email", "phone": "--phone",
+                    "organization": "--organization", "note": "--note"}
+        for key, flag in flag_map.items():
+            if key in supplied:
+                args += [flag, str(supplied[key])]
+        cmd = self._build_cmd(*args)
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            raise RuntimeError(err.strip() or out.strip())
+        try:
+            return json.loads(out) if out.strip() else {}
+        except json.JSONDecodeError:
+            return {"output": out.strip()}
+
+    @guarded("contacts.delete", target_arg="person_id", audit_provider="google_api")
+    def contacts_delete(self, person_id: str) -> dict[str, Any]:
+        """Delete a contact PERMANENTLY (no trash step, not reversible)."""
+        if not person_id:
+            raise ValueError("contacts.delete requires person_id")
+        cmd = self._build_cmd("contacts", "delete", "--person-id", person_id)
+        rc, out, err = self._run(cmd)
+        if rc != 0:
+            raise RuntimeError(err.strip() or out.strip())
+        return {"status": "deleted", "person_id": person_id}
+
     def health_check(self) -> bool:
         cmd = self._build_cmd("calendar", "list")
         rc, _, _ = self._run(cmd, timeout=20)
