@@ -344,6 +344,17 @@ _COMPOSIO_MS_UNTRASH_REASON = (
     "unsupported until a live run actually restores a file"
 )
 
+_CONTACTS_REASONS = {
+    "composio": "Google Contacts is not wired on Composio (the googlecontacts toolkit "
+                "needs its own OAuth connection) — use provider google_api for contacts",
+    "m365": "Contacts are not implemented on the Microsoft Graph client — use provider "
+            "google_api for contacts",
+    "composio_microsoft": "Contacts are not wired on the Composio Microsoft family (no "
+                          "contacts tools mapped) — use provider google_api for contacts",
+    "agent": "The agent provider has no contacts reads or writes wired — use provider "
+             "google_api for contacts, or manage them with your own connector",
+}
+
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
                                      "(no restore-path parity with the soft-delete promise)",
@@ -359,6 +370,10 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("composio_microsoft:mcp", "drive.untrash"): _COMPOSIO_MS_UNTRASH_REASON,
     ("m365", "files.untrash"): _M365_UNTRASH_REASON,
     ("m365", "drive.untrash"): _M365_UNTRASH_REASON,
+    **{(provider, f"contacts.{op}"): _CONTACTS_REASONS[provider.split(":")[0]]
+       for provider in ("composio", "composio:mcp", "composio_microsoft",
+                        "composio_microsoft:mcp", "m365", "agent")
+       for op in ("list", "create", "update", "delete")},
 }
 
 # Provider recommendations for each action/workflow.
@@ -374,6 +389,10 @@ PROVIDER_RECOMMENDATIONS: dict[str, str] = {
     "files.untrash": "google_api or composio",
     "meeting.gather": "google_api or composio",
     "weekly.collect": "google_api or composio",
+    "contacts.list": "google_api",
+    "contacts.create": "google_api",
+    "contacts.update": "google_api",
+    "contacts.delete": "google_api",
 }
 
 

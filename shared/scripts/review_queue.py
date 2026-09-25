@@ -250,6 +250,17 @@ def _expected_effect(action_type: str, target: str, payload: Mapping[str, Any]) 
         return f"Download Drive file {payload.get('file_id') or target} to {payload.get('output_path') or payload.get('path') or 'configured output path'}."
     if action_type == "drive.trash":
         return f"Move Drive file {payload.get('file_id') or target} to trash."
+    if action_type == "contacts.create":
+        name = " ".join(filter(None, (payload.get("given_name"), payload.get("family_name")))) or target
+        return f"Create contact {name!r}."
+    if action_type == "contacts.update":
+        # Field names only — the new values are personal data and stay in the payload.
+        fields = [k for k in ("given_name", "family_name", "email", "phone", "organization", "note")
+                  if payload.get(k)]
+        return (f"Overwrite {', '.join(fields) or 'no fields'} on contact "
+                f"{payload.get('person_id') or target}.")
+    if action_type == "contacts.delete":
+        return f"Permanently delete contact {payload.get('person_id') or target} (no trash step)."
     return f"Run {action_type or 'unknown action'} against target {target or '(none)'} with the stored payload."
 
 
@@ -267,6 +278,9 @@ def _reversal_hint(action_type: str) -> str:
         "drive.upload": "Trash/delete the uploaded file if inappropriate.",
         "drive.download": "Delete the downloaded local copy if inappropriate.",
         "drive.trash": "Restore the file from Drive trash while retention allows.",
+        "contacts.create": "Delete the created contact.",
+        "contacts.update": "No prior values are recorded — re-enter the old values by hand if you have them.",
+        "contacts.delete": "Permanent — no undo. Recreate the contact by hand from your own records.",
     }
     return hints.get(action_type, "Review provider audit logs and undo manually if supported.")
 
