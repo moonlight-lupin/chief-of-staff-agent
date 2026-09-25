@@ -9,7 +9,7 @@
       "name": "chief-of-staff",
       "source": ".",
       "description": "Approval-gated AI Chief of Staff: daily briefings, deadlines, pipeline, invoices, documents, knowledge wiki, research, and travel — nothing consequential happens without your review.",
-      "version": "0.6.1",
+      "version": "0.7.0",
       "author": {
         "name": "moonlight-lupin"
       },

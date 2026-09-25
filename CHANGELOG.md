@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Claude Code on the web
+## v0.7.0 — Claude Code on the web
 
 Make the plugin usable from an ephemeral Claude Code cloud session, where the
 repo is cloned fresh and everything under `project_root` is lost at teardown.
