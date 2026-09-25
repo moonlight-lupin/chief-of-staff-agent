@@ -40,6 +40,9 @@ except Exception as exc:  # pragma: no cover
     raise SystemExit(2)
 
 
+_EMAIL_SEND_TYPES = frozenset({"gmail.send", "mail.send"})
+
+
 def get_client(config: Any):
     from workspace_client import get_workspace_client
     return get_workspace_client(config)
@@ -200,6 +203,12 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print(f"Action {args.action_id} is not approved (state={action['state']}). "
               f"Run: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
         return 1
+    # This executor sends email and nothing else. Checked BEFORE claiming, so a
+    # differently-typed approval (e.g. a low-risk label) can never become a send.
+    if action.get("type") not in _EMAIL_SEND_TYPES:
+        print(f"Refusing: {args.action_id} is a {action.get('type')!r} action, not an email send. "
+              f"Execute it with review_queue.py execute.", file=sys.stderr)
+        return 1
 
     # Pre-execution eligibility check — prevents race with lapsed approval
     executing = mark_executing(cfg, args.action_id)
@@ -240,10 +249,14 @@ def cmd_execute(args: argparse.Namespace) -> int:
         else:
             os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = prev_auto
 
-    # Mark as executed with result
+    if not (isinstance(result, dict) and result.get("success")):
+        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
+        mark_failed(cfg, args.action_id, error)
+        print_result(result, args.summary, "Send failed")
+        return 1
     mark_executed(cfg, args.action_id, result)
     print_result(result, args.summary, f"Mail sent to {payload['to']}")
-    return 0 if result.get("success") else 1
+    return 0
 
 
 def cmd_summary(args: argparse.Namespace) -> int:

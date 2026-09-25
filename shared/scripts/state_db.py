@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -134,6 +135,7 @@ _ALLOWED_CAS_COLUMNS: frozenset[str] = frozenset({
     "retry_count",
     "last_error",
     "result",
+    "approval_hash",
 })
 
 _SCHEMA_SQL = """
@@ -168,7 +170,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     dismiss_reason TEXT,
     retry_count INTEGER DEFAULT 0,
     last_error TEXT,
-    result TEXT
+    result TEXT,
+    approval_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pa_state ON pending_actions(state);
 CREATE INDEX IF NOT EXISTS idx_pa_created ON pending_actions(created_at);
@@ -552,6 +555,7 @@ def _action_insert_params(action: Mapping[str, Any]) -> tuple[Any, ...]:
         int(action.get("retry_count") or 0),
         action.get("last_error"),
         _dumps(action["result"]) if action.get("result") is not None else None,
+        action.get("approval_hash"),
     )
 
 
@@ -560,9 +564,23 @@ INSERT OR REPLACE INTO pending_actions (
     id, type, provider, target, payload, summary, state, risk,
     approver, approval_reason, created_at, approved_at, executing_at,
     executed_at, cancelled_at, dismissed_at, expired_at, failed_at,
-    cancel_reason, dismiss_reason, retry_count, last_error, result
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    cancel_reason, dismiss_reason, retry_count, last_error, result,
+    approval_hash
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
+
+
+def approval_hash(action: Mapping[str, Any]) -> str:
+    """Fingerprint of what a human approved: type, target and payload.
+
+    Stored at approval and re-checked before execution, so an action cannot
+    be changed after approval — or inserted as 'approved' — and still run.
+    """
+    material = json.dumps(
+        [action.get("type") or "", action.get("target") or "", action.get("payload") or {}],
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str,
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 _EVENT_INSERT_SQL = """
 INSERT INTO events (
@@ -632,6 +650,7 @@ class StateDB:
             self.conn.executescript(_SCHEMA_SQL)
             self.conn.execute("DROP INDEX IF EXISTS idx_ev_key")
             self._ensure_column("pending_actions", "failed_at", "TEXT")
+            self._ensure_column("pending_actions", "approval_hash", "TEXT")
             self.conn.execute("INSERT OR IGNORE INTO audit_lock (id) VALUES (1)")
             self.conn.commit()
             # BEGIN IMMEDIATE so two writers cannot both read version N and
@@ -672,7 +691,13 @@ class StateDB:
     def _ensure_column(self, table: str, column: str, decl: str) -> None:
         cols = {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
         if column not in cols:
-            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            try:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            except sqlite3.OperationalError as exc:
+                # Two processes upgrading the same database race to add the
+                # column; losing that race is fine, anything else is not.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     def close(self) -> None:
         try:
@@ -971,6 +996,13 @@ class StateDB:
             _audit_action(self.config, current, "expired", {"reason": "approval_lapsed"})
             return None
 
+        if requested_state == "executing" and current.get("approval_hash") != approval_hash(current):
+            # Changed after approval, or never approved through the queue.
+            _audit_action(self.config, current, "blocked", {"reason": "approval_integrity"})
+            _log_event("approval_integrity_failed", level="warning", component="pending_actions",
+                       action_id=action_id, action_type=current.get("type"))
+            return None
+
         extra: dict[str, Any] = {}
         now = _now()
         if requested_state == "failed":
@@ -989,6 +1021,8 @@ class StateDB:
                 new_state = "approved"
         elif new_state == "approved":
             extra["approved_at"] = now
+            if current["state"] == "requested":
+                extra["approval_hash"] = approval_hash(current)
             if "approver" in fields:
                 extra["approver"] = fields["approver"]
             if "reason" in fields:
@@ -1991,23 +2025,28 @@ def revert_stuck_action(config: Any, action_id: str, max_minutes: int = 15) -> d
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_minutes)
         if dt >= cutoff:
             return None
-        retry_count = int(action.get("retry_count") or 0) + 1
-        new_state = "failed" if retry_count >= MAX_RETRIES else "approved"
+        # Never back to 'approved': the claim may have run (mail sent) without
+        # its result being recorded, and re-arming it would do it twice.
         updated = db._cas_update(
             action_id,
             "executing",
-            new_state,
-            retry_count=retry_count,
-            executing_at=None,
-            last_error=(
-                f"Reset from orphaned 'executing' by doctor --fix "
-                f"(was stale >{max_minutes}min)"
-            ),
+            "failed",
+            retry_count=int(action.get("retry_count") or 0) + 1,
+            failed_at=_now(),
+            last_error=stale_claim_note(max_minutes),
         )
         if updated is None:
             return None
-        _audit_action(config, updated, "approved", {"action_id": action_id, "reason": "stuck_reverted"})
+        _audit_action(config, updated, "failed", {"action_id": action_id, "reason": "stale_claim"})
         return updated
+
+
+def stale_claim_note(max_minutes: int) -> str:
+    return (
+        f"Stale claim: 'executing' for >{max_minutes}min with no recorded result — it may "
+        "already have run. Reconcile manually: check the provider (e.g. Sent mail, the "
+        "calendar) and, only if it did not happen, queue a new action."
+    )
 
 
 def assert_executable(config: Any, action_id: str) -> dict[str, Any] | None:

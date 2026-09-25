@@ -361,13 +361,15 @@ class TestOrphanedExecutingCleanup:
         result = doctor._check_orphaned_executing(True, config, PLUGIN_ROOT / "shared" / "config" / "company.yaml")
         assert result.status == "pass"
         assert result.fix_applied
-        assert "Reset" in result.detail
+        assert "failed" in result.detail and "reconcil" in result.detail
 
         # Verify it was actually reset
         from state_db import get_pending_action
         final = get_pending_action(config, action["id"])
-        assert final["state"] == "approved"
-        assert "orphaned" in final.get("last_error", "").lower()
+        # v0.7.4: a stale claim is closed out as failed, never re-armed — it
+        # may already have run, so a retry could execute it twice.
+        assert final["state"] == "failed"
+        assert "reconcile" in final.get("last_error", "").lower()
 
     def test_fresh_executing_not_reset(self, temp_project):
         """Executing actions younger than the threshold should NOT be reset."""

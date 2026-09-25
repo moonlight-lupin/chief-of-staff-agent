@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.7.4 — Approval integrity
+
+An independent assessment of v0.7.3 found that the safety core held, but the
+edges around approval did not. Approvals were not tied to what was approved,
+one executor sent email for any approved action, a repair step could send an
+email twice, and the cloud-session refusal existed only in a report. This
+release closes those gaps. It also includes the follow-up to PR #27.
+
+> Touches the pending-action state machine, the guardrail, every executor
+> and the workspace client factory.
+
+### Changes
+
+- **Approval is bound to what was approved.** Approving now stores a SHA-256
+  of the action's type, target and payload, in a new `approval_hash` column
+  that is added automatically. Before execution, `claim`/`execute` refuse,
+  and audit as `blocked`, any action whose content changed after approval.
+  They also refuse any action that was never approved through the queue (for
+  example a row inserted into `state.db` as `approved`). A retry after a
+  provider failure keeps the original approval. Actions approved before
+  v0.7.4 have no hash: cancel them and queue them again (approvals lapse
+  after 24h in any case).
+- **`send_email.py execute` only sends email.** It checks for `gmail.send` /
+  `mail.send` before claiming, so an action approved as, say, a label can no
+  longer become a send. A failed send is recorded as a failure, not as
+  executed.
+- **A stale claim is never re-armed.** `doctor --fix` and `state_tools`
+  repair now close an action stuck in `executing` as `failed`, with a
+  "reconcile manually" note. They used to reset it to `approved`, which could
+  send an email a second time if the first send had happened without being
+  recorded. The two tests that pinned the old behaviour are updated to match.
+- **Executors only run a claim they won.** The pipeline and `cron.create`
+  executors used to proceed on an action another process had already claimed.
+- **The break-glass switches are operator-only and visible.**
+  - `.env` can no longer set `CHIEF_OF_STAFF_AUTO_APPROVE` or
+    `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE`.
+  - `capabilities` reports their live values (`break_glass`, and "Approval
+    gates … BYPASSED by …" in `--summary`).
+  - `doctor` warns while either one is on.
+- **Cloud sessions really refuse credential providers.** `get_workspace_client`
+  raises `HostedSessionRefusal` for `google_api`, `m365` and `composio` when
+  `CLAUDE_CODE_REMOTE_SESSION_ID` is set. Before, only `capabilities`
+  reported the refusal. `daily`, `readiness` and `doctor` show the reason
+  instead of crashing.
+- **The audit tamper test can fail.** It swallowed its own `AssertionError`,
+  so a verifier that ignored hash mismatches still passed. That mutation now
+  fails it.
+- **Schema race fixed:** two processes opening a fresh `state.db` no longer
+  race to add a column.
+- **PR #27 follow-up** (deep-research 1.8.0 → 1.8.1):
+  - Tests now pin the three PR #27 gate fixes that shipped untested: `mm` is
+    not "million", a blank `--refute-none` is ignored, and legacy quality
+    values count as `secondary`.
+  - `references/validation-gates.md` no longer says `mm` = `m`, as the v0.7.2
+    entry below does. It also documents that each `[VERIFIED]` host needs its
+    own supporting snippet, so paraphrased corroboration scores low, and that
+    counter-evidence claims must be evidence-backed.
+- Version 0.7.3 → 0.7.4 in all six locations.
+
 ## v0.7.3 — Contacts follow-ups
 
 A review of v0.7.1 found that approved contacts actions could not execute,

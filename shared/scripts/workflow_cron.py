@@ -296,6 +296,11 @@ def execute_cron_create(
     if not isinstance(action, dict) or action.get("type") != CRON_CREATE_TYPE:
         raise WorkflowRunError(f"cron.create action not found: {action_id}")
     state = str(action.get("state") or "")
+    if state == "executing":
+        # Claimed by another process: only the claim winner may register the
+        # cron, or it is installed twice.
+        raise WorkflowRunError(
+            f"cron.create {action_id} is already claimed by another execution; not running it again")
     if state == "approved":
         claimed = mark_executing(config, action_id)
         if not isinstance(claimed, dict):

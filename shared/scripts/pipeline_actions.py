@@ -747,7 +747,15 @@ def execute_pipeline_action(config: Any, action_id: str) -> dict[str, Any]:
                 "action_type": action_type,
             }
         action = executing
-    elif state != "executing":
+    elif state == "executing":
+        # Claimed by another process: only the claim winner may act, or the
+        # same deal change runs twice.
+        return {
+            "success": False,
+            "error": "Action is already claimed by another execution (state=executing); not running it again",
+            "action_type": action_type,
+        }
+    else:
         return {
             "success": False,
             "error": f"Action not approved (state={state})",

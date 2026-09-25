@@ -299,6 +299,13 @@ def get_workspace_client(config: Any) -> WorkspaceClient:
     workspace_cfg = integrations.get("workspace", {}) if isinstance(integrations, Mapping) else {}
     provider = str(workspace_cfg.get("provider", "google_api") or "google_api")
 
+    # Enforced here, not only reported by `capabilities`: in a hosted cloud
+    # session a credential-holding provider is never constructed.
+    from workspace_guardrails import HostedSessionRefusal, hosted_session_refusal
+    refusal = hosted_session_refusal(provider)
+    if refusal:
+        raise HostedSessionRefusal(refusal)
+
     if provider not in _PROVIDER_REGISTRY:
         raise ValueError(
             f"Unknown workspace provider: {provider}. "

@@ -95,6 +95,11 @@ _DOTENV_REJECT_KEYS = {
     "LD_LIBRARY_PATH",
     "PYTHONPATH",
     "PYTHONHOME",
+    # Break-glass switches are an operator's deliberate, per-shell choice. A
+    # file that anything with write access to the plugin dir can edit must not
+    # be able to turn the approval gates off.
+    "CHIEF_OF_STAFF_AUTO_APPROVE",
+    "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE",
 }
 
 

@@ -177,6 +177,10 @@ def in_hosted_session() -> bool:
     return bool(os.getenv(_HOSTED_SESSION_ENV, "").strip())
 
 
+class HostedSessionRefusal(RuntimeError):
+    """A credential-holding provider was requested in a hosted cloud session."""
+
+
 def hosted_session_refusal(provider: str) -> str | None:
     """Return a refusal message if ``provider`` must not be used here.
 
@@ -234,6 +238,14 @@ def requires_confirmation(action: str) -> bool:
     # — the author must also add it to SAFE_WRITE_ACTIONS or
     # DESTRUCTIVE_ACTIONS to get auto-approve behavior.
     return True
+
+
+BREAK_GLASS_FLAGS: tuple[str, ...] = ("CHIEF_OF_STAFF_AUTO_APPROVE", "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
+
+
+def break_glass_state() -> dict[str, bool]:
+    """Live on/off state of the operator break-glass switches."""
+    return {name: os.getenv(name, "").strip().lower() in ("1", "true", "yes") for name in BREAK_GLASS_FLAGS}
 
 
 def _is_auto_approved() -> bool:
