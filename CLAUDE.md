@@ -66,6 +66,14 @@ Do not re-read doctor output, CHANGELOG.md, or the full CLAUDE.md on every run. 
 
 If `capabilities` provider/state lines are unchanged from the last recorded run, skip re-orientation and go straight to the scheduled work.
 
+Cron prompts outlive releases. Reference plugin scripts by their current path
+(`skills/<name>/scripts/...`) and plugin skills as `chief-of-staff:<name>`
+only when `skills/<name>/` exists; your own agent skills take no
+`chief-of-staff:` prefix. After an upgrade, `doctor`'s `cron_prompts` check
+lists any job whose prompt points at a path or skill that no longer exists.
+It never edits a job. Workflows installed with `workflows install` are bound
+by the plugin and checked by `cron_skill_files`.
+
 ## Commands
 
 Every CLI prints JSON by default and a human table under `--summary`. Parse the

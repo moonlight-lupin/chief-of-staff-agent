@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.7.5 — Test isolation and stale cron prompts
+
+Two findings from field use of v0.5.7 through v0.7.4 on a production-like
+install running headless crons.
+
+### Changes
+
+- **The test suite can no longer see the operator's state.** Tests that
+  called state code without a config (`StateDB(None)`) fell back to
+  `CHIEF_OF_STAFF_PROJECT_ROOT` or `load_config()`, and on a real install that
+  is the operator's live `state.db`. `test_build_trends_section_never_raises`
+  failed when that database held trend snapshots. On an empty root it passed
+  but created a `state.db` there. A new autouse fixture in `tests/conftest.py`
+  unsets `CHIEF_OF_STAFF_PROJECT_ROOT`, points `CHIEF_OF_STAFF_CONFIG` at a
+  missing file and gives every test an empty Hermes home. Every test now sees
+  what a clean CI checkout sees. The full suite leaves a seeded operator root,
+  its Hermes cron store and a real `shared/config/company.yaml` byte-for-byte
+  unchanged.
+- **New doctor check: `cron_prompts`.** Cron jobs carry their own prompt
+  text, so after an upgrade moves a script or a prompt names a skill the
+  plugin never shipped, the scheduled run breaks silently. `cron_jobs` and
+  `cron_skill_files` stayed green because neither reads the prompts of the
+  user's own jobs. `cron_prompts` reads `$HERMES_HOME/cron/jobs.json` and
+  warns about:
+  - plugin script paths that no longer exist. It names where the script
+    lives now.
+  - `chief-of-staff:<name>` skills that are not plugin skills. It suggests
+    the closest real skill, or dropping the prefix for an agent-scope skill.
+
+  The check ignores the user's own scripts, bare script names and paths
+  relative to a skill the job loads. It is read-only, `--fix` included, and
+  it reports only the offending reference, never a prompt body.
+- `CLAUDE.md` documents how cron prompts should reference plugin paths and
+  skills. `CONTRIBUTING.md` documents the isolation fixture.
+
 ## v0.7.4 — Approval integrity
 
 An independent assessment of v0.7.3 found that the safety core held, but the

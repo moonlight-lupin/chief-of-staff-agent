@@ -58,6 +58,11 @@ pass. Follow that where you can.
 - `conftest.py` provides `tmp_project_dir` and `sample_company_yaml`
 - **Never write to the real `skills/` tree from a test** — an autouse fixture
   sandboxes bootstrap for exactly this reason
+- **Never read or write the operator's real state from a test.** Another
+  autouse fixture unsets `CHIEF_OF_STAFF_PROJECT_ROOT`, points
+  `CHIEF_OF_STAFF_CONFIG` at a missing file and gives each test an empty
+  Hermes home, so the suite sees what a clean CI checkout sees. A test that
+  needs a project root passes a config or sets the variable itself.
 - Anything touching state, approval, or execution needs a test for the
   *refusal* path, not only the happy path
 
