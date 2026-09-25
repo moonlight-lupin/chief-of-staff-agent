@@ -42,6 +42,16 @@ def _identify(repo: Path) -> None:
     _git(repo, "config", "user.email", "test@example.com")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_git_discovery(tmp_path, monkeypatch):
+    """Stop git walking up out of tmp_path into an enclosing repository.
+
+    CI points TMPDIR inside the plugin checkout, so without a ceiling a "plain"
+    tmp directory is discovered as part of the plugin repo itself.
+    """
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+
+
 @pytest.fixture
 def data_repo(tmp_path, monkeypatch):
     """A clone of an empty bare remote, standing in for the private data repo."""
