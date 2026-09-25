@@ -145,6 +145,26 @@ class WorkspaceClient(abc.ABC):
         """Restore a trashed file from Drive trash / OneDrive recycle bin."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support files_untrash")
 
+    # ── Contacts (neutral) ─────────────────────────────────────────────
+
+    def contacts_list(self, max_results: int = 50) -> list[dict[str, Any]]:
+        """List contacts. Returns list of contact dicts (name/emails/phones)."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support contacts_list")
+
+    def contacts_create(self, given_name: str = "", family_name: str = "",
+                        email: str = "", phone: str = "",
+                        organization: str = "", note: str = "") -> dict[str, Any]:
+        """Create a contact. Returns created contact metadata (resourceName)."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support contacts_create")
+
+    def contacts_update(self, person_id: str, **fields: Any) -> dict[str, Any]:
+        """Update a contact (merge-safe: omitted field types preserved)."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support contacts_update")
+
+    def contacts_delete(self, person_id: str) -> dict[str, Any]:
+        """Delete a contact PERMANENTLY (no trash step)."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support contacts_delete")
+
     @abc.abstractmethod
     def health_check(self) -> bool:
         """Return True if the provider is healthy and authenticated."""

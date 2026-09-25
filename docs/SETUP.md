@@ -54,7 +54,8 @@ python shared/scripts/bootstrap.py --company "Your Company" --jurisdiction SG --
 3. Set up Google service account:
    - Create a service account in [GCP Console](https://console.cloud.google.com/iam-admin/serviceaccounts)
    - Enable domain-wide delegation
-   - Authorize scopes in [Google Workspace Admin Console](https://admin.google.com/ac/owl)
+   - Authorize scopes in the [Domain-wide Delegation page](https://admin.google.com/ac/owl/domainwidedelegation) (menu path: Security → Access and data control → API controls → Domain-wide delegation → Manage domain-wide delegation). The direct link is preferred; menu labels drift between console redesigns.
+   - Enable each Google API you will use in the [GCP Console API Library](https://console.cloud.google.com/apis/library) — an API disabled in the project returns 403 `SERVICE_DISABLED` even with delegation in place (e.g. People API for contacts).
    - Download the JSON key file
 
 4. Update `shared/config/company.yaml`:
@@ -158,6 +159,39 @@ python shared/scripts/connect_workspace.py --status
 ```bash
 python skills/daily-briefing/scripts/daily_briefing.py --dry-run --json
 ```
+
+##### Google Contacts via Composio (BYO OAuth client — not managed auth)
+
+Unlike Gmail/Calendar/Drive, Composio does **not** ship a managed OAuth client
+for the `googlecontacts` toolkit: the connect dialog requires **your own OAuth
+client credentials** (Client ID + Client secret, both mandatory). Google
+treats the contacts scope as sensitive, so Composio offloads the client app to
+you. One-time setup, ~10 minutes:
+
+1. In the [GCP Console](https://console.cloud.google.com/apis/credentials)
+   (any project with the **People API enabled**), create
+   **Credentials → Create credentials → OAuth client ID → Web application**.
+2. **Authorized redirect URIs** — add exactly:
+   ```
+   https://backend.composio.dev/api/v1/auth-apps/add
+   ```
+   (This is the Redirect URI the Composio connect dialog shows; copy it from there.)
+3. **OAuth consent screen**: for a Google Workspace org, choose **Internal**
+   type — internal users skip Google's verification process entirely. If your
+   project forces External, keep it in Testing and add your own address as a
+   test user; the "unverified app" warning during consent is safe for your own
+   account.
+4. Scopes: include `https://www.googleapis.com/auth/contacts` (People API).
+5. In the Composio dashboard (Connect Apps → Googlecontacts → Connect), paste
+   the Client ID and Client Secret, continue, and complete the Google consent
+   as the account that owns the contacts.
+6. Verify the connection sees the expected account before wiring any code —
+   list contacts through the toolkit and confirm the account matches.
+
+Note: this connection authenticates as **user OAuth** (the account you
+consented with), not a service account — a separate grant from any
+domain-wide-delegation setup. The `google_api` provider path (Option 1) uses
+the service account instead; the two paths can coexist.
 
 #### Microsoft 365 via Composio (easiest M365 onboarding — no Entra admin)
 

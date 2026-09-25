@@ -54,6 +54,14 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # via drive delete (default is trash, reversible)
         "files.untrash": True,      # Drive REST files.update trashed=False (SA) — mirrors soft-delete restore
+        # Contacts (People API via google_api.py contacts subcommands) — all four
+        # execution-verified 2026-09-25 against the live Phronesis Workspace
+        # account (DWD contacts write scope granted; create → merge-update →
+        # delete cycle green, zero residue).
+        "contacts.list": True,
+        "contacts.create": True,
+        "contacts.update": True,
+        "contacts.delete": True,
     },
     # Google Composio family — v0.3.13/v0.3.14.
     # Execution-verified 2026-07-16 (live Gmail): mail.list_tags
@@ -96,6 +104,13 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
         "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
+        # Contacts — NOT wired: GOOGLECONTACTS toolkit (BYO OAuth) not connected,
+        # no slugs mapped. False until live-verified (tripwire convention).
+        # Toolkit exists: docs.composio.dev/toolkits/googlecontacts (24 tools).
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     "composio:mcp": {
         "mail.search": True,
@@ -121,6 +136,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
         "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
+        # Contacts — NOT wired (see "composio" above); False until live-verified.
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Composio Microsoft family (Outlook mail/calendar + OneDrive via managed
     # OAuth) — providers.composio_mcp_workspace with family=microsoft. The client
@@ -179,6 +199,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         # The OneDrive recycle bin and the queried SharePoint recycle bin do not
         # line up. Flip only after a live run actually restores a file.
         "files.untrash": False,
+        # Contacts — not wired on the microsoft family (no contacts slugs mapped).
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -205,6 +230,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,
         "files.untrash": False,     # wired (Personal Graph + Business SharePoint recycle bin) but NOT live-verified — see composio_microsoft note
+        # Contacts — not wired on the microsoft family (no contacts slugs mapped).
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -242,6 +272,12 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         # Sites.ReadWrite.All) but kept False — no live m365/Entra environment has
         # exercised the SharePoint restore path. Flip only after a live run.
         "files.untrash": False,
+        # Contacts — not implemented on M365GraphClient (Graph contacts API not
+        # wired); stays False until implemented and live-verified.
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Claude-native agent provider — actions are performed by the agent/tools,
     # not by script-callable provider methods, so every script-callable action
@@ -266,6 +302,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": False,
         "files.trash": False,
         "files.untrash": False,
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
 }
 
