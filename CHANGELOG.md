@@ -30,6 +30,38 @@ See [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
   inherited it from the session.
 - `.venv/` is gitignored.
 
+## v0.6.1 — Deep-research validation gates
+
+The deep-research skill could deliver reports whose factual claims were not
+backed by the evidence gathered during the run: citations could point at rows
+that said nothing relevant, structure drift slipped past prompt discipline,
+and everything lived in context — lost on compaction. v0.6.1 adds a
+deterministic, stdlib-only validation layer and an on-disk evidence store.
+
+### Changes
+
+- **`research_validation.py` (new, `skills/deep-research/scripts/`).** Four
+  subcommands: an evidence store (`init-run` / `register-source` /
+  `add-claim` / `add-evidence` — append-only `claims.jsonl` + run manifest,
+  sha256 source IDs, URL-canonicalized dedup), `verify-claims` (deterministic
+  token/number/year/entity overlap scoring with figure and year contradiction
+  caps, occurrence-level year boundaries, `--strict` exit 1 on unsupported
+  factual claims), `verify-citations` (inline `[N]` ↔ Sources-row
+  reconciliation, URL well-formedness, generic-title and citation-range
+  flags), and `validate-report` (required sections incl. Contradictions and
+  Gaps, placeholder/truncation detection, stats block, evidence-key legend).
+- **SKILL.md 1.6.0 → 1.7.9.** Step 5.5 validation gates (mandatory for 5+
+  source reports, 3-cycle fix loop), evidence persistence §3b.1, provider
+  preference block, provider in the stats line. Full gates contract moved to
+  `references/validation-gates.md`; SKILL.md stays under the 450-line
+  contract (448).
+- **Tests: `tests/test_deep_research_gates.py`, 78 tests** — store CRUD,
+  dedup, support scoring (incl. the occurrence-level year/figure boundary
+  cases from review rounds 3-5), citation and structure gates.
+
+Review: Codex confirm loop 5 rounds (findings 3→5→1→1→0, SHIP) + Claude Opus
+net review (SHIP). Suite: 2577 passed. Ruff clean.
+
 ## v0.6.0 — Workflow Orchestrator
 
 Capture a repeating business process as declarative YAML and run it under the
