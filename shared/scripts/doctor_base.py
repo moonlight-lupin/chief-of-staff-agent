@@ -1070,7 +1070,8 @@ def _check_orphaned_executing(fix: bool, data: dict[str, Any] | None, config_pat
     if fix and stale_ids:
         for a in stale:
             revert_stuck_action(cfg, a["id"], max_minutes=ORPHANED_EXECUTING_MINUTES)
-        detail = f"Reset {len(stale_ids)} stale action(s) to 'approved': {', '.join(stale_ids)}"
+        detail = (f"Marked {len(stale_ids)} stale action(s) 'failed' for manual reconciliation "
+                  f"(they may already have run): {', '.join(stale_ids)}")
         if fresh_ids:
             detail += f"; {len(fresh_ids)} fresh skipped"
         if no_ts_ids:
@@ -1149,7 +1150,18 @@ def _check_workflow_crons_doc(fix: bool, data: dict[str, Any] | None, config_pat
         return CheckResult("workflow_crons_doc", "warn", f"workflow cron checks unavailable: {exc}")
 
 
+def _check_break_glass(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Warn while an approval-gate break-glass switch is on in this environment."""
+    from workspace_guardrails import break_glass_state
+    on = [name for name, value in break_glass_state().items() if value]
+    if on:
+        return CheckResult("break_glass", "warn",
+                           f"approval gates bypassed by {', '.join(on)} — unset unless you set it deliberately")
+    return CheckResult("break_glass", "pass", "approval-gate break-glass switches are off")
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
+    _check_break_glass,
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_assistant_name,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,

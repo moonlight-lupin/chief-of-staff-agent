@@ -385,7 +385,11 @@ def _find_executing_actions(data: dict[str, object] | None, min_age_minutes: int
 
 def _reset_executing_actions(data: dict[str, object], path: Path,
                               min_age_minutes: int = 0, force: bool = False) -> list[str]:
-    """Reset executing actions to approved. Only resets stale ones unless force=True."""
+    """Close out stale 'executing' actions as 'failed' for manual reconciliation.
+
+    Never back to 'approved': a claim with no recorded result may already have
+    run, and re-arming it would run it twice. Only stale ones unless force=True.
+    """
     actions = data.get("actions")
     if not isinstance(actions, dict):
         return []
@@ -393,7 +397,8 @@ def _reset_executing_actions(data: dict[str, object], path: Path,
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(minutes=min_age_minutes) if min_age_minutes > 0 else now
     reset_ids: list[str] = []
-    note = f"Reset from orphaned executing state by state_tools repair at {_now_iso()}; verify before executing."
+    note = (f"Closed out by state_tools repair at {_now_iso()}: stale claim with no recorded result — "
+            "it may already have run. Reconcile manually; queue a new action only if it did not happen.")
     for action_id, action in actions.items():
         if isinstance(action, dict) and action.get("state") == "executing":
             if not force:
@@ -409,7 +414,7 @@ def _reset_executing_actions(data: dict[str, object], path: Path,
                         continue  # invalid timestamp, skip unless force
                 else:
                     continue  # no timestamp, skip unless force
-            action["state"] = "approved"
+            action["state"] = "failed"
             previous = action.get("last_error")
             action["last_error"] = f"{previous}\n{note}" if previous else note
             reset_ids.append(str(action.get("id") or action_id))
@@ -421,7 +426,8 @@ def _reset_executing_actions(data: dict[str, object], path: Path,
                 for aid in reset_ids:
                     action = actions.get(aid) if isinstance(actions.get(aid), dict) else None
                     error = (action or {}).get("last_error")
-                    db._cas_update(str(aid), "executing", "approved", last_error=error, executing_at=None)
+                    db._cas_update(str(aid), "executing", "failed", last_error=error,
+                                   failed_at=_now_iso())
             finally:
                 db.close()
         except Exception:

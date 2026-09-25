@@ -122,6 +122,7 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         "project_root": project_root,
         "hosted_session": hosted,
         "hosted_session_refusal": refusal or "",
+        "break_glass": workspace_guardrails.break_glass_state(),
         "state_persistent": (not hosted) or git_durable,
         "state_note": state_note,
         "state_sync": sync,

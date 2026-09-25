@@ -139,8 +139,14 @@ If the action fails, close the loop honestly:
 review_queue.py record-execution --action-id <id> --status failure --error "..."
 ```
 
-An action left in `executing` is a stuck action; `doctor` reports it. Never
-abandon a claim silently.
+An action left in `executing` is a stuck action; `doctor` reports it, and
+`doctor --fix` closes it out as `failed` — never back to `approved`, because it
+may already have run. Check the provider (e.g. Sent mail) before queueing it
+again. Never abandon a claim silently.
+
+An approval covers exactly what was approved. If an action's type, target or
+payload changes after approval, `claim` and `execute` refuse it — queue and
+approve a new one.
 
 ## Hosted cloud sessions
 

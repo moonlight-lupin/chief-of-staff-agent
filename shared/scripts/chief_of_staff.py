@@ -37,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.7.3"
+VERSION = "0.7.4"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1672,6 +1672,8 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
         print(f"  Hosted session            {'YES' if report['hosted_session'] else 'no'}")
         if report["hosted_session_refusal"]:
             print(f"    ! {report['hosted_session_refusal']}")
+        on = [k for k, v in report.get("break_glass", {}).items() if v]
+        print(f"  Approval gates            {'BYPASSED by ' + ', '.join(on) if on else 'enforced'}")
         print(f"  State persists            {'yes' if report['state_persistent'] else 'NO'}")
         if not report["state_persistent"] or report["state_sync"].get("git_backed"):
             print(f"    ! {report['state_note']}")

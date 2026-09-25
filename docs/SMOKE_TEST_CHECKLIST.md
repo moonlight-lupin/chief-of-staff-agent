@@ -89,7 +89,8 @@ Verify: backup directory created with state files copied.
 python shared/scripts/doctor.py --fix
 ```
 
-Verify: any orphaned `executing` actions reset to `approved`.
+Verify: any stale `executing` actions are marked `failed` with a "reconcile manually" note —
+never reset to `approved`, since they may already have run.
 
 ## Pass criteria
 

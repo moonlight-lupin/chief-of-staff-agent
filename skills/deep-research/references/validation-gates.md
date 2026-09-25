@@ -37,15 +37,23 @@ python3 <skill_dir>/scripts/research_validation.py verify-claims    --dir <run_d
   verify-claims run. Three further checks, warnings by default and failures
   under `--strict`:
   - **`[VERIFIED]` independence** — a claim stored with `"basis": "verified"`
-    needs its snippet and added evidence to come from sources on ≥2 different
-    hosts (`www.` ignored). Otherwise add real corroboration or store it as
-    `sourced`.
+    needs corroboration from sources on ≥2 different hosts (`www.` ignored),
+    and each host counts only if its **own snippet** supports the claim
+    (score ≥ 0.60 on its own). Otherwise add real corroboration or store it as
+    `sourced`. Because scoring is word overlap, a source that says the same
+    thing in other words (a paraphrase: "uptake rose by 40 percent" for
+    "adoption grew 40%") scores low and will not count — phrase the claim
+    close to the sources' wording, or accept `[SOURCED]`.
   - **Counter-evidence** — once the store holds 5+ sources, at least one claim
-    must have `"polarity": "refute"`. If you searched and found none, pass
-    `--refute-none "<what you searched>"`; the reason is kept in the manifest.
+    must have `"polarity": "refute"` **and** be evidence-backed: a snippet from
+    a registered source that at least partially supports it. An empty refute
+    claim does not count. If you searched and found none, pass
+    `--refute-none "<what you searched>"`; the reason is kept in the manifest,
+    and a blank reason is ignored.
   - **Source-quality mix** — reported as `source_quality` (counts plus
     healthy / acceptable / weak, per SKILL.md §3e). `weak` adds a warning but
-    never fails: flag it under Gaps.
+    never fails: flag it under Gaps. Sources stored before quality was
+    validated, with a value outside the three tiers, count as `secondary`.
 
 ## Loop
 
@@ -90,8 +98,10 @@ contradiction caps. Accepted limitations, by design:
 - A missing signal in the snippet (no figures, no years) caps the score
   rather than proving support.
 - Magnitude abbreviations are normalised (`2.4bn` = `2.4b` = `2.4 billion`;
-  `mn`/`mln`/`mm` = `m`; `tn`/`trn` = `t`), but other unit variants still count
-  as different figures — write figures in one format per report.
+  `mn`/`mln` = `m`; `tn`/`trn` = `t`), but other unit variants still count as
+  different figures — write figures in one format per report. `mm` is
+  deliberately **not** read as million: it is also millimetre, so `2mm` vs
+  `2m` stays a contradiction.
 - A yearlike value adjacent to a magnitude word is treated as prose.
 - Digit runs inside product names ("iPhone15", "v2000") are figures, not years.
 
@@ -99,5 +109,6 @@ contradiction caps. Accepted limitations, by design:
 
 `tests/test_deep_research_gates.py` (plugin root) covers the evidence store,
 claim-support scoring, citation verification, and structure validation;
-`tests/test_deep_research_v072.py` covers the v0.7.2 hardening. Run with
-`python3 -m pytest tests/test_deep_research_gates.py tests/test_deep_research_v072.py`.
+`tests/test_deep_research_v072.py` covers the v0.7.2 hardening and
+`tests/test_deep_research_v074.py` pins the PR #27 fixes. Run with
+`python3 -m pytest tests/test_deep_research_gates.py tests/test_deep_research_v072.py tests/test_deep_research_v074.py`.

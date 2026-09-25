@@ -345,7 +345,9 @@ class TestStuckActionReconciliation:
         assert stuck[0]["id"] == action["id"]
 
     def test_revert_stuck_action(self, temp_project):
-        """A stuck 'executing' action must be revertable to 'approved' for retry."""
+        """A stuck 'executing' action is closed out as 'failed' for manual
+        reconciliation — never re-armed to 'approved' (v0.7.4: the claim may
+        already have run, so a retry could send twice)."""
         from state_db import (
             create_pending_action, approve_pending_action,
             mark_executing, _load, _save, get_pending_action,
@@ -373,7 +375,8 @@ class TestStuckActionReconciliation:
 
         result = revert_stuck_action(config, action["id"])
         assert result is not None
-        assert result["state"] == "approved"
+        assert result["state"] == "failed"
 
         loaded = get_pending_action(config, action["id"])
-        assert loaded["state"] == "approved"
+        assert loaded["state"] == "failed"
+        assert "reconcile" in loaded["last_error"].lower()

@@ -145,15 +145,15 @@ class TestAuditLogIntegrity:
         lines[0] = json.dumps(record)
         log_path.write_text("\n".join(lines) + "\n")
 
-        # verify_audit_chain must detect the tampering
+        # verify_audit_chain must detect the tampering. Raising on a malformed
+        # chain also counts as detection — but only specific parse errors, never
+        # the AssertionError itself (v0.7.4: a bare `except Exception: pass`
+        # here meant this test could not fail).
         try:
             valid = verify_audit_chain(config)
-            assert valid is False, "Tampered audit chain must be detected"
-        except ImportError:
-            pytest.fail("verify_audit_chain must exist for tamper detection")
-        except Exception:
-            # If it raises, that's also detection
-            pass
+        except (ValueError, KeyError):
+            valid = False
+        assert valid is False, "Tampered audit chain must be detected"
 
 
 # ═══════════════════════════════════════════════════════════════

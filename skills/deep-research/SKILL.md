@@ -1,7 +1,7 @@
 ---
 name: deep-research
 description: "Use when the user asks for deep research or a written multi-source report. For entity dossiers use entity-research; for news digests use news-monitoring."
-version: 1.8.0
+version: 1.8.1
 author: moonlight-lupin
 license: MIT
 platforms: [linux, macos, windows]
