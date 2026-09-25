@@ -1,14 +1,14 @@
 ---
 name: deep-research
 description: "Use when the user asks for deep research or a written multi-source report. For entity dossiers use entity-research; for news digests use news-monitoring."
-version: 1.7.9
+version: 1.8.0
 author: moonlight-lupin
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [research, deep-research, report, synthesis, iterative, citations, evidence-basis, provenance]
-    related_skills: [news-monitoring, entity-research, notebooklm-mode, youtube-topic-research, fact-checker, source-tracker]
+    related_skills: [news-monitoring, entity-research, note-taker]
 ---
 
 # Deep Research — Iterative Research Engine
@@ -33,7 +33,7 @@ See `references/structured-evidence-format.md` for the evidence.json layer and
 
 - **Entity vetting/dossiers** → use `entity-research` (has sanctions screening, structured lenses)
 - **Recurring news digests** → use `news-monitoring` (has cron, dedup, multi-language)
-- **Source-grounded Q&A from collected sources** → use `notebooklm-mode` (has vault + RAG)
+- **Q&A strictly over documents the user supplies** → answer directly from those documents with quotes; this skill researches the open web
 - **Quick factual question** → just use `web_search` directly
 - **Single-source extraction** → use `web_search` + `web_extract`
 
@@ -180,7 +180,7 @@ web_extract(urls=["url1", "url2", "url3"])
 
 ### 3b.1 — Evidence Persistence (mandatory for 5+ source reports)
 
-Persist evidence to disk from the first round so it survives context compaction: `init-run`, `register-source`, `add-claim`, `add-evidence` subcommands of `scripts/research_validation.py`. Add claims and evidence **during** the loop (§3d), not at the end — the append-only `claims.jsonl` is the fabrication-detection backbone for the gates. On context compaction, re-read `claims.jsonl` instead of trusting compressed memory. Full contract: `references/validation-gates.md`.
+Persist evidence to disk from the first round so it survives context compaction. The run directory is `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/` (project_root from `chief_of_staff.py capabilities`); the final report goes in the same folder as `report.md`. Use `init-run`, `register-source`, `add-claim`, `add-evidence` subcommands of `scripts/research_validation.py`. Add claims and evidence **during** the loop (§3d), not at the end — the append-only `claims.jsonl` is the fabrication-detection backbone for the gates. On context compaction, re-read `claims.jsonl` instead of trusting compressed memory. Full contract: `references/validation-gates.md`.
 
 ### 3c — Quality Filter and Extraction
 
@@ -267,7 +267,7 @@ Before writing the final report, structure the extracted evidence into a lightwe
 - **secondary** (2× weight): tech journalism, analyst reports, benchmark aggregators
 - **tertiary** (1× weight): Reddit, forums, Wikipedia, blog aggregators — useful for refute polarity and real-world anecdotes, but **never the sole support for a factual claim if a primary/secondary source exists**
 
-**Quality distribution check before writing the report:**
+**Quality distribution check before writing the report** (`verify-claims` computes it from the store as `source_quality`):
 - **Healthy**: ≥30% primary, ≤30% tertiary → proceed
 - **Acceptable**: ≥1 primary for key claims, <50% tertiary → note thin primary coverage as a gap
 - **Weak**: 0 primary, >50% tertiary → **flag in Gaps section** and attempt to fetch primary sources (official docs, model cards, pricing pages) before finalizing. If primary sources are unavailable, qualify tertiary-sourced claims explicitly ("community reports suggest..." not "X is true")
@@ -380,7 +380,7 @@ After the report, output a compact stats block:
 
 ## Step 5.5 — Validation Gates (mandatory before delivery)
 
-**Deterministic gates** — `scripts/research_validation.py`, stdlib-only, checks structure not judgment. Every report with 5+ sources passes three gates before delivery: `validate-report` (structure), `verify-citations` (inline `[N]` ↔ Sources rows), and `verify-claims --strict` (stored evidence must support each factual claim). **Loop:** validate → fix → re-run all three, max 3 cycles; still failing → stop and report the remaining problems to the user honestly. Never skip the gates, never deliver with a red gate. Quick 2-3 source reports (no store): `verify-claims` warns instead of failing — record it in the stats block. Full contract, flags, and the failure loop: `references/validation-gates.md`.
+**Deterministic gates** — `scripts/research_validation.py`, stdlib-only, checks structure not judgment. Every report with 5+ sources passes three gates before delivery: `validate-report` (structure), `verify-citations` (inline `[N]` ↔ Sources rows), and `verify-claims --strict` (stored evidence must support each factual claim; a claim stored with `basis: verified` needs sources on ≥2 different sites; at least one `polarity: refute` claim, or `--refute-none "<what you searched>"`). **Loop:** validate → fix → re-run all three, max 3 cycles; still failing → stop and report the remaining problems to the user honestly. Never skip the gates, never deliver with a red gate. Quick 2-3 source reports (no store): `verify-claims` warns instead of failing — record it in the stats block. Full contract, flags, and the failure loop: `references/validation-gates.md`.
 
 ## Follow-on Investment Analysis (optional)
 
@@ -388,16 +388,9 @@ When the report covers an investment question and the user provides deal paramet
 
 See `references/structured-evidence-format.md` for the evidence.json schema and writing-context vs claims distinction.
 
-## Vault Integration (optional)
+## Saving the research
 
-For larger research tasks (10+ sources) or when the user may want to follow up with grounded Q&A:
-
-1. Create a vault per `notebooklm-mode` at `<project_folder>/research-<topic>/`
-2. Save each source as a numbered file in `sources/` with verbatim extracts
-3. Use `ingest_source.py` to write + index atomically
-4. After the report, tell the user: "Sources saved to vault at [path]. You can ask follow-up questions grounded in these sources — say 'notebooklm mode' to query the vault."
-
-This is optional — the skill works fully without a vault for one-off reports.
+Everything for one run lives in `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/`: `report.md`, `run_manifest.json`, `sources.jsonl`, `claims.jsonl`. It travels with the rest of the user's project data — when `storage.mode` is `git` (see `capabilities`), run `chief_of_staff.py sync push` after delivering so the research survives a cloud session. For findings worth keeping long-term, offer to file a short summary with links back to the report into the wiki via `note-taker`.
 
 ## Subagent Mode (optional)
 
