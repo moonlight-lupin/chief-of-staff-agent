@@ -15,3 +15,7 @@ shared/templates/index.yaml
 
 # Bootstrap-rendered skill overlay for local assistant names
 skills.local/
+
+# Local plugin venv and per-session Claude Code state
+.venv/
+.claude/*.local

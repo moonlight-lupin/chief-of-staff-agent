@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import copy
+import os
 import re
 import shutil
 import subprocess
@@ -161,6 +162,25 @@ def prompt_bool(label: str, default: bool = False) -> bool:
         if raw in {"n", "no", "false", "0"}:
             return False
         print("  Enter yes or no.")
+
+
+def prompt_storage() -> dict[str, Any]:
+    """Ask where project data lives. Git is opt-in; it is only suggested by
+    default inside a Claude Code cloud session, where local files do not
+    survive the session."""
+    hosted = bool(os.getenv("CLAUDE_CODE_REMOTE_SESSION_ID", "").strip())
+    print("\n== Data storage ==")
+    print("  local: plain files on this machine (the usual choice).")
+    print("  git:   a PRIVATE git repo you own, synced with `chief_of_staff.py sync`.")
+    print("         Needed to keep data across Claude Code cloud sessions.")
+    if not prompt_bool("Keep project data in a private git repo?", default=hosted):
+        return {"mode": "local"}
+    repo = prompt_text(
+        "Private data repo (owner/name or git URL; blank = local repo, add a remote later)",
+        default="",
+        required=False,
+    )
+    return {"mode": "git", "data_repo": repo} if repo else {"mode": "git"}
 
 
 def prompt_int(label: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -495,6 +515,7 @@ def build_interactive_config() -> dict[str, Any]:
             "staging": f"{project_root.rstrip('/')}/staging/",
         }
     )
+    config["storage"] = prompt_storage()
     PARTIAL_DATA.update(config)
 
     config["sales_stages"] = prompt_sales_stages()
@@ -557,6 +578,11 @@ def validate_config(data: dict[str, Any]) -> None:
     for key in required_company:
         if not str(company.get(key, "")).strip():
             raise OnboardingError(f"Missing required company.{key}")
+    storage = data.get("storage")
+    if storage is not None:
+        mode = storage.get("mode") if isinstance(storage, dict) else None
+        if mode not in ("local", "git"):
+            raise OnboardingError("storage.mode must be 'local' or 'git'.")
     if str(company["jurisdiction"]).upper() not in SUPPORTED_JURISDICTIONS:
         raise OnboardingError("company.jurisdiction must be one of SG, HK, US, UK")
     validate_date(str(company["incorporation_date"]))
@@ -889,6 +915,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def prepare_storage(config: dict[str, Any]) -> None:
+    """For storage.mode git, make project_root a clone of the data repo before
+    the wiki is seeded into it (a clone needs an empty directory)."""
+    storage = config.get("storage") or {}
+    if storage.get("mode") != "git":
+        return
+    import state_sync
+
+    root = expand_user_path(str(config.get("paths", {}).get("project_root", "")))
+    try:
+        result = state_sync.prepare_git_storage(root, storage.get("data_repo") or None)
+    except state_sync.SyncError as exc:
+        raise OnboardingError(str(exc)) from exc
+    print(f"Git storage: {result['action']} at {root}")
+    for note in result.get("notices", []):
+        print(f"  {note}")
+
+
 def run(args: argparse.Namespace) -> int:
     global PARTIAL_OUTPUT
     output = args.output.expanduser().resolve()
@@ -907,6 +951,7 @@ def run(args: argparse.Namespace) -> int:
     PARTIAL_DATA.update(config)
     validate_config(config)
     confirm_overwrite(output, non_interactive=args.non_interactive, force=args.force)
+    prepare_storage(config)
     wiki_files: list[Path] = [] if args.skip_wiki else initialize_wiki(config, force=args.force)
     dump_yaml(config, output)
     print_summary(config, output, wiki_files)
