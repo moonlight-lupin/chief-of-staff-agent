@@ -274,3 +274,36 @@ class TestSkillDocs:
 
     def test_gates_reference_does_not_mislabel_the_plugin_licence(self):
         assert "MIT like the plugin" not in GATES_MD
+
+
+# ─── Codex review round 2: strict-gate false passes ──────────────────────────
+
+class TestVerifiedCorroboration:
+    """[VERIFIED] must mean CORROBORATED, not just >=2 hosts."""
+
+    def test_unrelated_second_host_does_not_satisfy_verified(self, run_dir):
+        s1 = _source(run_dir, "https://www.alpha.example/report")
+        s2 = _source(run_dir, "https://beta.example/study")
+        # c1 supported by s1; evidence from s2 that does NOT support the claim
+        assert _claim(run_dir, "c1", s1, basis="verified", polarity="refute")[0] == 0
+        _run(rv.cmd_add_evidence, dir=str(run_dir), json=json.dumps(
+            {"claim_id": "c1", "snippet": "Completely unrelated text about a different topic",
+             "source_id": s2}))
+        rc, out = _run(rv.cmd_verify_claims, dir=str(run_dir), strict=True)
+        assert rc == 1, out
+        assert out["basis_warnings"] == 1
+
+
+class TestRefuteClaimSubstance:
+    """A refute claim must actually be evidence-backed to count as counter-evidence."""
+
+    def test_unsupported_refute_claim_does_not_satisfy_the_gate(self, run_dir):
+        sids = [_source(run_dir, f"https://site{i}.example/a") for i in range(5)]
+        for i, sid in enumerate(sids):
+            assert _claim(run_dir, f"c{i}", sid, polarity="support")[0] == 0
+        # refute claim with no snippet and no source — must NOT count
+        assert _claim(run_dir, "r1", "", kind="interpretive", polarity="refute",
+                      snippet="", source_id="")[0] == 0
+        rc, out = _run(rv.cmd_verify_claims, dir=str(run_dir), strict=True)
+        assert rc == 1, out
+        assert "counter-evidence" in out["refute_warning"]
