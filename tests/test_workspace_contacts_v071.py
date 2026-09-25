@@ -62,10 +62,10 @@ class TestContactsInterface:
 def google_config():
     return {
         "google": {
-            "service_account_path": "~/.hermes/secrets/phronesis_service_account.json",
-            "domain": "phronesis-applied.com",
-            "delegate_email": "menghuey@phronesis-applied.com",
-            "account_alias": "phronesis",
+            "service_account_path": "~/.hermes/secrets/test_service_account.json",
+            "domain": "test.com",
+            "delegate_email": "founder@test.com",
+            "account_alias": "test",
         },
         "integrations": {"workspace": {"provider": "google_api", "mode": "direct"}},
     }

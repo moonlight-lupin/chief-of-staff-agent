@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.7.3 — Contacts follow-ups
+
+A review of v0.7.1 found that approved contacts actions could not execute,
+that one documented safety gate did not exist, and that the tests would not
+notice if the guardrail classification changed.
+
+> Touches the guardrail: `contacts.update` moves into `DESTRUCTIVE_ACTIONS`.
+
+### Changes
+
+- **Approved contacts actions now execute.** The review-queue execute router
+  (`webhook_events.py execute`) gains `contacts.create`, `contacts.update`
+  and `contacts.delete` branches. Before, an approved contacts action was
+  marked failed with "Unknown action type" and the provider was never called.
+  `person_id` falls back to the action's target.
+- **`contacts.update` really is gated under auto-approve.** v0.7.1 said it
+  was, but a non-interactive run with `CHIEF_OF_STAFF_AUTO_APPROVE=1`
+  overwrote the contact. It now needs the destructive dual gate
+  (`AUTO_APPROVE` + `ALLOW_DESTRUCTIVE`), like `contacts.delete`. The
+  approved-execute path sets both, so queued updates still run.
+- **The guardrail classification is pinned by tests.** Set membership is
+  asserted, and the real `confirm_action` runs across every flag combination
+  in a non-interactive session. A blocked attempt is shown to be audited as
+  `blocked`. The v0.7.1 tests replaced `confirm_action` with a stub, so
+  reclassifying `contacts.delete` as a read passed the whole suite; six
+  tests now fail on that change.
+- **Refusals explain themselves.** composio, composio:mcp,
+  composio_microsoft(:mcp), m365 and agent get a specific reason for every
+  `contacts.*` action, and the recommendation is `google_api`. It used to
+  point at `composio`, which also refuses.
+- **The preview states reversibility.** `review_queue.py preview` says a
+  contact delete is permanent with no undo, and that an update keeps no
+  prior values. An update's preview names the fields, not the new values.
+  Risk explanations now cover `contacts.*`.
+- **Test fixtures use placeholder values** instead of a real work address
+  and domain.
+- Version 0.7.2 → 0.7.3 in all six locations.
+
+Known, not changed here: `capabilities` reports google_api contacts as
+supported whether or not the installed `google_api.py` has the `contacts`
+subcommands. A write against an older script fails closed.
+
 ## v0.7.2 — Deep-research gate hardening
 
 A review of deep-research after v0.7.0 found gates that could be fooled,

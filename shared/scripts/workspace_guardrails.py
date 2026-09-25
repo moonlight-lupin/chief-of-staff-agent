@@ -104,6 +104,7 @@ DESTRUCTIVE_ACTIONS: frozenset[str] = frozenset({
     "drive.delete",
     "files.delete",
     "contacts.delete",   # permanent People API deleteContact — no trash step
+    "contacts.update",   # overwrites supplied fields; no prior-value record to undo from
 })
 
 # Actions that create new objects but don't destroy existing ones, OR whose
@@ -143,9 +144,9 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "gmail.create_label",
     "contacts.create",   # creates a new contact, destroys nothing
     # contacts.update deliberately NOT here: a supplied field REPLACES the
-    # existing value with no prior-value record to reverse from, so it must
-    # gate on approval even under CHIEF_OF_STAFF_AUTO_APPROVE (Codex review,
-    # 2026-09-25). It stays in WRITE_ACTIONS (approval-queued).
+    # existing value with no prior-value record to reverse from. It sits in
+    # DESTRUCTIVE_ACTIONS, so AUTO_APPROVE alone cannot run it — it needs the
+    # ALLOW_DESTRUCTIVE dual gate, which the approved-execute path sets.
 })
 
 

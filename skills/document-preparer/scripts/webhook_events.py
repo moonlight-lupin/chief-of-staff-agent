@@ -41,6 +41,9 @@ except Exception as exc:  # pragma: no cover
 
 from action_result_cli import print_json
 
+# Contact fields a queued contacts.create/update payload may carry.
+_CONTACT_FIELDS = ("given_name", "family_name", "email", "phone", "organization", "note")
+
 
 # ─── Action routing for approve/execute ───────────────────────
 
@@ -351,6 +354,17 @@ def cmd_execute(args: argparse.Namespace) -> int:
                 )
             elif action_type == "drive.trash":
                 result = client.files_trash(file_id=payload.get("file_id", ""))
+            elif action_type == "contacts.create":
+                result = client.contacts_create(**{
+                    k: payload.get(k, "") for k in _CONTACT_FIELDS})
+            elif action_type == "contacts.update":
+                result = client.contacts_update(
+                    person_id=payload.get("person_id") or action.get("target", ""),
+                    **{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)},
+                )
+            elif action_type == "contacts.delete":
+                result = client.contacts_delete(
+                    person_id=payload.get("person_id") or action.get("target", ""))
             else:
                 mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
                 print(f"❌ Unknown action type: {action_type}", file=sys.stderr)

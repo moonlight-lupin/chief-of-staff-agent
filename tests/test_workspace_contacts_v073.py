@@ -182,13 +182,18 @@ def test_update_falls_back_to_the_target_for_person_id(google_config, client, no
     assert "people/777" in run.call_args[0][0]
 
 
-def test_provider_failure_marks_the_action_failed(google_config, client, no_tty, flags):
+def test_provider_failure_is_recorded_for_retry(google_config, client, no_tty, flags):
+    """Below the retry cap a failure returns the action to 'approved' with the
+    error and retry count recorded (state_db's retry contract)."""
     from state_db import get_pending_action
     flags(False, False)
     action_id = _approved(google_config, "contacts.delete", "people/123", {"person_id": "people/123"})
     rc, _ = _execute(google_config, client, action_id, (1, "", "404 not found"))
     assert rc == 1
-    assert get_pending_action(google_config, action_id)["state"] == "failed"
+    action = get_pending_action(google_config, action_id)
+    assert action["state"] == "approved"
+    assert action["retry_count"] == 1
+    assert "404" in action["last_error"]
 
 
 def test_execute_restores_the_gate_flags(google_config, client, no_tty, flags):
