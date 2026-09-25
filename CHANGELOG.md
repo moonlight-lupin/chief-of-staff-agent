@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.7.1 — Contacts on the workspace client
+
+Adds Google Contacts (People API) to the provider-neutral workspace layer,
+following the same architecture as mail/calendar/files: common interface,
+per-provider connector, capability matrix, guardrail registration.
+
+### Changes
+
+- **`WorkspaceClient`** gains four neutral methods: `contacts_list` (read),
+  `contacts_create`, `contacts_update` (merge-safe), `contacts_delete`
+  (permanent). Unimplemented providers raise `NotImplementedError`.
+- **Google connector** (`GoogleWorkspaceClient`) implements all four via the
+  `google_api.py` contacts subcommands. Writes are `@guarded` — approval gate,
+  audit, `ActionResult`.
+- **Guardrails**: `contacts.list` → READ_ACTIONS; `contacts.create/update/delete`
+  → WRITE_ACTIONS; `contacts.create` → SAFE_WRITE_ACTIONS (creates, destroys
+  nothing); `contacts.update` stays approval-queued (NOT SAFE_WRITE — a
+  supplied field replaces the existing value with no prior-value record to
+  reverse from); `contacts.delete` → DESTRUCTIVE_ACTIONS (permanent, no trash).
+- **Risk model**: `contacts.delete` high; create/update medium; list low.
+- **Capability matrix**: `google_api` all four True (live-verified 2026-09-25
+  against the Phronesis Workspace account). `composio`/`composio:mcp` explicit
+  False with a not-wired reason — the GOOGLECONTACTS toolkit needs a BYO OAuth
+  client and flips True only after a live run (tripwire convention).
+- **Docs**: `SETUP.md` gains the Google Contacts Composio setup (BYO OAuth
+  client, redirect URI, consent screen, scope) and the DWD direct link for the
+  google_api path.
+
+
 ## v0.7.0 — Claude Code on the web
 
 Make the plugin usable from an ephemeral Claude Code cloud session, where the

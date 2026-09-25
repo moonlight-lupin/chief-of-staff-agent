@@ -142,7 +142,10 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "gmail.label",
     "gmail.create_label",
     "contacts.create",   # creates a new contact, destroys nothing
-    "contacts.update",   # merge-safe (fetch-merge-etag); reversible by re-update
+    # contacts.update deliberately NOT here: a supplied field REPLACES the
+    # existing value with no prior-value record to reverse from, so it must
+    # gate on approval even under CHIEF_OF_STAFF_AUTO_APPROVE (Codex review,
+    # 2026-09-25). It stays in WRITE_ACTIONS (approval-queued).
 })
 
 

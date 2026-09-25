@@ -199,6 +199,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         # The OneDrive recycle bin and the queried SharePoint recycle bin do not
         # line up. Flip only after a live run actually restores a file.
         "files.untrash": False,
+        # Contacts — not wired on the microsoft family (no contacts slugs mapped).
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Alias: composio_microsoft:mcp is the same capability set as composio_microsoft.
     # Kept as a separate key so callers using provider_name + ":mcp" resolve correctly.
@@ -225,6 +230,11 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,
         "files.untrash": False,     # wired (Personal Graph + Business SharePoint recycle bin) but NOT live-verified — see composio_microsoft note
+        # Contacts — not wired on the microsoft family (no contacts slugs mapped).
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Microsoft 365 (Graph) provider — providers.m365_graph.M365GraphClient.
     # Every neutral action below is implemented over Microsoft Graph REST v1.0.
@@ -262,6 +272,12 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         # Sites.ReadWrite.All) but kept False — no live m365/Entra environment has
         # exercised the SharePoint restore path. Flip only after a live run.
         "files.untrash": False,
+        # Contacts — not implemented on M365GraphClient (Graph contacts API not
+        # wired); stays False until implemented and live-verified.
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
     # Claude-native agent provider — actions are performed by the agent/tools,
     # not by script-callable provider methods, so every script-callable action
@@ -286,6 +302,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": False,
         "files.trash": False,
         "files.untrash": False,
+        "contacts.list": False,
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
     },
 }
 

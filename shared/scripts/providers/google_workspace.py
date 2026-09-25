@@ -836,9 +836,18 @@ class GoogleWorkspaceClient(WorkspaceClient):
     def contacts_create(self, given_name: str = "", family_name: str = "",
                         email: str = "", phone: str = "",
                         organization: str = "", note: str = "") -> dict[str, Any]:
-        """Create a contact. Requires a name (given or family)."""
-        if not (given_name or family_name):
-            raise ValueError("contacts.create requires given_name or family_name")
+        """Create a contact.
+
+        Requires given_name: @guarded resolves the approval/audit target from
+        that argument, so a family-only create (blank target) is rejected
+        here rather than audited with an empty target. The underlying
+        google_api.py CLI still supports family-only creates for direct use.
+        """
+        if not given_name:
+            raise ValueError(
+                "contacts.create requires given_name (the approval/audit "
+                "target); family-only creates are CLI-only"
+            )
         args: list[str] = ["contacts", "create"]
         if given_name:
             args += ["--given-name", given_name]
@@ -868,6 +877,22 @@ class GoogleWorkspaceClient(WorkspaceClient):
         if not person_id:
             raise ValueError("contacts.update requires person_id")
         supported = ("given_name", "family_name", "email", "phone", "organization", "note")
+        unknown = [k for k in fields if k not in supported]
+        if unknown:
+            # A typo'd kwarg (emial=...) must fail loudly, not silently drop
+            # and masquerade as "requires at least one field".
+            raise ValueError(
+                f"contacts.update got unknown field(s): {', '.join(sorted(unknown))}. "
+                f"Supported: {', '.join(supported)}"
+            )
+        # Only non-empty values update; google_api.py has no field-clearing
+        # surface, so an explicit empty string is rejected rather than dropped.
+        empty = [k for k in supported if k in fields and not fields[k]]
+        if empty:
+            raise ValueError(
+                f"contacts.update cannot clear field(s) (google_api.py has no "
+                f"clearing surface): {', '.join(sorted(empty))}"
+            )
         supplied = {k: v for k, v in fields.items() if k in supported and v}
         if not supplied:
             raise ValueError(
@@ -899,6 +924,13 @@ class GoogleWorkspaceClient(WorkspaceClient):
         rc, out, err = self._run(cmd)
         if rc != 0:
             raise RuntimeError(err.strip() or out.strip())
+        # Return the CLI's response when it carries metadata, else a synthetic ack.
+        try:
+            parsed = json.loads(out) if out.strip() else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict) and parsed:
+            return parsed
         return {"status": "deleted", "person_id": person_id}
 
     def health_check(self) -> bool:
