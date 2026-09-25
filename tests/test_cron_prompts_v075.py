@@ -197,3 +197,14 @@ def test_check_is_registered_with_doctor():
     import doctor_base
     names = [c.__name__ for c in doctor_base.CHECKS]
     assert "_check_cron_prompts" in names
+
+
+def test_index_covers_plugin_code_only(tmp_path):
+    """CI puts TMPDIR inside the checkout; scratch files there are not plugin scripts."""
+    root = tmp_path / "plugin"
+    (root / "skills" / "a" / "scripts").mkdir(parents=True)
+    (root / "skills" / "a" / "scripts" / "real.py").write_text("")
+    (root / "tmp" / "pytest-0").mkdir(parents=True)
+    (root / "tmp" / "pytest-0" / "scratch.py").write_text("")
+    index = cron_prompts._script_index(root)
+    assert index == {"real.py": ["skills/a/scripts/real.py"]}

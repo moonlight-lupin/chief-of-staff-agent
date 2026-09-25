@@ -67,14 +67,20 @@ def test_trend_tests_leave_an_empty_operator_root_empty(tmp_path):
     assert not hermes.exists(), "the suite wrote into the operator's Hermes home"
 
 
-def test_unconfigured_state_resolves_inside_the_test_sandbox(tmp_path):
-    """In-process: with no config at all, the store lands in this test's tmp dir."""
+def test_unconfigured_state_has_no_ambient_root():
+    """In-process: with no config, there is no project root to fall back to."""
+    import pytest
     from state_db import _db_root
-    root = _db_root(None).resolve()
-    assert tmp_path.resolve() in root.parents or root == tmp_path.resolve()
+    with pytest.raises(Exception):
+        _db_root(None)
 
 
-def test_hermes_home_resolves_inside_the_test_sandbox(tmp_path):
+def test_default_config_resolves_inside_the_test_sandbox(tmp_path_factory):
+    from config_loader import _default_config_path, load_config
+    assert tmp_path_factory.getbasetemp().resolve() in _default_config_path().resolve().parents
+    assert load_config(quiet=True) is None
+
+
+def test_hermes_home_resolves_inside_the_test_sandbox(tmp_path_factory):
     from config_loader import get_hermes_home
-    home = get_hermes_home().resolve()
-    assert tmp_path.resolve() in home.parents or home == tmp_path.resolve()
+    assert tmp_path_factory.getbasetemp().resolve() in get_hermes_home().resolve().parents

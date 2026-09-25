@@ -48,6 +48,24 @@ def _not_a_hosted_session(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_REMOTE_SESSION_ID", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_operator_state(monkeypatch, tmp_path_factory):
+    """Tests never resolve to the operator's real project root or Hermes home.
+
+    Code called without an explicit config (``StateDB(None)``, ``load_store``)
+    falls back to CHIEF_OF_STAFF_PROJECT_ROOT, then ``load_config()`` — on a
+    real install that is the operator's live state.db. Hermes paths fall back
+    to ~/.hermes. Give every test what a clean CI checkout has: no ambient
+    project root, no config, and an empty per-test Hermes home. Tests that
+    need a root pass a config or set these with monkeypatch.setenv.
+    """
+    sandbox = tmp_path_factory.mktemp("operator-sandbox")
+    monkeypatch.delenv("CHIEF_OF_STAFF_PROJECT_ROOT", raising=False)
+    monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(sandbox / "no-company.yaml"))
+    monkeypatch.setenv("HERMES_HOME", str(sandbox / "hermes"))
+    monkeypatch.setenv("CHIEF_OF_STAFF_HERMES_HOME", str(sandbox / "hermes"))
+
+
 @pytest.fixture
 def tmp_project_dir():
     """Create a temporary project directory with sample YAML data files."""
