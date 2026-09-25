@@ -307,3 +307,22 @@ class TestRefuteClaimSubstance:
         rc, out = _run(rv.cmd_verify_claims, dir=str(run_dir), strict=True)
         assert rc == 1, out
         assert "counter-evidence" in out["refute_warning"]
+
+    def test_unpaired_support_does_not_satisfy_the_gate(self, run_dir):
+        # Codex confirm round: a supporting snippet from an UNREGISTERED
+        # source plus an unrelated registered source must not count.
+        sids = [_source(run_dir, f"https://site{i}.example/a") for i in range(5)]
+        for i, sid in enumerate(sids):
+            assert _claim(run_dir, f"c{i}", sid, polarity="support")[0] == 0
+        # refute claim: its own snippet contradicts its own unregistered
+        # source; the evidence record points at a registered source but its
+        # snippet is unrelated to the refute claim.
+        assert _claim(run_dir, "r1", "unregistered-sid", kind="interpretive",
+                      polarity="refute", snippet="Adoption grew 40% in 2025")[0] == 0
+        _run(rv.cmd_add_evidence, dir=str(run_dir), json=json.dumps(
+            {"claim_id": "r1", "snippet": "Unrelated content about nothing",
+             "source_id": sids[0]}))
+        rc, out = _run(rv.cmd_verify_claims, dir=str(run_dir), strict=True)
+        assert rc == 1, out
+        assert out["refute_claims"] == 0
+        assert "counter-evidence" in out["refute_warning"]

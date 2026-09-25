@@ -578,23 +578,24 @@ def cmd_verify_claims(args) -> int:
         print(json.dumps(out))
         return 0 if not args.strict else 1
     # Counter-evidence: required once the report reaches the gated size.
-    # A refute claim counts ONLY if it is evidence-backed — it has a
-    # registered source and a snippet that at least partially supports it.
-    # An empty refute claim must not satisfy the gate
-    # (Codex review round 2, MAJOR — 2026-09-25).
+    # A refute claim counts ONLY if it is evidence-backed — a qualifying
+    # snippet (score >= PARTIAL_THRESHOLD) that belongs to a REGISTERED
+    # source. Source presence and snippet support must be PAIRED: a
+    # supporting snippet from an unregistered source counts for nothing,
+    # and neither does a registered source with an unrelated snippet
+    # (Codex round 2 MAJOR, confirm round PARTIAL — 2026-09-25).
     refute_records = []
     for cid, rec in main.items():
         if rec.get("polarity") != "refute":
             continue
-        ev_sids = [e.get("source_id", "") for e in evidence_recs.get(cid, [])]
-        has_source = (bool(rec.get("source_id")) and rec["source_id"] in sources) or any(
-            sid and sid in sources for sid in ev_sids)
-        rec_snips = ([rec["snippet"]] if rec.get("snippet") else []) + [
-            e.get("evidence_snippet", "") for e in evidence_recs.get(cid, [])]
-        rec_snips = [s for s in rec_snips if s]
-        has_snippet = rec_snips and any(
-            support_score(rec["claim"], [s]) >= PARTIAL_THRESHOLD for s in rec_snips)
-        if has_source and has_snippet:
+        pairs = []
+        if rec.get("snippet") and rec.get("source_id"):
+            pairs.append((rec["source_id"], rec["snippet"]))
+        for e in evidence_recs.get(cid, []):
+            if e.get("evidence_snippet") and e.get("source_id"):
+                pairs.append((e["source_id"], e["evidence_snippet"]))
+        if any(sid in sources and support_score(rec["claim"], [sn]) >= PARTIAL_THRESHOLD
+               for sid, sn in pairs):
             refute_records.append(cid)
     refute_claims = len(refute_records)
     refute_warning = ""
