@@ -73,8 +73,16 @@ def google_config():
 
 @pytest.fixture
 def client(google_config):
+    """GoogleWorkspaceClient with the google_api.py lookup monkeypatched
+    (CI has no google-workspace skill — same pattern as test_workspace_client)."""
+    from unittest.mock import patch
+    from pathlib import Path
     from providers.google_workspace import GoogleWorkspaceClient
-    return GoogleWorkspaceClient(google_config)
+    with patch(
+        "providers.google_workspace._find_google_api_script",
+        return_value=Path("/fake/google_api.py"),
+    ):
+        return GoogleWorkspaceClient(google_config)
 
 
 class TestGoogleContactsList:
