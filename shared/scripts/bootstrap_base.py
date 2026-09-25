@@ -25,6 +25,7 @@ except Exception as exc:  # pragma: no cover
 from config_loader import is_default_assistant_name
 from doctor import run_checks
 from state_db import EMPTY_TEMPLATES
+import state_sync
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PLUGIN_ROOT / "shared" / "config"
@@ -365,6 +366,35 @@ def _validate_provider_args(args: argparse.Namespace) -> str | None:
                 "--m365-auth device_code for interactive delegated sign-in."
             )
     return None
+
+
+def _validate_storage_args(args: argparse.Namespace) -> str | None:
+    """--data-repo only makes sense with --storage git."""
+    if getattr(args, "data_repo", None) and getattr(args, "storage", None) != "git":
+        return "--data-repo requires --storage git."
+    return None
+
+
+def _prepare_storage(args: argparse.Namespace, preset: dict[str, Any]) -> dict[str, Any] | None:
+    """Record the operator's storage choice and, for git, prepare project_root.
+
+    Runs before company.yaml is written so a refusal (root inside the plugin
+    checkout, files in the way, clone failure) leaves nothing half-configured.
+    Returns None when --storage was not given: existing installs are unchanged.
+    """
+    mode = getattr(args, "storage", None)
+    if not mode:
+        return None
+    storage: dict[str, Any] = {"mode": mode}
+    result: dict[str, Any] = {"mode": mode}
+    if mode == "git":
+        data_repo = getattr(args, "data_repo", None)
+        if data_repo:
+            storage["data_repo"] = data_repo
+        root = Path(str(preset.get("paths", {}).get("project_root", ""))).expanduser()
+        result.update(state_sync.prepare_git_storage(root, data_repo))
+    preset["storage"] = storage
+    return result
 
 
 def _provider_overlay(
@@ -884,6 +914,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         _deep_update(preset, overlay)
     if esign_overlay:
         _deep_update(preset, esign_overlay)
+    storage = _prepare_storage(args, preset)
     config_path = _write_config(preset)
     config = _load_yaml(config_path)
     root = _project_root(config, config_path)
@@ -905,6 +936,8 @@ def bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         "assistant_name": getattr(args, "assistant_name", None) or "Chief of Staff",
         "skill_injections": skill_injections,
     }
+    if storage is not None:
+        result["storage"] = storage
     # Only surface provider metadata when a non-default provider is chosen, so a
     # default (google) invocation's JSON/text output stays byte-compatible.
     if provider and provider != "google_api":
@@ -967,6 +1000,17 @@ def _main(argv: list[str] | None = None) -> int:
              "microsoft (Outlook/OneDrive). Default: google.",
     )
     parser.add_argument(
+        "--storage", choices=state_sync.STORAGE_MODES, default=None,
+        help="Where project data lives: 'local' files (default behaviour) or 'git' — "
+             "project_root is a clone of a PRIVATE data repo, synced with "
+             "`chief_of_staff.py sync` (needed to keep state across Claude Code cloud sessions).",
+    )
+    parser.add_argument(
+        "--data-repo", default=None,
+        help="With --storage git: the private data repo to clone into project_root "
+             "(owner/name for GitHub, or any git URL). Omit to init a repo with no remote.",
+    )
+    parser.add_argument(
         "--esign-url", default=None,
         help="DocuSeal instance URL (e.g. https://sign.yourdomain.com). "
              "Enables esign-connector onboarding. Requires DOCUSEAL_MCP_TOKEN "
@@ -978,17 +1022,26 @@ def _main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    err = _validate_provider_args(args)
+    err = _validate_provider_args(args) or _validate_storage_args(args)
     if err:
         print(f"Error: {err}", file=sys.stderr)
         return 1
 
-    result = bootstrap(args)
+    try:
+        result = bootstrap(args)
+    except state_sync.SyncError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     if args.json:
         print(json.dumps(result, indent=2))
     else:
         print(f"Bootstrapped Chief-of-Staff config: {result['config']}")
         print(f"Project root: {result['project_root']}")
+        if result.get("storage"):
+            st = result["storage"]
+            print(f"Storage: {st['mode']}" + (f" ({st.get('action')})" if st.get("action") else ""))
+            for note in st.get("notices", []):
+                print(f"- {note}")
         print("Next steps:")
         for step in result["next_steps"]:
             print(f"- {step}")

@@ -37,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1673,7 +1673,7 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
         if report["hosted_session_refusal"]:
             print(f"    ! {report['hosted_session_refusal']}")
         print(f"  State persists            {'yes' if report['state_persistent'] else 'NO'}")
-        if not report["state_persistent"]:
+        if not report["state_persistent"] or report["state_sync"].get("git_backed"):
             print(f"    ! {report['state_note']}")
         return 0
 
@@ -2315,6 +2315,9 @@ def build_parser() -> argparse.ArgumentParser:
     from workflows_cli import attach_workflows_command
 
     attach_workflows_command(sub)
+    from state_sync import add_sync_parser
+
+    add_sync_parser(sub)
     return parser
 
 
@@ -2337,7 +2340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Pure inspection / zero-config paths must NOT create runs or load company.yaml
     # (avoids recursion/noise and the scary "config not found" banner on `demo`).
-    if command in ("logs", "demo"):
+    if command in ("logs", "demo", "sync"):
         try:
             return int(args.func(args))
         except BrokenPipeError:  # pragma: no cover

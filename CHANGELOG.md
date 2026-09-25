@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.7.0 — Claude Code on the web
+
+Make the plugin usable from an ephemeral Claude Code cloud session, where the
+repo is cloned fresh and everything under `project_root` is lost at teardown.
+See [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
+
+### Changes
+
+- **`chief_of_staff.py sync status|pull|push`** (`state_sync.py`). Makes
+  `project_root` a clone of a *private* data repo and commits and pushes it on
+  request. It refuses a root inside the plugin checkout or a remote equal to
+  the plugin's own, since the plugin repo may be public. It never commits
+  `.env`, SQLite sidecars or `.runs/`, and refuses a repo that already tracks
+  `.env`. It WAL-checkpoints `state.db` before commit. Pull is fast-forward
+  only, and a dirty or diverged tree is refused rather than merged. `push`
+  warns about actions still `executing`. Remote URLs are credential-redacted.
+- **`.claude/settings.json` hooks.** `session-start.sh` builds `.venv`, clones
+  or fast-forwards the data repo (`CHIEF_OF_STAFF_DATA_REPO`), links
+  `shared/config/*.yaml` into `<data>/config/`, and exports
+  `CHIEF_OF_STAFF_PROJECT_ROOT`. `stop-sync-check.sh` blocks the session from
+  ending with unsynced state. Both hooks are no-ops outside
+  `CLAUDE_CODE_REMOTE=true`.
+- **`capabilities`** reports `state_sync`. A hosted session whose
+  `project_root` is a syncable git clone is now `state_persistent: true`, with
+  a note saying it survives only once pushed.
+- **Test suite runs green inside a cloud session.** An autouse fixture clears
+  `CLAUDE_CODE_REMOTE_SESSION_ID`. Before this, 114 tests failed when pytest
+  inherited it from the session.
+- **Storage is chosen at onboarding, and git is opt-in.**
+  `bootstrap.py --storage local|git [--data-repo owner/name]` and a new
+  `onboard.py` "Data storage" step record `storage.mode`. Choosing `git`
+  clones the data repo into `project_root`, or initialises one with no
+  remote, before any store is seeded. It refuses a root inside the plugin
+  checkout and never clones over existing files. `local` is honoured
+  afterwards: `sync pull`/`push` refuse, and `capabilities` never reports it
+  as git-durable. Bootstrap without `--storage` is unchanged.
+- `.venv/` is gitignored.
+
 ## v0.6.1 — Deep-research validation gates
 
 The deep-research skill could deliver reports whose factual claims were not

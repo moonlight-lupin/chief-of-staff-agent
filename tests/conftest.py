@@ -36,6 +36,18 @@ def _no_real_skill_mutation(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _not_a_hosted_session(monkeypatch):
+    """Tests run as a local install unless they opt in to hosted mode.
+
+    Inside a Claude Code cloud session CLAUDE_CODE_REMOTE_SESSION_ID is set for
+    the whole process, which would silently flip every guardrail and run-store
+    test into hosted mode. Tests that exercise hosted behaviour set it
+    themselves with monkeypatch.setenv.
+    """
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE_SESSION_ID", raising=False)
+
+
 @pytest.fixture
 def tmp_project_dir():
     """Create a temporary project directory with sample YAML data files."""
