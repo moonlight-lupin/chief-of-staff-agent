@@ -174,8 +174,8 @@ class TestMergeReplace:
         ba.merge(artifact="briefing", sections={"header": "h2", "pipeline": "p2", "urgent": "u"}, config=None)
         text = f.read_text(encoding="utf-8")
         pos_h = text.index(end("header"))
-        pos_u = text.index(begin("urgent"))
-        pos_p = text.index(begin("pipeline"))
+        pos_u = text.index(begin("urgent", "u"))
+        pos_p = text.index(begin("pipeline", "p2"))
         assert pos_h < pos_u < pos_p
 
     def test_insertion_anchor_eof(self, project):
