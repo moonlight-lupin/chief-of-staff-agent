@@ -487,16 +487,63 @@ class TestConflict:
         assert "B_GOT: True" in out, out
         assert "WIDENED: True" in out, out
 
-        # Source-level contract (deterministic, race-window independent):
-        # the release path must call unlink BEFORE releasing the flock.
-        import inspect
-        lock_src = inspect.getsource(ba._exclusive_lock)
-        release_idx = lock_src.find("LOCK_UN")
-        unlink_idx = lock_src.rfind("unlink")
-        assert unlink_idx != -1 and release_idx != -1, lock_src
-        assert unlink_idx < release_idx, (
-            "release path must unlink while still holding the flock; "
-            f"unlink at {unlink_idx}, LOCK_UN at {release_idx}\n{lock_src}"
+        # Behavioral contract: max 1 concurrent holder. Delay BOTH the unlink
+        # and the LOCK_UN during release so the release window is wide; 3
+        # staggered writers must never hold the lock simultaneously. (The
+        # fb7e18a code, which unlocked before unlinking, yields 2 holders.)
+        import subprocess as sp2
+        import textwrap as tw2
+        holder_probe = tw2.dedent("""
+            import os, sys, time, threading
+            sys.path.insert(0, %r)
+            import briefing_attribution as ba
+            root = ba.Path(%r)
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "briefing.md").write_text("x", encoding="utf-8")
+            holders = [0]
+            maxh = [0]
+            mu = threading.Lock()
+            real_unlink = os.unlink
+            real_flock = ba.fcntl.flock
+
+            def slow_unlink(p, *a, **k):
+                if str(p).endswith(".cos-briefing.lock"):
+                    time.sleep(0.3)
+                return real_unlink(p, *a, **k)
+
+            def slow_flock(fd, op):
+                if op == ba.fcntl.LOCK_UN:
+                    time.sleep(0.3)
+                return real_flock(fd, op)
+
+            os.unlink = slow_unlink
+            ba.fcntl.flock = slow_flock
+
+            def writer(delay):
+                time.sleep(delay)
+                with ba._exclusive_lock(root) as got:
+                    if got:
+                        with mu:
+                            holders[0] += 1
+                            maxh[0] = max(maxh[0], holders[0])
+                        time.sleep(0.4)
+                        with mu:
+                            holders[0] -= 1
+
+            threads = [threading.Thread(target=writer, args=(i * 0.2,))
+                       for i in range(3)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            print("MAX_HOLDERS:", maxh[0])
+        """) % (str(Path(ba.__file__).parent), str(project))
+        r2 = sp2.run([sys.executable, "-c", holder_probe],
+                     capture_output=True, text=True, timeout=120)
+        out2 = r2.stdout + r2.stderr
+        assert r2.returncode == 0, f"holder probe crashed: {out2}"
+        assert "MAX_HOLDERS: 1" in out2, (
+            f"concurrent lock holders detected (release-order defect): {out2}"
         )
 
     def test_R1_no_silent_truncation_on_arrow_prose(self, project):
