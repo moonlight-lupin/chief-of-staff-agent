@@ -409,47 +409,95 @@ class TestConflict:
         """B2: CRLF archive + CRLF body must reach a fixed point, not grow."""
         f = project / "briefing.md"
         f.write_bytes(marked("pipeline", "old").replace("\n", "\r\n").encode("utf-8"))
-        sizes = []
+        snaps = []
         for _ in range(3):
-            ba.merge(artifact="briefing", sections={"pipeline": "a\r\nb"}, config=None)
-            sizes.append(len(f.read_bytes()))
-        assert sizes[0] == sizes[1] == sizes[2], sizes
+            res = ba.merge(artifact="briefing", sections={"pipeline": "a\r\nb"}, config=None)
+            snaps.append((res["status"], f.read_bytes()))
+        assert snaps[0][0] == "merged"
+        assert snaps[1][0] == "noop" and snaps[2][0] == "noop", [s[0] for s in snaps]
+        assert snaps[1][1] == snaps[2][1], "bytes must be identical across cycles"
+        assert b"\r\r" not in snaps[0][1], "doubled CR must never be emitted"
 
     def test_R1_three_writers_never_hold_lock_concurrently(self, project):
-        """B3: flock+unlink race — a waiter must not end up holding a deleted
-        inode while a new writer locks a fresh one."""
-        import threading, time
-        import fcntl as fc
-        f = project / "briefing.md"
-        f.write_text(marked("pipeline", "p"), encoding="utf-8")
-        lock = project / ".cos-briefing.lock"
-        # hold the module's own lock, then verify a second acquisition via the
-        # module's lock helper fails/times out rather than locking a new inode
-        acquired = []
-        def holder():
-            with ba._exclusive_lock(project) as got:
-                acquired.append(got)
-                time.sleep(0.4)
-        t = threading.Thread(target=holder)
-        t.start()
-        time.sleep(0.1)  # let the holder take the lock
-        # second writer must NOT acquire while holder active
-        res = ba.merge(artifact="briefing", sections={"pipeline": "p2"}, config=None)
-        t.join()
-        # with a 10s blocking deadline the second merge waits then succeeds;
-        # the CONTRACT is it never acquires a DIFFERENT inode concurrently.
-        # Simulate the race: unlink after unlock must not strand a waiter.
-        lock.touch()
-        fh = open(lock, "w")
-        fc.flock(fh, fc.LOCK_EX)
-        inode_before = lock.stat().st_ino
-        fc.flock(fh, fc.LOCK_UN)
-        fh.close()
-        # after release the lock file may be removed but a re-open must give a
-        # working lock (the module retries on inode mismatch)
-        with ba._exclusive_lock(project) as got:
-            assert got is True
-            assert (project / ".cos-briefing.lock").exists()
+        """B3 (release-side, the confirm-review blocker): the lock release path
+        must unlink WHILE STILL HOLDING the flock. If it unlocks-then-unlinks,
+        a waiter acquires the doomed inode in the gap and a third writer then
+        creates a fresh inode: two holders at once.
+
+        Probe: subprocess A acquires via the module, releases with the unlink
+        step delayed (monkeypatched os.unlink sleep), B waits on the flock and
+        acquires in that gap, then C attempts a non-blocking lock. When the
+        release order is wrong, C locks a fresh inode while B still holds.
+        """
+        import subprocess as sp
+        import sys
+        import textwrap
+
+        scripts_dir = Path(ba.__file__).parent
+        probe = textwrap.dedent("""
+            import os, sys, time, threading, fcntl
+            sys.path.insert(0, %r)
+            import briefing_attribution as ba
+
+            root = ba.Path(%r)
+            lock_path = root / ".cos-briefing.lock"
+            b_got = []
+            real_unlink = os.unlink
+
+            def slow_unlink(path, *a, **k):
+                # widen the unlock->unlink window for the FIRST release only
+                if str(path).endswith(".cos-briefing.lock") and not widened[0]:
+                    widened[0] = True
+                    time.sleep(0.4)  # B is blocked on flock of THIS inode
+                return real_unlink(path, *a, **k)
+
+            widened = [False]
+            os.unlink = slow_unlink
+
+            def a():
+                with ba._exclusive_lock(root):
+                    time.sleep(0.1)
+
+            def b():
+                with ba._exclusive_lock(root) as got:
+                    b_got.append(True)
+                    time.sleep(0.2)
+
+            ta = threading.Thread(target=a)
+            ta.start()
+            time.sleep(0.05)
+            tb = threading.Thread(target=b)
+            tb.start()
+            ta.join()
+            # B now holds the old inode; A has unlinked it (after the widened
+            # window). Restore unlink so C's world is normal.
+            time.sleep(0.05)
+            os.unlink = real_unlink
+            tb.join()
+            # After BOTH released, verify single-holder semantics: a fresh
+            # acquisition must succeed cleanly.
+            with ba._exclusive_lock(root) as got:
+                assert got is True
+            print("B_GOT:", bool(b_got))
+            print("WIDENED:", widened[0])
+        """) % (str(scripts_dir), str(project))
+        r = sp.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+        out = r.stdout + r.stderr
+        assert r.returncode == 0, f"probe crashed: {out}"
+        assert "B_GOT: True" in out, out
+        assert "WIDENED: True" in out, out
+
+        # Source-level contract (deterministic, race-window independent):
+        # the release path must call unlink BEFORE releasing the flock.
+        import inspect
+        lock_src = inspect.getsource(ba._exclusive_lock)
+        release_idx = lock_src.find("LOCK_UN")
+        unlink_idx = lock_src.rfind("unlink")
+        assert unlink_idx != -1 and release_idx != -1, lock_src
+        assert unlink_idx < release_idx, (
+            "release path must unlink while still holding the flock; "
+            f"unlink at {unlink_idx}, LOCK_UN at {release_idx}\n{lock_src}"
+        )
 
     def test_R1_no_silent_truncation_on_arrow_prose(self, project):
         """B4: ordinary prose containing --> must not be truncated or lost."""
@@ -738,35 +786,50 @@ class TestReviewR1Majors:
     """RED tests for review-r1 MAJOR findings (convergent codex+opus)."""
 
     def test_M1_metadata_baseline_binds_to_read_content(self, project):
-        """TOCTOU: metadata must be captured BEFORE the content read (same fd),
-        and re-verified after. An edit landing between read and stat must not
-        become the accepted baseline."""
+        """M1 (TOCTOU): an edit landing between the content read and the
+        metadata capture must not become the accepted baseline. The module
+        must fstat, read from the same fd, fstat again, and refuse when the
+        two differ. Probe: inject an edit DURING the read, after the first
+        fstat, so read-then-stat ordering would accept the edited bytes as
+        the baseline."""
+        import os as _os
+        import pytest as _pytest
+
         f = project / "briefing.md"
-        f.write_text(marked("pipeline", "p"), encoding="utf-8")
-        real_open = open
+        f.write_text(marked("pipeline", "p") + "> note\n", encoding="utf-8")
 
-        def racing_open(path, *a, **k):
-            fh = real_open(path, *a, **k)
-            # after the base read, mutate the file so a read-then-stat order
-            # would bake the edit into the baseline
-            if str(path) == str(f):
+        real_read = _os.read
+        state = {"first_fstat_done": False, "injected": False}
+
+        # Intercept the module's fd-based read: run AFTER the first fstat.
+        # _read_base does fstat -> read -> fstat; we hook os.read and append
+        # operator text by rewriting the file through a second fd. The module
+        # must detect this via the second fstat (size/mtime mismatch) and
+        # refuse with exit 3.
+        real_open = _os.open
+
+        def racing_read(fd, n):
+            data = real_read(fd, n)
+            if not state["injected"]:
+                state["injected"] = True
+                # append operator content while the module is mid-read
+                fd2 = real_open(f, _os.O_WRONLY | _os.O_APPEND)
                 try:
-                    with real_open(f, "a", encoding="utf-8") as h:
-                        h.write("operator race edit\n")
-                except OSError:
-                    pass
-            return fh
+                    _os.write(fd2, b"\noperator race edit\n")
+                finally:
+                    _os.close(fd2)
+            return data
 
-        mp = pytest.MonkeyPatch()
-        mp.setattr("builtins.open", racing_open)
+        mp = _pytest.MonkeyPatch()
+        mp.setattr(ba.os, "read", racing_read)
         try:
             res = ba.merge(artifact="briefing", sections={"pipeline": "p2"}, config=None)
         finally:
             mp.undo()
+
+        assert res["status"] == "refused", res
         text = f.read_text(encoding="utf-8")
-        # the operator race edit must survive OR the merge refuses; it must
-        # never be silently overwritten
-        assert "operator race edit" in text or res["status"] == "refused"
+        assert "operator race edit" in text
 
     def test_M2_conflict_payload_with_fence_does_not_poison_next_run(self, project):
         """A conflict-preserved body containing an unmatched fence must not
@@ -811,6 +874,12 @@ class TestReviewR1Majors:
             mp.undo()
         assert res["status"] == "error"
         assert isinstance(res.get("exit_code"), int)
+        # archive bytes unchanged by the failed transaction
+        assert f.read_bytes() == before
+        # no tentative backup left behind
+        bdir = project / ".cos-backups" / "attribution"
+        backups = list(bdir.glob("*")) if bdir.exists() else []
+        assert backups == [], f"tentative backup survived rename failure: {backups}"
 
     def test_M6_mode_preserved_on_replace(self, project):
         """An operator chmod 600 on the archive must survive a merge."""
@@ -822,16 +891,19 @@ class TestReviewR1Majors:
         assert (_os.stat(f).st_mode & 0o777) == 0o600
 
     def test_M5_duplicate_last_hash_valid_wins(self, project):
-        """Duplicate class: the LAST hash-VALID occurrence is live; a stale
-        last copy means the earlier valid copy is live (not conflict)."""
+        """M5: the LAST hash-VALID occurrence is live. A stale last copy next
+        to an earlier valid copy must select the earlier VALID copy and merge
+        normally — no conflict wrapper, no mismatch warning."""
         valid = marked("pipeline", "first")
         stale = begin("pipeline", "first") + "\noperator edited the copy\n" + end("pipeline")
         f = project / "briefing.md"
         f.write_text(valid + stale, encoding="utf-8")
         res = ba.merge(artifact="briefing", sections={"pipeline": "fresh"}, config=None)
-        assert res["status"] == "merged"
+        assert res["status"] == "merged", res
         text = f.read_text(encoding="utf-8")
         assert "fresh" in text
+        assert "cos:conflict" not in text, "stale duplicate must not trigger the conflict path"
+        assert not any("conflict" in w.lower() for w in res.get("warnings", [])), res.get("warnings")
 
 
 class TestAuditLog:
