@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import time
 from contextlib import contextmanager
@@ -58,6 +59,8 @@ MARKER_RE = re.compile(
     r"(?:begin\s+sha256=(?P<hash>[0-9a-f]{12})|end)"
     r"\s+-->$"
 )
+_HASH_FIELD = re.compile(r"sha256=[0-9a-f]{12}")
+_OUTSIDE_ENVELOPE = "envelope outside .cos-tmp; not deleted (PII may persist)"
 _LINE_BREAK = re.compile(r"(\r\n|\n|\r)")
 _SCALAR_BREAK = re.compile(r"\r\n|[\n\r\u2028\u2029]")
 
@@ -70,10 +73,7 @@ def get_project_root(config: object = None) -> Path | None:
     import config_loader
 
     if config is None:
-        try:
-            config = config_loader.load_config()
-        except Exception:
-            return None
+        config = config_loader.load_config()
     return config_loader.get_project_root(config)
 
 
@@ -113,14 +113,18 @@ def validate_body(body: str) -> str:
     return "".join(out)
 
 
+def _normalize_body(body: str) -> str:
+    """Line endings become LF once, before split and render."""
+    return body.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _body_forges_marker(body: str) -> bool:
+    return any(MARKER_RE.match(line.strip()) for line in body.split("\n"))
+
+
 def _prepare_body(body: str) -> str:
-    """Drop a forged-marker line and everything after it, then neutralize."""
-    kept: list[str] = []
-    for line in body.split("\n"):
-        if "<!--" in line or "-->" in line:
-            break
-        kept.append(line)
-    return validate_body("\n".join(kept))
+    """Neutralize the complete body. Never drop a tail at ``<!--`` or ``-->``."""
+    return validate_body(_normalize_body(body))
 
 
 @dataclass
@@ -141,6 +145,14 @@ class _Parse:
 
 
 def _fence_open(content: str) -> tuple[str, int] | None:
+    # CommonMark: a fence indented four or more spaces is not a fence.
+    indent = 0
+    for ch in content:
+        if ch != " ":
+            break
+        indent += 1
+    if indent >= 4:
+        return None
     stripped = content.lstrip(" \t")
     for kind in ("`", "~"):
         if not stripped.startswith(kind * 3):
@@ -289,15 +301,36 @@ def _render_span(sid: str, body: str, ending: str) -> list[tuple[str, str]]:
     return rendered
 
 
+def _render_preserved(
+    span: _Span,
+    lines: list[tuple[str, str]],
+    body: str,
+    ending: str,
+) -> list[tuple[str, str]]:
+    """Keep marker bytes. The begin line changes only in its hash field."""
+    begin_content, begin_ending = lines[span.begin]
+    begin_content = _HASH_FIELD.sub(f"sha256={body_hash(body)}", begin_content, count=1)
+    end_content, end_ending = lines[span.end]
+    body_ending = ending or begin_ending or "\n"
+    rendered = [(begin_content, begin_ending or body_ending)]
+    if body != "":
+        for part in body.split("\n"):
+            rendered.append((part, body_ending))
+    rendered.append((end_content, end_ending or body_ending))
+    return rendered
+
+
 def _conflict_block(
     span: _Span, lines: list[tuple[str, str]], ending: str
 ) -> list[tuple[str, str]]:
     iso = datetime.now(timezone.utc).date().isoformat()
-    fence = f"<!-- cos:conflict {span.id} {iso} -->"
-    block = [(fence, ending)]
+    wrapper = f"<!-- cos:conflict {span.id} {iso} -->"
+    block = [(wrapper, ending)]
     for content, line_ending in lines[span.begin + 1 : span.end]:
+        if _fence_open(content) is not None:
+            content = "    " + content
         block.append((content, line_ending or ending))
-    block.append((fence, ending))
+    block.append((wrapper, ending))
     return block
 
 
@@ -338,13 +371,14 @@ def _insertion_plan(
     return before, after, eof
 
 
-def _ensure_separator(lines: list[tuple[str, str]]) -> None:
+def _ensure_separator(lines: list[tuple[str, str]], ending: str) -> None:
     if not lines:
         return
-    content, ending = lines[-1]
-    if ending == "":
-        lines[-1] = (content, "\n")
-        lines.append(("", "\n"))
+    content, line_ending = lines[-1]
+    sep = ending or "\n"
+    if line_ending == "":
+        lines[-1] = (content, sep)
+        lines.append(("", sep))
 
 
 def _assemble(
@@ -376,24 +410,25 @@ def _assemble(
         else:
             body = NONE_TODAY
             action = "empty"
+        current = _span_body(lines, span)
         if span.id in conflicts:
             out.extend(_conflict_block(span, lines, lines[span.begin][1] or ending))
-            current = _span_body(lines, span)
-            if span.hash12 != body_hash(current):
-                warnings.append(
-                    f"hash mismatch on {span.id}; operator edit preserved outside the span"
-                )
-            else:
-                warnings.append(f"previous body of {span.id} preserved outside the span")
+            warnings.append(
+                f"hash mismatch on {span.id}; operator edit preserved outside the span"
+            )
             action = "replaced"
-        out.extend(_render_span(span.id, body, lines[span.begin][1] or ending))
+            out.extend(_render_preserved(span, lines, body, ending))
+        elif body == current and span.hash12 == body_hash(current):
+            out.extend(lines[span.begin : span.end + 1])
+        else:
+            out.extend(_render_preserved(span, lines, body, ending))
         actions[span.id] = action
         for sid in after.get(span.id, []):
             out.extend(_render_span(sid, emitted[sid], ending))
             actions[sid] = "inserted"
         i = span.end + 1
     if eof:
-        _ensure_separator(out)
+        _ensure_separator(out, ending)
         for sid in eof:
             out.extend(_render_span(sid, emitted[sid], ending))
             actions[sid] = "inserted"
@@ -446,8 +481,12 @@ def _validate_section_map(sections: object) -> tuple[dict[str, str] | None, str 
             return None, f"undeclared section id: {key}"
         if not isinstance(value, str):
             return None, f"section {key} must be a string"
-        if value != "":
-            cleaned[key] = _prepare_body(value)
+        normalized = _normalize_body(value)
+        if normalized.strip() == "":
+            continue
+        if _body_forges_marker(normalized):
+            return None, f"forged marker in section {key}"
+        cleaned[key] = validate_body(normalized)
     return cleaned, None
 
 
@@ -465,6 +504,15 @@ def _load_envelope(path: Path) -> tuple[dict[str, str] | None, str | None]:
     return _validate_envelope(data)
 
 
+def _envelope_outside_tmp(path: Path, root: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        allowed = (root / ".cos-tmp").resolve()
+        return not resolved.is_relative_to(allowed)
+    except OSError:
+        return True
+
+
 def _maybe_delete_envelope(path: Path | None, root: Path) -> None:
     if path is None:
         return
@@ -475,6 +523,21 @@ def _maybe_delete_envelope(path: Path | None, root: Path) -> None:
             resolved.unlink()
     except OSError:
         return
+
+
+def _apply_envelope_policy(
+    result: dict[str, Any], env_file: Path | None, root: Path
+) -> dict[str, Any]:
+    if env_file is None:
+        return result
+    if _envelope_outside_tmp(env_file, root):
+        if _OUTSIDE_ENVELOPE not in result["warnings"]:
+            result["warnings"].append(_OUTSIDE_ENVELOPE)
+        return result
+    if result.get("exit_code") == EXIT_LOCK_BUSY:
+        return result
+    _maybe_delete_envelope(env_file, root)
+    return result
 
 
 def _backup_dir(root: Path, archive: Path) -> Path:
@@ -523,24 +586,46 @@ def _unchanged(path: Path, before: os.stat_result) -> bool:
 @contextmanager
 def _exclusive_lock(root: Path) -> Iterator[bool]:
     path = root / ".cos-briefing.lock"
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
-    acquired = False
     deadline = time.monotonic() + LOCK_TIMEOUT_S
+    fd = -1
+    acquired = False
     try:
         while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
+            if fd >= 0:
+                os.close(fd)
+                fd = -1
+            if time.monotonic() >= deadline:
                 break
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                st_fd = os.fstat(fd)
+                st_path = os.stat(path)
             except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(0.05)
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                continue
+            except OSError:
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                continue
+            # flock can land on an inode the previous owner already unlinked.
+            if st_fd.st_ino != st_path.st_ino:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                continue
+            acquired = True
+            break
         yield acquired
     finally:
-        if acquired:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        if fd >= 0:
+            if acquired:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            os.close(fd)
         if acquired:
             try:
                 path.unlink()
@@ -560,33 +645,124 @@ def _decode(raw: bytes) -> tuple[str | None, bytes, str | None]:
         return None, b"", "encoding is not utf-8"
 
 
-def _select_live(spans: list[_Span]) -> tuple[dict[str, _Span], list[str]]:
+def _select_live(
+    spans: list[_Span], lines: list[tuple[str, str]]
+) -> tuple[dict[str, _Span], list[str]]:
+    groups: dict[str, list[_Span]] = {}
+    order: list[str] = []
+    for span in spans:
+        if span.id not in groups:
+            order.append(span.id)
+            groups[span.id] = []
+        groups[span.id].append(span)
     live: dict[str, _Span] = {}
     warnings: list[str] = []
-    warned: set[str] = set()
-    for span in spans:
-        if span.id in live and span.id not in warned:
-            warnings.append(
-                f"duplicate section {span.id} resolved; last occurrence is live"
-            )
-            warned.add(span.id)
-        live[span.id] = span
+    for sid in order:
+        group = groups[sid]
+        valid = [
+            span
+            for span in group
+            if span.hash12 == body_hash(_span_body(lines, span))
+        ]
+        chosen = valid[-1] if valid else group[-1]
+        if len(group) > 1:
+            if valid:
+                warnings.append(
+                    f"duplicate section {sid} resolved; last hash-valid occurrence is live"
+                )
+            else:
+                warnings.append(
+                    f"duplicate section {sid} resolved; last occurrence is live"
+                )
+        live[sid] = chosen
     return live, warnings
+
+
+def _quarantine(ids: dict[str, str] | set[str]) -> dict[str, str]:
+    return {sid: "quarantined" for sid in ids}
+
+
+def _write_exclusive(path: Path, data: bytes, mode: int) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.chmod(path, mode)
+
+
+def _read_base(
+    archive: Path,
+) -> tuple[bytes | None, os.stat_result | None, str | None, int | None]:
+    """Open once. fstat, read, fstat. Refuse if the inode changes under the read.
+
+    Returns ``(raw, baseline, reason, exit_code)``. ``exit_code`` is set only
+    when ``reason`` is set.
+    """
+    if archive.is_symlink():
+        return None, None, "refusing symlinked archive", EXIT_REFUSED
+    if not archive.exists():
+        return b"", None, None, None
+    with open(archive, "rb") as handle:
+        first = os.fstat(handle.fileno())
+        raw = handle.read()
+        second = os.fstat(handle.fileno())
+    changed = (
+        first.st_mtime_ns != second.st_mtime_ns
+        or first.st_size != second.st_size
+        or first.st_ino != second.st_ino
+        or len(raw) != second.st_size
+    )
+    if changed:
+        return None, first, "concurrent edit detected", EXIT_CONCURRENT
+    return raw, first, None, None
 
 
 def _merge_locked(
     archive: Path,
     emitted: dict[str, str],
 ) -> dict[str, Any]:
+    try:
+        return _merge_locked_inner(archive, emitted)
+    except OSError as exc:
+        return _result(
+            "error",
+            sections=_quarantine(emitted),
+            archive=str(archive),
+            exit_code=EXIT_REFUSED,
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+
+
+def _merge_locked_inner(
+    archive: Path,
+    emitted: dict[str, str],
+) -> dict[str, Any]:
     archive_s = str(archive)
-    existed = archive.exists()
-    raw = archive.read_bytes() if existed else b""
-    before = archive.stat() if existed else None
+    raw, before, read_error, read_exit = _read_base(archive)
+    if read_error:
+        status = "refused" if read_exit == EXIT_CONCURRENT else "error"
+        return _result(
+            status,
+            sections=_quarantine(emitted),
+            archive=archive_s,
+            exit_code=read_exit if read_exit is not None else EXIT_REFUSED,
+            reason=read_error,
+        )
+    assert raw is not None
+    existed = before is not None
     if existed:
         text, bom, decode_error = _decode(raw)
         if decode_error:
             return _result(
                 "error",
+                sections=_quarantine(emitted),
                 archive=archive_s,
                 exit_code=EXIT_REFUSED,
                 reason=decode_error,
@@ -599,30 +775,23 @@ def _merge_locked(
     if parsed.refusal:
         return _result(
             "refused",
+            sections=_quarantine(emitted),
             warnings=parsed.warnings,
             archive=archive_s,
             exit_code=EXIT_REFUSED,
             reason=parsed.refusal,
         )
 
-    live, dup_warnings = _select_live(parsed.spans)
+    live, dup_warnings = _select_live(parsed.spans, lines)
     warnings = [*parsed.warnings, *dup_warnings]
     covered: set[int] = set()
     for span in live.values():
         covered.update(range(span.begin, span.end + 1))
-    # A matching hash is a normal replace when operator text sits outside the
-    # live spans (annotations, legacy prose, an earlier duplicate). A body
-    # change in a file that is only live spans is treated as a conflict so the
-    # previous body is kept: the conflict fixtures are a single matching-hash
-    # span and require that preservation. A real stored-hash mismatch conflicts
-    # either way.
     outside = _has_operator_text(lines, covered)
     conflicts: set[str] = set()
     for span in live.values():
         current = _span_body(lines, span)
-        incoming = emitted[span.id] if span.id in emitted else NONE_TODAY
-        mismatch = span.hash12 != body_hash(current)
-        if mismatch or (incoming != current and not outside):
+        if span.hash12 != body_hash(current):
             conflicts.add(span.id)
     if not live and _has_operator_text(lines, set()):
         warnings.append("legacy artifact adopted; previous generated content preserved")
@@ -646,14 +815,17 @@ def _merge_locked(
 
     tmp = archive.with_name(f".{archive.name}.{os.getpid()}.tmp")
     backup_path: Path | None = None
+    committed = False
     try:
-        tmp.write_bytes(new_bytes)
+        mode = 0o644 if before is None else stat.S_IMODE(before.st_mode)
+        if tmp.exists():
+            tmp.unlink()
+        _write_exclusive(tmp, new_bytes, mode)
         if need_backup and existed:
             try:
                 backup_path = _make_backup(archive.parent, archive)
             except OSError as exc:
-                tmp.unlink(missing_ok=True)
-                warnings.append(f"backup failed: {exc}")
+                warnings.append(f"backup failed: {type(exc).__name__}: {exc}")
                 return _result(
                     "error",
                     sections=actions,
@@ -663,20 +835,41 @@ def _merge_locked(
                     reason="backup failed",
                 )
         if before is not None and not _unchanged(archive, before):
-            tmp.unlink(missing_ok=True)
             if backup_path is not None:
                 backup_path.unlink(missing_ok=True)
+                backup_path = None
             return _result(
                 "refused",
-                sections={sid: "quarantined" for sid in actions},
+                sections=_quarantine(set(actions) | set(emitted)),
                 warnings=warnings,
                 archive=archive_s,
                 exit_code=EXIT_CONCURRENT,
                 reason="concurrent edit detected",
             )
         os.replace(tmp, archive)
+        committed = True
         if backup_path is not None:
-            _prune_backups(backup_path.parent)
+            try:
+                _prune_backups(backup_path.parent)
+            except OSError as exc:
+                warnings.append(
+                    f"backup prune failed: {type(exc).__name__}: {exc}"
+                )
+    except OSError as exc:
+        if not committed and backup_path is not None:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            backup_path = None
+        return _result(
+            "error",
+            sections=_quarantine(set(actions) | set(emitted)),
+            warnings=warnings,
+            archive=archive_s,
+            exit_code=EXIT_REFUSED,
+            reason=f"{type(exc).__name__}: {exc}",
+        )
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
@@ -704,10 +897,22 @@ def merge(
     missing keys are not emitted. ``envelope`` / ``envelope_path`` carry the
     ``{"version": 1, "sections": {...}}`` document instead.
     """
-    root = get_project_root(config)
-    if root is None:
+    env_file = Path(envelope_path) if envelope_path else None
+    try:
+        resolved = get_project_root(config)
+    except Exception as exc:
+        return _result(
+            "error",
+            exit_code=EXIT_REFUSED,
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+    if resolved is None:
         return _result("error", exit_code=EXIT_REFUSED, reason="project root unresolved")
-    root = Path(root)
+    root = Path(resolved)
+
+    def finish(result: dict[str, Any]) -> dict[str, Any]:
+        return _apply_envelope_policy(result, env_file, root)
+
     archive = root / ARCHIVE_NAME if artifact == "briefing" else None
     archive_s = str(archive) if archive is not None else None
 
@@ -719,9 +924,8 @@ def merge(
             reason=f"unsupported artifact: {artifact}",
         )
         _audit(root, artifact, result)
-        return result
+        return finish(result)
 
-    env_file = Path(envelope_path) if envelope_path else None
     if sections is not None:
         emitted, err = _validate_section_map(sections)
     elif envelope is not None:
@@ -732,7 +936,6 @@ def merge(
         emitted, err = {}, None
 
     if err or emitted is None:
-        _maybe_delete_envelope(env_file, root)
         result = _result(
             "error",
             archive=archive_s,
@@ -740,23 +943,36 @@ def merge(
             reason=err or "invalid sections",
         )
         _audit(root, artifact, result)
-        return result
+        return finish(result)
 
     try:
         with _exclusive_lock(root) as acquired:
             if not acquired:
                 result = _result(
                     "error",
+                    sections=_quarantine(emitted),
                     archive=archive_s,
                     exit_code=EXIT_LOCK_BUSY,
                     reason="lock busy",
                 )
             else:
                 result = _merge_locked(archive, emitted)
-            _audit(root, artifact, result)
-            return result
-    finally:
-        _maybe_delete_envelope(env_file, root)
+            try:
+                _audit(root, artifact, result)
+            except OSError as exc:
+                result["warnings"].append(
+                    f"audit log failed: {type(exc).__name__}: {exc}"
+                )
+            return finish(result)
+    except OSError as exc:
+        result = _result(
+            "error",
+            sections=_quarantine(emitted),
+            archive=archive_s,
+            exit_code=EXIT_REFUSED,
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+        return finish(result)
 
 
 def run_cli(argv: list[str] | None = None) -> int:
@@ -780,6 +996,7 @@ def run_cli(argv: list[str] | None = None) -> int:
         "warnings": result.get("warnings") or [],
         "backup": result.get("backup"),
         "archive": result.get("archive"),
+        "reason": result.get("reason"),
     }
     json.dump(payload, sys.stdout, ensure_ascii=True)
     sys.stdout.write("\n")
