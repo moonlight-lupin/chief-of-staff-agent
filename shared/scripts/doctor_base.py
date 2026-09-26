@@ -1114,6 +1114,14 @@ def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("smoke_test", "warn", "no smoke-test checklist found")
 
 
+def _check_cron_prompts(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    try:
+        from cron_prompts import check_cron_prompts
+    except Exception as exc:
+        return CheckResult("cron_prompts", "warn", f"cron prompt check unavailable: {exc}")
+    return check_cron_prompts(fix, data, config_path)
+
+
 def _check_cron_skill_files(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     try:
         from workflow_cron import check_cron_skill_files
@@ -1166,7 +1174,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_assistant_name,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,
     _check_jurisdiction_pack, _check_config_file("drive-map.yaml"), _check_config_file("queries.yaml"),
-    _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_compile,
+    _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_cron_prompts, _check_compile,
     _check_packages, _check_audit_runs,
     _check_workspace_provider, _check_composio, _check_m365,
     _check_webhook_config, _check_state_files, _check_orphaned_executing,
