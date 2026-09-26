@@ -316,22 +316,26 @@ def _render_preserved(
     if body != "":
         for part in body.split("\n"):
             rendered.append((part, body_ending))
-    rendered.append((end_content, end_ending or body_ending))
+    # EOF end markers often have no line ending. Keep that absence; substituting
+    # a newline here is an unauthorized trailing byte when the body changes.
+    rendered.append((end_content, end_ending))
     return rendered
 
 
 def _conflict_block(
     span: _Span, lines: list[tuple[str, str]], ending: str
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], bool]:
     iso = datetime.now(timezone.utc).date().isoformat()
     wrapper = f"<!-- cos:conflict {span.id} {iso} -->"
     block = [(wrapper, ending)]
+    indented = False
     for content, line_ending in lines[span.begin + 1 : span.end]:
         if _fence_open(content) is not None:
             content = "    " + content
+            indented = True
         block.append((content, line_ending or ending))
     block.append((wrapper, ending))
-    return block
+    return block, indented
 
 
 def _has_operator_text(lines: list[tuple[str, str]], covered: set[int]) -> bool:
@@ -402,6 +406,7 @@ def _assemble(
             i += 1
             continue
         for sid in before.get(span.id, []):
+            _ensure_separator(out, ending)
             out.extend(_render_span(sid, emitted[sid], ending))
             actions[sid] = "inserted"
         if span.id in emitted:
@@ -412,7 +417,14 @@ def _assemble(
             action = "empty"
         current = _span_body(lines, span)
         if span.id in conflicts:
-            out.extend(_conflict_block(span, lines, lines[span.begin][1] or ending))
+            block, fence_indented = _conflict_block(
+                span, lines, lines[span.begin][1] or ending
+            )
+            out.extend(block)
+            if fence_indented:
+                warnings.append(
+                    "conflict payload fence lines indented for safety"
+                )
             warnings.append(
                 f"hash mismatch on {span.id}; operator edit preserved outside the span"
             )
@@ -424,6 +436,7 @@ def _assemble(
             out.extend(_render_preserved(span, lines, body, ending))
         actions[span.id] = action
         for sid in after.get(span.id, []):
+            _ensure_separator(out, ending)
             out.extend(_render_span(sid, emitted[sid], ending))
             actions[sid] = "inserted"
         i = span.end + 1
@@ -470,6 +483,15 @@ def _audit(root: Path, artifact: str, result: dict[str, Any]) -> None:
     path = root / LOG_NAME
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
+
+
+def _safe_audit(root: Path, artifact: str, result: dict[str, Any]) -> None:
+    try:
+        _audit(root, artifact, result)
+    except OSError as exc:
+        result["warnings"].append(
+            f"audit log failed: {type(exc).__name__}: {exc}"
+        )
 
 
 def _validate_section_map(sections: object) -> tuple[dict[str, str] | None, str | None]:
@@ -553,7 +575,11 @@ def _make_backup(root: Path, archive: Path) -> Path:
     dest_dir = _backup_dir(root, archive)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{archive.name}.{time.time_ns()}"
-    _backup_copy(archive, dest)
+    try:
+        _backup_copy(archive, dest)
+    except OSError:
+        _drop_tentative(dest)
+        raise
     return dest
 
 
@@ -562,6 +588,26 @@ def _prune_backups(dest_dir: Path, keep: int = BACKUP_KEEP) -> None:
     files.sort(key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
     for old in files[keep:]:
         old.unlink()
+
+
+def _drop_tentative(backup_path: Path | None) -> str | None:
+    """Remove a pre-commit backup file and its key directory if now empty.
+
+    Returns the path string when the file could not be removed.
+    """
+    if backup_path is None:
+        return None
+    try:
+        backup_path.unlink(missing_ok=True)
+    except OSError:
+        return str(backup_path)
+    parent = backup_path.parent
+    try:
+        parent.rmdir()
+    except OSError:
+        if backup_path.exists():
+            return str(backup_path)
+    return None
 
 
 def _verify_unchanged(path: Path, before: os.stat_result) -> bool:
@@ -589,6 +635,20 @@ def _exclusive_lock(root: Path) -> Iterator[bool]:
     deadline = time.monotonic() + LOCK_TIMEOUT_S
     fd = -1
     acquired = False
+
+    def _release_held() -> None:
+        nonlocal fd, acquired
+        if fd < 0 or not acquired:
+            return
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+
     try:
         while True:
             if fd >= 0:
@@ -604,10 +664,18 @@ def _exclusive_lock(root: Path) -> Iterator[bool]:
             except BlockingIOError:
                 time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
                 continue
-            except OSError:
+            except FileNotFoundError:
+                # open failed: the directory is missing. stat failed: the
+                # lock path vanished after open, which is retryable contention.
+                if fd < 0:
+                    raise
+                os.close(fd)
+                fd = -1
                 time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
                 continue
-            # flock can land on an inode the previous owner already unlinked.
+            except OSError:
+                raise
+            # flock can land on an inode the previous owner already removed.
             if st_fd.st_ino != st_path.st_ino:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_UN)
@@ -619,18 +687,11 @@ def _exclusive_lock(root: Path) -> Iterator[bool]:
             break
         yield acquired
     finally:
-        if fd >= 0:
-            if acquired:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                except OSError:
-                    pass
-            os.close(fd)
         if acquired:
-            try:
-                path.unlink()
-            except OSError:
-                pass
+            _release_held()
+        if fd >= 0:
+            os.close(fd)
+            fd = -1
 
 
 def _decode(raw: bytes) -> tuple[str | None, bytes, str | None]:
@@ -702,17 +763,32 @@ def _read_base(
 ) -> tuple[bytes | None, os.stat_result | None, str | None, int | None]:
     """Open once. fstat, read, fstat. Refuse if the inode changes under the read.
 
+    The read goes through ``os.read`` so a write that lands after the first
+    fstat and during the read is visible to the second fstat.
+
     Returns ``(raw, baseline, reason, exit_code)``. ``exit_code`` is set only
     when ``reason`` is set.
     """
     if archive.is_symlink():
         return None, None, "refusing symlinked archive", EXIT_REFUSED
-    if not archive.exists():
+    try:
+        fd = os.open(archive, os.O_RDONLY)
+    except FileNotFoundError:
         return b"", None, None, None
-    with open(archive, "rb") as handle:
-        first = os.fstat(handle.fileno())
-        raw = handle.read()
-        second = os.fstat(handle.fileno())
+    except OSError as exc:
+        return None, None, f"{type(exc).__name__}: {exc}", EXIT_REFUSED
+    try:
+        first = os.fstat(fd)
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        second = os.fstat(fd)
+    finally:
+        os.close(fd)
     changed = (
         first.st_mtime_ns != second.st_mtime_ns
         or first.st_size != second.st_size
@@ -722,6 +798,42 @@ def _read_base(
     if changed:
         return None, first, "concurrent edit detected", EXIT_CONCURRENT
     return raw, first, None, None
+
+
+def _unknown_inside(lines: list[tuple[str, str]], span: _Span) -> int | None:
+    """Line number of an unknown marker nested in ``span``, if any."""
+    for idx in range(span.begin + 1, span.end):
+        content = lines[idx][0]
+        if "<!--" not in content or "cos:generated" not in content:
+            continue
+        match = MARKER_RE.match(content.strip())
+        if match is not None and match.group("id") not in _REGISTRY_SET:
+            return idx + 1
+    return None
+
+
+def _rewrites_span(
+    span: _Span,
+    lines: list[tuple[str, str]],
+    emitted: dict[str, str],
+    conflicts: set[str],
+) -> bool:
+    if span.id in conflicts:
+        return True
+    body = emitted[span.id] if span.id in emitted else NONE_TODAY
+    current = _span_body(lines, span)
+    return not (body == current and span.hash12 == body_hash(current))
+
+
+def _archive_appeared(archive: Path) -> bool:
+    """True when a path exists now that was absent at the read baseline."""
+    try:
+        os.lstat(archive)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _merge_locked(
@@ -793,6 +905,20 @@ def _merge_locked_inner(
         current = _span_body(lines, span)
         if span.hash12 != body_hash(current):
             conflicts.add(span.id)
+    for span in live.values():
+        if not _rewrites_span(span, lines, emitted, conflicts):
+            continue
+        line_no = _unknown_inside(lines, span)
+        if line_no is None:
+            continue
+        return _result(
+            "refused",
+            sections=_quarantine(set(emitted) | {span.id}),
+            warnings=warnings,
+            archive=archive_s,
+            exit_code=EXIT_REFUSED,
+            reason=f"unknown block inside section {span.id} at line {line_no}",
+        )
     if not live and _has_operator_text(lines, set()):
         warnings.append("legacy artifact adopted; previous generated content preserved")
 
@@ -828,16 +954,26 @@ def _merge_locked_inner(
                 warnings.append(f"backup failed: {type(exc).__name__}: {exc}")
                 return _result(
                     "error",
-                    sections=actions,
+                    sections=_quarantine(set(actions) | set(emitted)),
                     warnings=warnings,
                     archive=archive_s,
                     exit_code=EXIT_REFUSED,
                     reason="backup failed",
                 )
         if before is not None and not _unchanged(archive, before):
-            if backup_path is not None:
-                backup_path.unlink(missing_ok=True)
-                backup_path = None
+            _drop_tentative(backup_path)
+            backup_path = None
+            return _result(
+                "refused",
+                sections=_quarantine(set(actions) | set(emitted)),
+                warnings=warnings,
+                archive=archive_s,
+                exit_code=EXIT_CONCURRENT,
+                reason="concurrent edit detected",
+            )
+        if before is None and _archive_appeared(archive):
+            _drop_tentative(backup_path)
+            backup_path = None
             return _result(
                 "refused",
                 sections=_quarantine(set(actions) | set(emitted)),
@@ -856,19 +992,19 @@ def _merge_locked_inner(
                     f"backup prune failed: {type(exc).__name__}: {exc}"
                 )
     except OSError as exc:
-        if not committed and backup_path is not None:
-            try:
-                backup_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        reason = f"{type(exc).__name__}: {exc}"
+        if not committed:
+            left = _drop_tentative(backup_path)
             backup_path = None
+            if left:
+                reason = f"{reason}; tentative backup remains at {left}"
         return _result(
             "error",
             sections=_quarantine(set(actions) | set(emitted)),
             warnings=warnings,
             archive=archive_s,
             exit_code=EXIT_REFUSED,
-            reason=f"{type(exc).__name__}: {exc}",
+            reason=reason,
         )
     finally:
         if tmp.exists():
@@ -923,7 +1059,7 @@ def merge(
             exit_code=EXIT_REFUSED,
             reason=f"unsupported artifact: {artifact}",
         )
-        _audit(root, artifact, result)
+        _safe_audit(root, artifact, result)
         return finish(result)
 
     if sections is not None:
@@ -942,7 +1078,7 @@ def merge(
             exit_code=EXIT_REFUSED,
             reason=err or "invalid sections",
         )
-        _audit(root, artifact, result)
+        _safe_audit(root, artifact, result)
         return finish(result)
 
     try:
@@ -957,12 +1093,7 @@ def merge(
                 )
             else:
                 result = _merge_locked(archive, emitted)
-            try:
-                _audit(root, artifact, result)
-            except OSError as exc:
-                result["warnings"].append(
-                    f"audit log failed: {type(exc).__name__}: {exc}"
-                )
+            _safe_audit(root, artifact, result)
             return finish(result)
     except OSError as exc:
         result = _result(
