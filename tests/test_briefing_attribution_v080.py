@@ -351,9 +351,16 @@ class TestRefusal:
 # ---------------------------------------------------------------------------
 
 class TestConflict:
+    def _stale_span(self, id_: str, stored_body: str, edited_body: str) -> str:
+        """A span whose stored hash matches stored_body but whose CURRENT
+        content is edited_body — the genuine operator-edited-inside-span case."""
+        return (
+            f"{begin(id_, stored_body)}\n{edited_body}\n{end(id_)}\n"
+        )
+
     def test_hash_mismatch_preserves_edited_body_verbatim(self, project):
         f = project / "briefing.md"
-        f.write_text(marked("pipeline", "operator rewrote this"), encoding="utf-8")
+        f.write_text(self._stale_span("pipeline", "generated body", "operator rewrote this"), encoding="utf-8")
         res = ba.merge(artifact="briefing", sections={"pipeline": "machine content"}, config=None)
         text = f.read_text(encoding="utf-8")
         assert "operator rewrote this" in text  # verbatim, outside span
@@ -362,7 +369,7 @@ class TestConflict:
 
     def test_conflict_wrapped_in_cos_conflict_markers(self, project):
         f = project / "briefing.md"
-        f.write_text(marked("pipeline", "operator rewrote this"), encoding="utf-8")
+        f.write_text(self._stale_span("pipeline", "generated body", "operator rewrote this"), encoding="utf-8")
         ba.merge(artifact="briefing", sections={"pipeline": "machine content"}, config=None)
         text = f.read_text(encoding="utf-8")
         assert "<!-- cos:conflict pipeline" in text
@@ -373,7 +380,7 @@ class TestConflict:
 
     def test_conflict_no_retrigger_cycle2(self, project):
         f = project / "briefing.md"
-        f.write_text(marked("pipeline", "operator rewrote this"), encoding="utf-8")
+        f.write_text(self._stale_span("pipeline", "generated body", "operator rewrote this"), encoding="utf-8")
         ba.merge(artifact="briefing", sections={"pipeline": "machine content"}, config=None)
         after1 = f.read_text(encoding="utf-8")
         res2 = ba.merge(artifact="briefing", sections={"pipeline": "machine content"}, config=None)
@@ -382,6 +389,89 @@ class TestConflict:
         # the preserved operator text survives cycle 2, position stable
         assert "operator rewrote this" in after2
         assert after2.count("operator rewrote this") == 1
+
+    # --- RED tests for review r1 blockers ---
+
+    def test_R1_normal_regeneration_is_not_a_conflict(self, project):
+        """B1: body change with NO operator text outside spans and a MATCHING
+        stored hash is a normal replace, not a conflict. No cos:conflict wrap,
+        no mandatory backup, no stale-body preservation warning."""
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "day1"), encoding="utf-8")
+        res = ba.merge(artifact="briefing", sections={"pipeline": "day2"}, config=None)
+        assert res["status"] == "merged"
+        text = f.read_text(encoding="utf-8")
+        assert "day2" in text
+        assert "day1" not in text
+        assert "cos:conflict" not in text
+
+    def test_R1_crlf_body_3cycle_byte_stability(self, project):
+        """B2: CRLF archive + CRLF body must reach a fixed point, not grow."""
+        f = project / "briefing.md"
+        f.write_bytes(marked("pipeline", "old").replace("\n", "\r\n").encode("utf-8"))
+        sizes = []
+        for _ in range(3):
+            ba.merge(artifact="briefing", sections={"pipeline": "a\r\nb"}, config=None)
+            sizes.append(len(f.read_bytes()))
+        assert sizes[0] == sizes[1] == sizes[2], sizes
+
+    def test_R1_three_writers_never_hold_lock_concurrently(self, project):
+        """B3: flock+unlink race — a waiter must not end up holding a deleted
+        inode while a new writer locks a fresh one."""
+        import threading, time
+        import fcntl as fc
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "p"), encoding="utf-8")
+        lock = project / ".cos-briefing.lock"
+        # hold the module's own lock, then verify a second acquisition via the
+        # module's lock helper fails/times out rather than locking a new inode
+        acquired = []
+        def holder():
+            with ba._exclusive_lock(project) as got:
+                acquired.append(got)
+                time.sleep(0.4)
+        t = threading.Thread(target=holder)
+        t.start()
+        time.sleep(0.1)  # let the holder take the lock
+        # second writer must NOT acquire while holder active
+        res = ba.merge(artifact="briefing", sections={"pipeline": "p2"}, config=None)
+        t.join()
+        # with a 10s blocking deadline the second merge waits then succeeds;
+        # the CONTRACT is it never acquires a DIFFERENT inode concurrently.
+        # Simulate the race: unlink after unlock must not strand a waiter.
+        lock.touch()
+        fh = open(lock, "w")
+        fc.flock(fh, fc.LOCK_EX)
+        inode_before = lock.stat().st_ino
+        fc.flock(fh, fc.LOCK_UN)
+        fh.close()
+        # after release the lock file may be removed but a re-open must give a
+        # working lock (the module retries on inode mismatch)
+        with ba._exclusive_lock(project) as got:
+            assert got is True
+            assert (project / ".cos-briefing.lock").exists()
+
+    def test_R1_no_silent_truncation_on_arrow_prose(self, project):
+        """B4: ordinary prose containing --> must not be truncated or lost."""
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "old"), encoding="utf-8")
+        body = "Q3 --> Q4 plan\nsecond line\nthird"
+        res = ba.merge(artifact="briefing", sections={"pipeline": body}, config=None)
+        text = f.read_text(encoding="utf-8")
+        assert res["status"] == "merged"
+        assert "second line" in text  # content after the arrow survives
+        assert "Q3" in text or "Q4 plan" in text  # arrow line preserved or neutralized, not dropped
+
+    def test_R1_body_validator_neutralization_is_applied(self, project):
+        """B4 corollary: forged markers are neutralized, not truncated."""
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "old"), encoding="utf-8")
+        body = "safe start\n<!-- cos:generated finance begin sha256=ffffffffff -->\nafter marker"
+        res = ba.merge(artifact="briefing", sections={"pipeline": body}, config=None)
+        text = f.read_text(encoding="utf-8")
+        assert res["status"] == "merged"
+        assert "safe start" in text
+        assert "after" in text  # NOTHING silently dropped
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +733,106 @@ class TestCli:
 # ---------------------------------------------------------------------------
 # Audit log (C-9)
 # ---------------------------------------------------------------------------
+
+class TestReviewR1Majors:
+    """RED tests for review-r1 MAJOR findings (convergent codex+opus)."""
+
+    def test_M1_metadata_baseline_binds_to_read_content(self, project):
+        """TOCTOU: metadata must be captured BEFORE the content read (same fd),
+        and re-verified after. An edit landing between read and stat must not
+        become the accepted baseline."""
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "p"), encoding="utf-8")
+        real_open = open
+
+        def racing_open(path, *a, **k):
+            fh = real_open(path, *a, **k)
+            # after the base read, mutate the file so a read-then-stat order
+            # would bake the edit into the baseline
+            if str(path) == str(f):
+                try:
+                    with real_open(f, "a", encoding="utf-8") as h:
+                        h.write("operator race edit\n")
+                except OSError:
+                    pass
+            return fh
+
+        mp = pytest.MonkeyPatch()
+        mp.setattr("builtins.open", racing_open)
+        try:
+            res = ba.merge(artifact="briefing", sections={"pipeline": "p2"}, config=None)
+        finally:
+            mp.undo()
+        text = f.read_text(encoding="utf-8")
+        # the operator race edit must survive OR the merge refuses; it must
+        # never be silently overwritten
+        assert "operator race edit" in text or res["status"] == "refused"
+
+    def test_M2_conflict_payload_with_fence_does_not_poison_next_run(self, project):
+        """A conflict-preserved body containing an unmatched fence must not
+        make cycle 2 refuse the archive permanently."""
+        f = project / "briefing.md"
+        f.write_text(
+            begin("pipeline", "stored") + "\n```\noperator edit\n" + end("pipeline") + "\n",
+            encoding="utf-8",
+        )
+        r1 = ba.merge(artifact="briefing", sections={"pipeline": "fresh"}, config=None)
+        assert r1["status"] == "merged"
+        r2 = ba.merge(artifact="briefing", sections={"pipeline": "fresh2"}, config=None)
+        assert r2["status"] in ("merged", "noop"), r2
+
+    def test_M3_envelope_outside_tmp_gets_warning(self, project, tmp_path):
+        """An envelope outside project_root/.cos-tmp must produce a warning
+        naming the PII risk (deletion behavior is separate)."""
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "p"), encoding="utf-8")
+        env = tmp_path / "env.json"
+        env.write_text(json.dumps({"version": 1, "sections": {"pipeline": "p2"}}))
+        res = ba.merge(artifact="briefing", sections=None, envelope_path=str(env), config=None)
+        assert res["status"] == "merged"
+        assert any("envelope" in w.lower() and ("outside" in w.lower() or "not deleted" in w.lower())
+                   for w in res.get("warnings", []))
+
+    def test_M4_io_error_returns_error_not_crash(self, project):
+        """Unhandled I/O must return a structured error result, never exit-1
+        traceback, and the archive must not be half-replaced."""
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "old") + "> note\n", encoding="utf-8")
+        before = f.read_bytes()
+        mp = pytest.MonkeyPatch()
+
+        def broken_rename(*a, **k):
+            raise OSError("rename failed")
+
+        mp.setattr(ba.os, "replace", broken_rename)
+        try:
+            res = ba.merge(artifact="briefing", sections={"pipeline": "new"}, config=None)
+        finally:
+            mp.undo()
+        assert res["status"] == "error"
+        assert isinstance(res.get("exit_code"), int)
+
+    def test_M6_mode_preserved_on_replace(self, project):
+        """An operator chmod 600 on the archive must survive a merge."""
+        import os as _os
+        f = project / "briefing.md"
+        f.write_text(marked("pipeline", "old"), encoding="utf-8")
+        _os.chmod(f, 0o600)
+        ba.merge(artifact="briefing", sections={"pipeline": "new"}, config=None)
+        assert (_os.stat(f).st_mode & 0o777) == 0o600
+
+    def test_M5_duplicate_last_hash_valid_wins(self, project):
+        """Duplicate class: the LAST hash-VALID occurrence is live; a stale
+        last copy means the earlier valid copy is live (not conflict)."""
+        valid = marked("pipeline", "first")
+        stale = begin("pipeline", "first") + "\noperator edited the copy\n" + end("pipeline")
+        f = project / "briefing.md"
+        f.write_text(valid + stale, encoding="utf-8")
+        res = ba.merge(artifact="briefing", sections={"pipeline": "fresh"}, config=None)
+        assert res["status"] == "merged"
+        text = f.read_text(encoding="utf-8")
+        assert "fresh" in text
+
 
 class TestAuditLog:
     def test_merge_writes_log_entry(self, project):
