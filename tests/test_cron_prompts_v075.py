@@ -208,3 +208,8 @@ def test_index_covers_plugin_code_only(tmp_path):
     (root / "tmp" / "pytest-0" / "scratch.py").write_text("")
     index = cron_prompts._script_index(root)
     assert index == {"real.py": ["skills/a/scripts/real.py"]}
+
+
+def test_missing_path_in_a_non_code_dir_of_the_checkout_is_not_ours():
+    """CI's TMPDIR lives inside the checkout; only the plugin's code dirs are ours."""
+    assert _scan(_job(f"python {PLUGIN_ROOT / 'tmp' / 'x' / 'mine' / 'report.py'}")) == []

@@ -100,7 +100,7 @@ def _path_finding(token: str, plugin_root: Path, skill_dirs: Iterable[Path],
     if path.is_absolute():
         if path.exists():
             return None
-        ours = plugin_root in path.parents or path.name in index
+        ours = path.name in index or any((plugin_root / d) in path.parents for d in _CODE_DIRS)
     else:
         if (plugin_root / path).exists() or any((d / path).exists() for d in skill_dirs):
             return None
