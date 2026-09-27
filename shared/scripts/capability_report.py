@@ -70,6 +70,21 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - capability table unavailable
         unsupported_reasons["_error"] = f"capability table unavailable: {exc}"
 
+    # Contacts writes on google_api depend on this install (service account,
+    # or what the installed google_api.py offers), not only on the table.
+    contacts_backend: dict[str, str | None] = {}
+    if provider == "google_api":
+        try:
+            from providers.google_contacts import write_backends
+            for action, (backend, reason) in write_backends(config).items():
+                contacts_backend[action] = backend
+                if backend is None and action in supported:
+                    supported.remove(action)
+                    unsupported.append(action)
+                    unsupported_reasons[action] = reason
+        except Exception as exc:  # pragma: no cover - probe must never break the report
+            unsupported_reasons["_contacts_probe"] = f"contacts probe unavailable: {exc}"
+
     project_root = ""
     paths = config.get("paths", {}) if isinstance(config, dict) else {}
     if isinstance(paths, dict):
@@ -119,6 +134,7 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         "supported": sorted(supported),
         "unsupported": sorted(unsupported),
         "unsupported_reasons": unsupported_reasons,
+        "contacts_write_backend": contacts_backend,
         "project_root": project_root,
         "hosted_session": hosted,
         "hosted_session_refusal": refusal or "",

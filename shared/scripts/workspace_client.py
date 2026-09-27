@@ -153,7 +153,8 @@ class WorkspaceClient(abc.ABC):
 
     def contacts_create(self, given_name: str = "", family_name: str = "",
                         email: str = "", phone: str = "",
-                        organization: str = "", note: str = "") -> dict[str, Any]:
+                        organization: str = "", note: str = "",
+                        emails: list[str] | None = None) -> dict[str, Any]:
         """Create a contact. Returns created contact metadata (resourceName)."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support contacts_create")
 
@@ -185,6 +186,12 @@ class WorkspaceClient(abc.ABC):
     def supports(self, action: str) -> bool:
         """Check if this provider supports a specific action (neutral or legacy key)."""
         return self.capabilities().get(action, False)
+
+    def unsupported_reason(self, action: str) -> str | None:
+        """Why THIS installation cannot perform ``action``, when that depends on
+        more than the provider (e.g. what an external script offers). None
+        means the static provider table is the whole story."""
+        return None
 
     # ── Deprecated Gmail/Drive-flavored aliases ────────────────────────
     # Defined ONCE here as thin wrappers so all ~50 legacy call sites keep

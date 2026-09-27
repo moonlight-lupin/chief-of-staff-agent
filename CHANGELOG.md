@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.7.7 — Contacts writes that match the install
+
+Field report on v0.7.6 (provider `google_api`, service account with
+domain-wide delegation). v0.7.1's contacts writes shelled out to
+`google_api.py contacts create|update|delete`, but the shipped
+google-workspace skill's script offers only `contacts list`. `doctor` was
+green and the approval chain ran, then the action failed at the last step
+with `invalid choice: 'create' (choose from 'list')`. The v0.7.1 and v0.7.3
+tests mocked the subprocess, so none of them ever checked the real CLI
+surface.
+
+> Touches the google_api provider's contacts writes, `require_capability`,
+> `review_queue approve`, the capability report and the doctor.
+
+### Changes
+
+- **Contacts writes go through the People API.** When
+  `google.service_account_path` and `google.delegate_email` are set, create,
+  update and delete call the People API directly (scope
+  `https://www.googleapis.com/auth/contacts`). This is the same service
+  account path that drafts and calendar events already use, so the external
+  skill is no longer needed for writes. Update is merge-safe: only the
+  supplied field types change. `email`, `phone` and `organization` replace
+  the first entry of their type and keep the rest (and the entry's type or
+  title). The new `emails` field replaces the whole address list.
+- **The installed script's surface is probed.** `google_api.py contacts
+  --help` runs with no credentials, and the result is cached per script
+  version. Without a service account, a write runs through the CLI only if
+  the script has that subcommand. A `--help` the probe cannot read is not
+  treated as proof of absence, so the CLI is still tried.
+- **An install that cannot do the write refuses it up front**, with the
+  reason (which subcommand is missing, what the script offers, and how to
+  enable the People API path):
+  - `capabilities` lists the write as unsupported and reports
+    `contacts_write_backend` (`rest`, `cli` or none) per action.
+  - `doctor` has a new `google_contacts` check. It warns when contacts
+    writes are impossible and otherwise says which path performs them.
+  - `review_queue.py approve` refuses to approve an action this install
+    positively cannot execute. This applies only to install-dependent gaps;
+    anything uncertain approves as before.
+  - `execute` refuses before any subprocess runs, and records the reason as
+    `last_error`, not a generic "not supported".
+- **Several email addresses per contact.** `contacts.create` and
+  `contacts.update` payloads take `emails: [...]`, alongside `email`. The
+  CLI path takes one `--email`, so several addresses need the People API
+  path and are refused otherwise.
+- **Contract tests against a real subprocess.**
+  `tests/fixtures/google_api/` holds two argparse stand-ins: one for the
+  shipped skill (`contacts list` only) and one with the full set. The end
+  to end tests run them for real. When the google-workspace skill is
+  installed, a contract test also runs the operator's real `google_api.py
+  contacts --help`. It is read-only and needs no credentials.
+- **Test isolation covers Google credentials.** The autouse fixture from
+  v0.7.5 now also unsets `GOOGLE_SERVICE_ACCOUNT_PATH` and
+  `GOOGLE_WORKSPACE_API`. Otherwise the People API path's env fallback could
+  let a contacts test reach the operator's live account.
+- `plugin.yaml` documents the google-workspace dependency surface next to
+  `optional_skills`. The runtime probe enforces it, because a structured
+  manifest there would need Hermes' plugin loader to understand it.
+- `docs/SETUP.md` explains the contacts scope and the two write paths.
+
 ## v0.7.6 — Generated-section attribution
 
 The briefing archive carried generated content that was rewritten on every

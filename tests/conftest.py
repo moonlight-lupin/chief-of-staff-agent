@@ -56,14 +56,18 @@ def _no_operator_state(monkeypatch, tmp_path_factory):
     falls back to CHIEF_OF_STAFF_PROJECT_ROOT, then ``load_config()`` — on a
     real install that is the operator's live state.db. Hermes paths fall back
     to ~/.hermes. Give every test what a clean CI checkout has: no ambient
-    project root, no config, and an empty per-test Hermes home. Tests that
-    need a root pass a config or set these with monkeypatch.setenv.
+    project root, no config, an empty per-test Hermes home and no Google
+    credentials. Tests that need any of these set them with monkeypatch.
     """
     sandbox = tmp_path_factory.mktemp("operator-sandbox")
     monkeypatch.delenv("CHIEF_OF_STAFF_PROJECT_ROOT", raising=False)
     monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(sandbox / "no-company.yaml"))
     monkeypatch.setenv("HERMES_HOME", str(sandbox / "hermes"))
     monkeypatch.setenv("CHIEF_OF_STAFF_HERMES_HOME", str(sandbox / "hermes"))
+    # The operator's Google credentials and script: with these a test could
+    # reach the live account (the People API path falls back to the env SA).
+    monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_PATH", raising=False)
+    monkeypatch.delenv("GOOGLE_WORKSPACE_API", raising=False)
 
 
 @pytest.fixture

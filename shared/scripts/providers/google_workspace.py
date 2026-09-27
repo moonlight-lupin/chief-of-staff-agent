@@ -26,6 +26,7 @@ _PARENT = Path(__file__).resolve().parent.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
+from providers import google_contacts
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
 
@@ -431,6 +432,14 @@ def _calendar_create_contract(fn):
     return wrapper
 
 
+def _refuse_several_emails_on_cli(addresses: list[str]) -> None:
+    if len(addresses) > 1:
+        raise ValueError(
+            "google_api.py takes one --email per contact; several addresses need the People "
+            "API path — set google.service_account_path and google.delegate_email"
+        )
+
+
 def _find_google_api_script() -> Path:
     """Locate google_api.py — check shared/scripts first, then Hermes skill.
 
@@ -820,7 +829,40 @@ class GoogleWorkspaceClient(WorkspaceClient):
             raise RuntimeError(err.strip() or out.strip())
         return {"output": out.strip()}
 
-    # ── Contacts (People API via google_api.py, live-verified 2026-09-25) ──
+    # ── Contacts ────────────────────────────────────────────────────────
+    # Reads go through google_api.py ``contacts list``. Writes go through the
+    # People API when a service account is configured, else through
+    # google_api.py — but only if the installed script has the subcommand
+    # (the shipped google-workspace skill offers ``list`` only).
+
+    def supports(self, action: str) -> bool:
+        if action in google_contacts.CONTACT_WRITES:
+            return self._contacts_route(action)[0] is not None
+        return super().supports(action)
+
+    def unsupported_reason(self, action: str) -> str | None:
+        if action in google_contacts.CONTACT_WRITES:
+            backend, reason = self._contacts_route(action)
+            return None if backend else reason
+        return super().unsupported_reason(action)
+
+    def _contacts_route(self, action: str) -> tuple[str | None, str]:
+        return google_contacts.contacts_write_backend(self.config, self._script, action)
+
+    def _contacts_backend(self, action: str) -> str:
+        backend, reason = self._contacts_route(action)
+        if backend is None:
+            raise RuntimeError(reason)
+        return backend
+
+    def _people_token(self) -> str:
+        sa_path, delegate = google_contacts.service_account_settings(self.config)
+        credentials = _sa_credentials(
+            service_account_path=sa_path,
+            delegate_email=self.delegate_email or delegate,
+            scopes=[google_contacts.PEOPLE_SCOPE],
+        )
+        return credentials.token
 
     def contacts_list(self, max_results: int = 50) -> list[dict[str, Any]]:
         """List contacts (name/emails/phones). Read-only."""
@@ -835,26 +877,32 @@ class GoogleWorkspaceClient(WorkspaceClient):
     @guarded("contacts.create", target_arg="given_name", audit_provider="google_api")
     def contacts_create(self, given_name: str = "", family_name: str = "",
                         email: str = "", phone: str = "",
-                        organization: str = "", note: str = "") -> dict[str, Any]:
-        """Create a contact.
+                        organization: str = "", note: str = "",
+                        emails: list[str] | None = None) -> dict[str, Any]:
+        """Create a contact. ``email`` and ``emails`` combine, ``email`` first.
 
         Requires given_name: @guarded resolves the approval/audit target from
         that argument, so a family-only create (blank target) is rejected
-        here rather than audited with an empty target. The underlying
-        google_api.py CLI still supports family-only creates for direct use.
+        here rather than audited with an empty target.
         """
         if not given_name:
             raise ValueError(
                 "contacts.create requires given_name (the approval/audit "
                 "target); family-only creates are CLI-only"
             )
+        addresses = google_contacts.merge_emails(email, emails)
+        if self._contacts_backend("contacts.create") == "rest":
+            return google_contacts.rest_create(
+                self._people_token(), given_name=given_name, family_name=family_name,
+                emails=addresses, phone=phone, organization=organization, note=note)
+        _refuse_several_emails_on_cli(addresses)
         args: list[str] = ["contacts", "create"]
         if given_name:
             args += ["--given-name", given_name]
         if family_name:
             args += ["--family-name", family_name]
-        if email:
-            args += ["--email", email]
+        if addresses:
+            args += ["--email", addresses[0]]
         if phone:
             args += ["--phone", phone]
         if organization:
@@ -872,11 +920,14 @@ class GoogleWorkspaceClient(WorkspaceClient):
 
     @guarded("contacts.update", target_arg="person_id", audit_provider="google_api")
     def contacts_update(self, person_id: str, **fields: Any) -> dict[str, Any]:
-        """Update a contact. Merge-safe: omitted field types are preserved
-        (google_api.py fetches the current record and merges before update)."""
+        """Update a contact. Merge-safe: omitted field types are preserved.
+
+        ``email``/``phone``/``organization`` replace the first entry of their
+        type; ``emails`` replaces the whole address list.
+        """
         if not person_id:
             raise ValueError("contacts.update requires person_id")
-        supported = ("given_name", "family_name", "email", "phone", "organization", "note")
+        supported = ("given_name", "family_name", "email", "emails", "phone", "organization", "note")
         unknown = [k for k in fields if k not in supported]
         if unknown:
             # A typo'd kwarg (emial=...) must fail loudly, not silently drop
@@ -899,6 +950,12 @@ class GoogleWorkspaceClient(WorkspaceClient):
                 "contacts.update requires at least one field: "
                 + ", ".join(supported)
             )
+        if self._contacts_backend("contacts.update") == "rest":
+            return google_contacts.rest_update(self._people_token(), person_id, supplied)
+        if "emails" in supplied:
+            addresses = google_contacts.merge_emails(supplied.get("email", ""), supplied.pop("emails"))
+            _refuse_several_emails_on_cli(addresses)
+            supplied["email"] = addresses[0]
         args: list[str] = ["contacts", "update", "--person-id", person_id]
         flag_map = {"given_name": "--given-name", "family_name": "--family-name",
                     "email": "--email", "phone": "--phone",
@@ -920,6 +977,8 @@ class GoogleWorkspaceClient(WorkspaceClient):
         """Delete a contact PERMANENTLY (no trash step, not reversible)."""
         if not person_id:
             raise ValueError("contacts.delete requires person_id")
+        if self._contacts_backend("contacts.delete") == "rest":
+            return google_contacts.rest_delete(self._people_token(), person_id)
         cmd = self._build_cmd("contacts", "delete", "--person-id", person_id)
         rc, out, err = self._run(cmd)
         if rc != 0:
