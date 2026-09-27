@@ -185,3 +185,13 @@ Guarantee tiers: (1) cooperating writers (two helper runs, cron + manual) NEVER 
 - **Batch 1:** `briefing_attribution.py` — parser state machine with refusal-on-ambiguity, LF-normalized hash, C-2 anchors, C-3 known-but-empty, C-4 validators (scalar + body), C-5 write policy (lock, TOCTOU re-check, backups, transaction phases), C-7 first-run, C-8 diagnostics, C-9 CLI. Full test suite per acceptance matrix (A1-A15 minus A6/A16).
 - **Batch 2:** skill adoption — SKILL.md envelope instruction + envelope-writing helper snippet + doctor staleness signal (A16) + `.gitignore` entries. Integration test A15 full path.
 - **Batch 3 (slice 2, deferred):** `render_markdown_sections` refactor + `cmd_run` archive hook + `--dry-run` skip + cross-producer A6.
+
+## Accepted deviations and deferred windows (build record)
+
+Recorded at batch-2 close (2026-09-27). All were adjudicated by the orchestrator during review rounds; both review lanes confirmed SHIP.
+
+1. **Envelope containment: warn-and-keep.** An envelope that resolves outside the project root is kept with a warning (not deleted). Codex batch-1 finding #9. Rationale: silent deletion of a file the operator may want to inspect is worse than a warning.
+2. **Fence-indent warning.** Code-fence indentation in section bodies is preserved; a warning is emitted rather than an error. Confirmed in batch-1 confirm round.
+3. **Absent-archive microsecond window (C-2, deferred).** Between the archive-appeared check and the final write, an external creator could theoretically race the helper. Atomic via `os.link` if ever needed. Known window, both lanes accepted as Low.
+4. **Audit writer omits `reason`.** `_audit` never writes the `reason` field, so real failure entries have empty reasons. Doctor display now omits the trailing `: ` when empty (3ec7db0). A follow-up could add `reason` to `_audit`; requires unfreezing the module and is not needed for correct behavior.
+5. **Undeclared-id stdout status.** Validation rejects return stdout status `error` (not `refused`); exit code 2 matches spec. Batch-2 adjudication: the pinned status is the batch-1 contract; refusal semantics are carried by the refusal statuses the helper does emit.
