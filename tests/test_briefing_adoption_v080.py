@@ -303,7 +303,7 @@ class TestA16Doctor:
         result = self._check(project)
         assert result.status == "pass"
         assert result.detail == (
-            f"briefing archive last merged: {fresh}; 1 unreadable log lines"
+            f"briefing archive last merged: {fresh}; 1 unreadable log line"
         )
 
     def test_all_malformed_log_warns_unavailable(self, project):
@@ -315,6 +315,39 @@ class TestA16Doctor:
         result = self._check(project)
         assert result.status == "warn"
         assert result.detail == "briefing archive unavailable: 2 unreadable log lines"
+
+    def test_last_attempt_without_reason_omits_trailing_colon(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        fresh = datetime.now(timezone.utc).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        # Real _audit lines carry no reason field: the display must not end "…: ".
+        (project / ba.LOG_NAME).write_text(
+            json.dumps({"artifact": "briefing", "ts": old, "status": "merged"})
+            + "\n"
+            + json.dumps({"artifact": "briefing", "ts": fresh, "status": "error"})
+            + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "warn"
+        assert result.detail == (
+            f"briefing archive last merged: {old} (>36h ago); "
+            f"last attempt: {fresh} error"
+        )
+
+    def test_non_briefing_failure_is_not_surfaced(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        fresh = datetime.now(timezone.utc).isoformat()
+        (project / ba.LOG_NAME).write_text(
+            json.dumps({"artifact": "briefing", "ts": fresh, "status": "merged"})
+            + "\n"
+            + json.dumps({"artifact": "wiki", "ts": fresh, "status": "error"})
+            + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "pass"
+        assert "last attempt" not in result.detail
 
     def test_no_archive_and_no_log_is_idle(self, project):
         result = self._check(project)

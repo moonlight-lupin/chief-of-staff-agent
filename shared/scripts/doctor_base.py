@@ -831,14 +831,14 @@ def _check_briefing_archive(fix: bool, data: dict[str, Any] | None, config_path:
             if last_attempt:
                 parts.append(last_attempt)
             if unreadable:
-                parts.append(f"{unreadable} unreadable log lines")
+                parts.append(f"{unreadable} unreadable log line" + ("s" if unreadable != 1 else ""))
             return "; ".join(parts)
 
         if readable == 0 and unreadable > 0:
             return CheckResult(
                 "briefing_archive",
                 "warn",
-                f"briefing archive unavailable: {unreadable} unreadable log lines",
+                f"briefing archive unavailable: {unreadable} unreadable log line" + ("s" if unreadable != 1 else ""),
             )
         if successes:
             ts, ts_raw = max(successes, key=lambda pair: pair[0])
@@ -849,7 +849,7 @@ def _check_briefing_archive(fix: bool, data: dict[str, Any] | None, config_path:
             last_attempt = None
             newest = max(overall, key=lambda item: item[0])
             if newest[2] in ("refused", "error") and newest[0] > ts:
-                last_attempt = f"last attempt: {newest[1]} {newest[2]}: {newest[3]}"
+                last_attempt = f"last attempt: {newest[1]} {newest[2]}" + (f": {newest[3]}" if newest[3] else "")
             return CheckResult(
                 "briefing_archive",
                 "warn" if stale else "pass",
@@ -862,7 +862,7 @@ def _check_briefing_archive(fix: bool, data: dict[str, Any] | None, config_path:
                 "warn",
                 detail(
                     "briefing archive not successfully merged "
-                    f"(last attempt: {ts_raw} {status}: {reason})"
+                    f"(last attempt: {ts_raw} {status}" + (f": {reason}" if reason else "") + ")"
                 ),
             )
         if archive_exists:
