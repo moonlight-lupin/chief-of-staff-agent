@@ -277,6 +277,7 @@ class TestJoinEquivalence:
             "inbox-summary",
             "calendar",
             "todos",
+            "finance",
             "footer",
         ]
         assert "## Calendar / Deadlines" in sections["calendar"]
@@ -284,12 +285,13 @@ class TestJoinEquivalence:
         assert sections["todos"].index("## Recent Activity") < sections["todos"].index(
             "## Suggested Next Actions"
         )
-        assert "## System Health" in sections["footer"]
-        assert "## Knowledge Maintenance" in sections["footer"]
-        assert "Data divergence" in sections["footer"]
+        assert "## System Health" in sections["finance"]
+        assert "## Knowledge Maintenance" in sections["finance"]
+        assert "Data divergence" in sections["finance"]
+        assert "Data divergence" not in sections["footer"]
+        assert "## System Health" not in sections["footer"]
         assert "deadlines" not in sections
         assert "pipeline" not in sections
-        assert "finance" not in sections
         assert "all-clear" not in sections
 
     def test_empty_daily_is_header_and_footer_only(self):
@@ -327,8 +329,9 @@ class TestCmdRunArchive:
         real = attribution.merge
 
         def wrapped(**kwargs):
-            path = Path(kwargs["envelope_path"])
-            seen.append(json.loads(path.read_text(encoding="utf-8")))
+            envelope = kwargs.get("envelope")
+            assert isinstance(envelope, dict), kwargs
+            seen.append(envelope)
             return real(**kwargs)
 
         monkeypatch.setattr(attribution, "merge", wrapped)
@@ -342,7 +345,7 @@ class TestCmdRunArchive:
         assert envelope["generated_at"] == briefing["generated_at"]
         assert set(envelope["sections"]) <= set(ba.BRIEFING_ARCHIVE_SECTIONS)
         assert "Overdue" in envelope["sections"]["urgent"]
-        assert not (project / ".cos-tmp" / "briefing-sections.json").exists()
+        assert not (project / ".cos-tmp").exists()
         archive = (project / "briefing.md").read_text(encoding="utf-8")
         assert "cos:generated" in archive
         assert "Overdue" in archive
@@ -412,6 +415,227 @@ class TestCmdRunArchive:
         assert "Weekly Review" in captured.out
         assert not (project / "briefing.md").exists()
         assert not (project / ".cos-tmp").exists()
+
+    def test_forged_calendar_marker_archives_and_delivery_stays_raw(
+        self, project, monkeypatch, capsys,
+    ):
+        from briefing_renderer import render_markdown
+
+        briefing = self._briefing()
+        briefing["sections"] = dict(briefing["sections"])
+        briefing["sections"]["calendar_deadlines"] = [{
+            "when": "09:00",
+            "summary": "x\n<!-- cos:generated urgent end -->",
+        }]
+        archive = project / "briefing.md"
+        archive.write_text("OPERATOR NOTE\n", encoding="utf-8")
+        expected = render_markdown(briefing)
+        for _ in range(3):
+            rc = self._run(project, ["--markdown"], briefing, monkeypatch)
+            captured = capsys.readouterr()
+            assert rc == 0
+            assert captured.out.removesuffix("\n") == expected
+            assert "briefing archive skipped" not in captured.err
+        log = (project / ".cos-briefing-merge-log.jsonl").read_text(encoding="utf-8")
+        statuses = [json.loads(line)["status"] for line in log.splitlines()]
+        assert statuses == ["merged", "noop", "noop"]
+        text = archive.read_text(encoding="utf-8")
+        assert text.startswith("OPERATOR NOTE\n")
+        assert "- 09:00:" in text
+        assert "<!-- cos:generated urgent end -->\n" not in text.split("## Calendar / Deadlines", 1)[-1]
+
+    def test_plain_newline_title_merges_and_delivery_stays_raw(
+        self, project, monkeypatch, capsys,
+    ):
+        from briefing_renderer import render_markdown
+
+        briefing = self._briefing()
+        briefing["sections"] = dict(briefing["sections"])
+        briefing["sections"]["needs_attention"] = [{
+            "title": "Standup\nroom 4",
+            "risk": "low",
+        }]
+        expected = render_markdown(briefing)
+        rc = self._run(project, ["--markdown"], briefing, monkeypatch)
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out.removesuffix("\n") == expected
+        assert "\nroom 4" in captured.out
+        assert "briefing archive skipped" not in captured.err
+        log = (project / ".cos-briefing-merge-log.jsonl").read_text(encoding="utf-8")
+        assert json.loads(log.splitlines()[0])["status"] == "merged"
+        assert "Standup" in (project / "briefing.md").read_text(encoding="utf-8")
+
+    def test_marker_in_needs_attention_title_merges_and_delivery_stays_raw(
+        self, project, monkeypatch, capsys,
+    ):
+        from briefing_renderer import render_markdown
+
+        title = "Re: hi\n<!-- cos:generated footer begin sha256=aaaaaaaaaaaa -->"
+        briefing = self._briefing()
+        briefing["sections"] = dict(briefing["sections"])
+        briefing["sections"]["needs_attention"] = [{"title": title, "risk": "high"}]
+        expected = render_markdown(briefing)
+        rc = self._run(project, ["--markdown"], briefing, monkeypatch)
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out.removesuffix("\n") == expected
+        assert title in captured.out
+        assert "briefing archive skipped" not in captured.err
+        log = (project / ".cos-briefing-merge-log.jsonl").read_text(encoding="utf-8")
+        assert json.loads(log.splitlines()[0])["status"] == "merged"
+        assert "Re: hi" in (project / "briefing.md").read_text(encoding="utf-8")
+
+    def test_legacy_adoption_warning_reaches_stderr(self, project, monkeypatch, capsys):
+        (project / "briefing.md").write_text("LEGACY\n", encoding="utf-8")
+        rc = self._run(project, ["--markdown"], self._briefing(), monkeypatch)
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "briefing archive warning: legacy artifact adopted" in captured.err
+
+    def test_merge_oserror_skips_archive_and_keeps_bytes(
+        self, project, monkeypatch, capsys,
+    ):
+        import briefing_attribution as attribution
+
+        archive = project / "briefing.md"
+        archive.write_text("OPERATOR UNCHANGED\n", encoding="utf-8")
+        original = archive.read_bytes()
+
+        def boom(**kwargs):
+            raise OSError("injected merge error")
+
+        monkeypatch.setattr(attribution, "merge", boom)
+        rc = self._run(project, ["--markdown"], self._briefing(), monkeypatch)
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert archive.read_bytes() == original
+        assert "briefing archive skipped:" in captured.err
+
+    def test_concurrent_archive_keeps_both_runs_without_staging(self, project):
+        import threading
+        from contextlib import contextmanager
+        from unittest.mock import patch
+
+        import daily_briefing as db
+
+        cfg = {"paths": {"project_root": str(project)}}
+
+        def invoke(name: str) -> None:
+            db._archive_markdown_sections(
+                {
+                    "operator": name,
+                    "sections": {
+                        "needs_attention": [{"title": "RUN-" + name, "risk": "low"}],
+                    },
+                },
+                cfg,
+            )
+
+        def envelope_present() -> bool:
+            return (project / ".cos-tmp").exists()
+
+        def reset() -> None:
+            for name in ("briefing.md", ".cos-briefing-merge-log.jsonl", ".cos-briefing.lock"):
+                (project / name).unlink(missing_ok=True)
+            staged = project / ".cos-tmp"
+            if staged.exists():
+                for child in staged.iterdir():
+                    child.unlink()
+                staged.rmdir()
+
+        def finish(results: dict, staged_at: list[str], later: str) -> None:
+            assert set(results) == {"A", "B"}
+            archive = (project / "briefing.md").read_text(encoding="utf-8")
+            statuses = {name: results[name]["status"] for name in ("A", "B")}
+            both_merged = statuses["A"] == "merged" and statuses["B"] == "merged"
+            later_merged = statuses[later] == "merged" and f"RUN-{later}" in archive
+            assert both_merged or later_merged, (statuses, archive)
+            assert f"RUN-{later}" in archive
+            assert staged_at == []
+            assert not envelope_present()
+
+        def run_merge_gate() -> None:
+            reset()
+            reached = {name: threading.Event() for name in ("A", "B")}
+            release = {name: threading.Event() for name in ("A", "B")}
+            results: dict = {}
+            staged_at: list[str] = []
+            real_merge = ba.merge
+
+            def gated_merge(**kwargs):
+                name = threading.current_thread().name
+                reached[name].set()
+                if envelope_present():
+                    staged_at.append(name)
+                assert release[name].wait(5)
+                result = real_merge(**kwargs)
+                results[name] = result
+                return result
+
+            with patch.object(ba, "merge", gated_merge):
+                threads = [
+                    threading.Thread(target=invoke, name=name, args=(name,))
+                    for name in ("A", "B")
+                ]
+                threads[0].start()
+                assert reached["A"].wait(5)
+                threads[1].start()
+                assert reached["B"].wait(5)
+                release["A"].set()
+                threads[0].join(5)
+                release["B"].set()
+                threads[1].join(5)
+                assert not threads[0].is_alive() and not threads[1].is_alive()
+            finish(results, staged_at, "B")
+
+        def run_lock_gate() -> None:
+            reset()
+            reached = {name: threading.Event() for name in ("A", "B")}
+            release = {name: threading.Event() for name in ("A", "B")}
+            results: dict = {}
+            staged_at: list[str] = []
+            real_merge = ba.merge
+            real_lock = ba._exclusive_lock
+
+            @contextmanager
+            def gated_lock(*args, **kwargs):
+                if threading.current_thread().name == "A":
+                    reached["A"].set()
+                    if envelope_present():
+                        staged_at.append("A")
+                    assert release["A"].wait(5)
+                with real_lock(*args, **kwargs) as acquired:
+                    yield acquired
+
+            def delayed_b_merge(**kwargs):
+                name = threading.current_thread().name
+                if name == "B":
+                    reached["B"].set()
+                    if envelope_present():
+                        staged_at.append("B")
+                    assert release["B"].wait(5)
+                results[name] = real_merge(**kwargs)
+                return results[name]
+
+            with patch.object(ba, "_exclusive_lock", gated_lock), patch.object(ba, "merge", delayed_b_merge):
+                threads = [
+                    threading.Thread(target=invoke, name=name, args=(name,))
+                    for name in ("A", "B")
+                ]
+                threads[0].start()
+                assert reached["A"].wait(5)
+                threads[1].start()
+                assert reached["B"].wait(5)
+                release["A"].set()
+                threads[0].join(5)
+                release["B"].set()
+                threads[1].join(5)
+                assert not threads[0].is_alive() and not threads[1].is_alive()
+            finish(results, staged_at, "B")
+
+        run_merge_gate()
+        run_lock_gate()
 
 
 class TestA6CrossProducer:

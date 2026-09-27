@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -1124,12 +1125,30 @@ def _emit_rendered(
     return None
 
 
-def _archive_markdown_sections(briefing: dict[str, Any], config: Any) -> None:
-    """Stage daily markdown sections and merge them into briefing.md.
+def _sanitize_string_leaves(value: Any, sanitize: Callable[[object], str]) -> None:
+    """Collapse line breaks in every string leaf of a briefing copy."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, str):
+                value[key] = sanitize(item)
+            elif isinstance(item, (dict, list)):
+                _sanitize_string_leaves(item, sanitize)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            if isinstance(item, str):
+                value[index] = sanitize(item)
+            elif isinstance(item, (dict, list)):
+                _sanitize_string_leaves(item, sanitize)
 
-    The merge module writes the audit log. A refused or failed merge is
-    logged and ignored so delivery still succeeds. Weekly briefings are not
-    an archive artifact.
+
+def _archive_markdown_sections(briefing: dict[str, Any], config: Any) -> None:
+    """Merge daily markdown sections into briefing.md.
+
+    Scalars are sanitized on a copy so a calendar summary cannot put a
+    forged marker on its own line. Delivery still renders the original
+    briefing. The merge module writes the audit log. A refused or failed
+    merge is logged and ignored so delivery still succeeds. Weekly
+    briefings are not an archive artifact.
     """
     if briefing.get("kind") == "weekly":
         return
@@ -1141,25 +1160,25 @@ def _archive_markdown_sections(briefing: dict[str, Any], config: Any) -> None:
         if root is None:
             print("briefing archive skipped: project root unresolved", file=sys.stderr)
             return
-        env_dir = Path(root) / ".cos-tmp"
-        os.makedirs(env_dir, exist_ok=True)
-        env_path = env_dir / "briefing-sections.json"
+        archived = copy.deepcopy(briefing)
+        _sanitize_string_leaves(archived, briefing_attribution.sanitize_scalar)
         envelope = {
             "version": 1,
-            "generated_at": briefing.get("generated_at"),
+            "generated_at": archived.get("generated_at"),
             "artifact": "briefing",
             "sections": {
                 section_id: body
-                for section_id, body in render_markdown_sections(briefing)
+                for section_id, body in render_markdown_sections(archived)
                 if body.strip()
             },
         }
-        env_path.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
         result = briefing_attribution.merge(
             artifact="briefing",
-            envelope_path=str(env_path),
+            envelope=envelope,
             config=config,
         )
+        for warning in result.get("warnings") or []:
+            print(f"briefing archive warning: {warning}", file=sys.stderr)
         status = result.get("status")
         if status in {"refused", "error"}:
             print(

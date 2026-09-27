@@ -265,7 +265,7 @@ def _pack_markdown_sections(
 
     A block with no registry id is generated text the archive tuple does not
     name. It prefixes the next real section so document order survives the
-    join. A trailing unnamed block suffixes the previous section.
+    join.
     """
     pending: list[str] = []
     packed: list[tuple[str, list[str]]] = []
@@ -277,9 +277,6 @@ def _pack_markdown_sections(
             raise ValueError(f"undeclared section id: {section_id}")
         packed.append((section_id, [*pending, *block]))
         pending = []
-    if pending and packed:
-        section_id, block = packed[-1]
-        packed[-1] = (section_id, [*block, *pending])
     return [(section_id, "\n".join(block)) for section_id, block in packed if block]
 
 
@@ -434,7 +431,7 @@ def render_markdown_sections(briefing: dict[str, Any]) -> list[tuple[str, str]]:
     divergence: list[str] = []
     _append_loader_source_text(divergence, _daily_bookkeeper_sources(sections))
     if divergence:
-        blocks.append((None, divergence))
+        blocks.append(("finance", divergence))
 
     blocks.append((
         "footer",
