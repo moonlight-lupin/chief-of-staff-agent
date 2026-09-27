@@ -1,6 +1,10 @@
 [project]
 name = "chief-of-staff-plugin"
-version = "0.7.5"
+<<<<<<< HEAD
+version = "0.7.6"
+=======
+version = "0.7.6"
+>>>>>>> 8345fd8 (chore(release): align pyproject.toml version 0.7.6 (release-version-agree guard))
 description = "Hermes Chief-of-Staff plugin foundation layer"
 requires-python = ">=3.11"
 dependencies = [
