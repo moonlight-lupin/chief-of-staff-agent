@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.7.6 — Generated-section attribution
+
+The briefing archive carried generated content that was rewritten on every
+run: operator notes wedged between generated sections disappeared, and two
+producers (the agent skill path and the Python CLI) could clobber each other.
+This release makes generated sections first-class: each is fenced with
+`<!-- cos:generated <id> start|end -->` markers and a per-span content hash,
+merged instead of overwritten, and attributed in the audit log.
+
+> Touches the briefing archive writer (`briefing_attribution.py`, new), the
+> daily-briefing skill text, the doctor, the markdown renderer, and
+> `cmd_run`. Adds 104 contract tests.
+
+- Archive model: `briefing.md` becomes a mixed document. Operator text is
+  never inside a generated span. Generated spans carry a 12-hex hash of the
+  body, updated through a managed path on merge; a span whose hash does not
+  match its content is refused, not overwritten.
+- Locking and atomicity: every merge takes an advisory lock
+  (`.cos-briefing.lock`) and writes via `os.link`. Failed merges keep the
+  archive untouched; the pre-merge bytes are backed up to `.cos-backups/`
+  on structural failure.
+- Two producer paths, one helper: the agent path composes an envelope JSON,
+  writes it under `.cos-tmp/`, and calls the helper CLI; the Python CLI
+  (`cmd_run --markdown`) calls `merge(envelope=...)` in memory and stages
+  nothing. Both go through the same validation, same lock, same audit log.
+- Injection hardening: single-line fields pass `sanitize_scalar` on the
+  archive path, so a forged marker inside a calendar title (CR/LF/U+2028/
+  U+2029 collapsed) cannot freeze the archive. Marker lines are matched
+  whole-line; partial matches refuse.
+- Doctor: `briefing_archive` check reports staleness from SUCCESSFUL merges
+  only (36 h threshold); failed runs surface as a warning, never reset the
+  timer. Malformed audit lines are skipped and counted.
+- Renderer: `render_markdown` is now a join over `render_markdown_sections`;
+  delivery output is byte-identical to the pre-refactor renderer (pinned by
+  captured goldens). Weekly briefings do not archive.
+- Skill adoption: `daily-briefing/SKILL.md` documents the envelope flow with
+  a heredoc snippet; git-backed installs ignore `.cos-backups/`, `.cos-tmp/`
+  and `.cos-briefing.lock` (including the `state_sync` backfill).
+- Spec adjudications recorded in
+  `.hermes/specs/2026-09-26_generated-section-attribution.md`: batch-2
+  containment/fence-indent/C-2 window/audit-`reason`/undeclared-id notes and
+  slice-2 notes (in-memory envelope, registry span order, C-3 known-but-empty
+  lifecycle, unmapped-block attribution cases).
+
+- Version 0.7.4 → 0.7.6 in all six locations. v0.7.5 shipped separately
+  (Claude Code session, test isolation + cron_prompts doctor check).
+
 ## v0.7.5 — Test isolation and stale cron prompts
 
 Two findings from field use of v0.5.7 through v0.7.4 on a production-like
