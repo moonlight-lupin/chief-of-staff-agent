@@ -1124,6 +1124,55 @@ def _emit_rendered(
     return None
 
 
+def _archive_markdown_sections(briefing: dict[str, Any], config: Any) -> None:
+    """Stage daily markdown sections and merge them into briefing.md.
+
+    The merge module writes the audit log. A refused or failed merge is
+    logged and ignored so delivery still succeeds. Weekly briefings are not
+    an archive artifact.
+    """
+    if briefing.get("kind") == "weekly":
+        return
+    try:
+        from briefing_renderer import render_markdown_sections
+        import briefing_attribution
+
+        root = get_project_root(config)
+        if root is None:
+            print("briefing archive skipped: project root unresolved", file=sys.stderr)
+            return
+        env_dir = Path(root) / ".cos-tmp"
+        os.makedirs(env_dir, exist_ok=True)
+        env_path = env_dir / "briefing-sections.json"
+        envelope = {
+            "version": 1,
+            "generated_at": briefing.get("generated_at"),
+            "artifact": "briefing",
+            "sections": {
+                section_id: body
+                for section_id, body in render_markdown_sections(briefing)
+                if body.strip()
+            },
+        }
+        env_path.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+        result = briefing_attribution.merge(
+            artifact="briefing",
+            envelope_path=str(env_path),
+            config=config,
+        )
+        status = result.get("status")
+        if status in {"refused", "error"}:
+            print(
+                f"briefing archive skipped: {result.get('reason') or status}",
+                file=sys.stderr,
+            )
+    except Exception as exc:
+        print(
+            f"briefing archive skipped: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Generate structured briefing and output in requested format."""
     workspace_input = None
@@ -1153,6 +1202,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         briefing=briefing,
     )
     if not args.dry_run:
+        if fmt == "markdown":
+            _archive_markdown_sections(briefing, config)
         record_success(args.config, briefing, render(briefing, "text"))
     return 0
 

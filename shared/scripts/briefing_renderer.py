@@ -16,6 +16,10 @@ import json
 import re
 from typing import Any
 
+from briefing_attribution import BRIEFING_ARCHIVE_SECTIONS as _ARCHIVE_SECTIONS
+
+_ARCHIVE_IDS = frozenset(_ARCHIVE_SECTIONS)
+
 
 def _risk_icon(risk: str) -> str:
     return {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(risk, "⚪")
@@ -254,138 +258,196 @@ def render_text(briefing: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_markdown(briefing: dict[str, Any]) -> str:
-    """Render briefing as markdown for email/notification."""
+def _pack_markdown_sections(
+    blocks: list[tuple[str | None, list[str]]],
+) -> list[tuple[str, str]]:
+    """Turn renderer blocks into registry sections without moving any line.
+
+    A block with no registry id is generated text the archive tuple does not
+    name. It prefixes the next real section so document order survives the
+    join. A trailing unnamed block suffixes the previous section.
+    """
+    pending: list[str] = []
+    packed: list[tuple[str, list[str]]] = []
+    for section_id, block in blocks:
+        if section_id is None:
+            pending.extend(block)
+            continue
+        if section_id not in _ARCHIVE_IDS:
+            raise ValueError(f"undeclared section id: {section_id}")
+        packed.append((section_id, [*pending, *block]))
+        pending = []
+    if pending and packed:
+        section_id, block = packed[-1]
+        packed[-1] = (section_id, [*block, *pending])
+    return [(section_id, "\n".join(block)) for section_id, block in packed if block]
+
+
+def render_markdown_sections(briefing: dict[str, Any]) -> list[tuple[str, str]]:
+    """Map daily markdown blocks to ``(section_id, body)`` pairs.
+
+    Weekly briefings are not archive sections. Callers that need the weekly
+    text use ``render_markdown``, which still returns ``render_weekly_text``.
+    Ids the renderer does not produce are omitted, not emitted empty.
+    """
     if isinstance(briefing, dict) and briefing.get("kind") == "weekly":
-        return render_weekly_text(briefing)
-    lines: list[str] = []
+        return []
     summary = briefing.get("summary", {})
     sections = briefing.get("sections", {})
     operator = briefing.get("operator", "Operator")
+    blocks: list[tuple[str | None, list[str]]] = []
 
-    lines.append(f"# Daily Briefing — {operator}\n")
+    header = [
+        f"# Daily Briefing — {operator}\n",
+        "## Executive Summary\n",
+        f"- Needs attention: {summary.get('needs_attention', 0)}",
+        f"- Pending approvals: {summary.get('pending_approvals', 0)}",
+        f"- Suggestions: {summary.get('suggestions', 0)}",
+        f"- Classified emails: {summary.get('classified_emails', 0)}",
+        f"- System warnings: {summary.get('system_warnings', 0)}\n",
+    ]
+    blocks.append(("header", header))
 
-    # Executive summary
-    lines.append("## Executive Summary\n")
-    lines.append(f"- Needs attention: {summary.get('needs_attention', 0)}")
-    lines.append(f"- Pending approvals: {summary.get('pending_approvals', 0)}")
-    lines.append(f"- Suggestions: {summary.get('suggestions', 0)}")
-    lines.append(f"- Classified emails: {summary.get('classified_emails', 0)}")
-    lines.append(f"- System warnings: {summary.get('system_warnings', 0)}\n")
-
-    # Needs attention
     na = sections.get("needs_attention", [])
     if na:
-        lines.append("## Needs Attention\n")
+        urgent = ["## Needs Attention\n"]
         for item in na:
-            lines.append(f"- **{item.get('title', '?')}** ({item.get('risk', 'low')})")
+            urgent.append(f"- **{item.get('title', '?')}** ({item.get('risk', 'low')})")
             if item.get("why"):
-                lines.append(f"  - _Why: {item['why']}_")
-        lines.append("")
+                urgent.append(f"  - _Why: {item['why']}_")
+        urgent.append("")
+        blocks.append(("urgent", urgent))
 
-    # Pending approvals
     pa = sections.get("pending_approvals", {})
     for risk_level in ("high", "medium", "low"):
         actions = pa.get(risk_level, [])
         if not actions:
             continue
         label = {"high": "High Risk", "medium": "Medium Risk", "low": "Low Risk"}[risk_level]
-        lines.append(f"## Pending Approvals — {label}\n")
-        for a in actions:
-            lines.append(f"- `{a.get('action_id', '?')}` {a.get('type', '?')} — {a.get('summary', '')}")
-            lines.append(f"  - State: {a.get('state', '?')}")
-            lines.append(f"  - Preview: `python shared/scripts/review_queue.py preview --action-id {a.get('action_id', '?')}`")
-            lines.append(f"  - Approve: `python shared/scripts/review_queue.py approve --action-id {a.get('action_id', '?')} --approver MH --reason \"Reviewed\"`")
-            lines.append(f"  - Execute: `python shared/scripts/review_queue.py execute --action-id {a.get('action_id', '?')}`")
-        lines.append("")
+        pending = [f"## Pending Approvals — {label}\n"]
+        for action in actions:
+            pending.append(
+                f"- `{action.get('action_id', '?')}` {action.get('type', '?')} — {action.get('summary', '')}"
+            )
+            pending.append(f"  - State: {action.get('state', '?')}")
+            action_id = action.get("action_id", "?")
+            pending.append(
+                f"  - Preview: `python shared/scripts/review_queue.py preview --action-id {action_id}`"
+            )
+            pending.append(
+                "  - Approve: `python shared/scripts/review_queue.py approve "
+                f"--action-id {action_id} --approver MH --reason \"Reviewed\"`"
+            )
+            pending.append(
+                f"  - Execute: `python shared/scripts/review_queue.py execute --action-id {action_id}`"
+            )
+        pending.append("")
+        blocks.append((f"pending-{risk_level}", pending))
 
-    # Email organisation
     eo = sections.get("email_organisation", {})
     if eo:
-        lines.append("## Email Organisation\n")
-        lines.append(f"- Classified: {eo.get('classified', 0)}")
-        lines.append(f"- Unmapped: {eo.get('unmapped', 0)}")
-        lines.append(f"- Archive candidates: {eo.get('archive_candidates', 0)}")
-        lines.append(f"- Label suggestions: {eo.get('label_suggestions', 0)}")
-        lines.append(f"- Pending actions: {eo.get('pending_actions', 0)}")
-        lines.append("\n_No Gmail changes were made by this briefing._\n")
+        inbox = [
+            "## Email Organisation\n",
+            f"- Classified: {eo.get('classified', 0)}",
+            f"- Unmapped: {eo.get('unmapped', 0)}",
+            f"- Archive candidates: {eo.get('archive_candidates', 0)}",
+            f"- Label suggestions: {eo.get('label_suggestions', 0)}",
+            f"- Pending actions: {eo.get('pending_actions', 0)}",
+            "\n_No Gmail changes were made by this briefing._\n",
+        ]
+        blocks.append(("inbox-summary", inbox))
 
-    # Calendar
     cal = sections.get("calendar_deadlines", [])
     if cal:
-        lines.append("## Calendar / Deadlines\n")
+        calendar = ["## Calendar / Deadlines\n"]
         for item in cal[:8]:
-            lines.append(f"- {item.get('when', '?')}: {item.get('summary', '?')}")
-        lines.append("")
+            calendar.append(f"- {item.get('when', '?')}: {item.get('summary', '?')}")
+        calendar.append("")
+        blocks.append(("calendar", calendar))
 
-    # Recent events
-    re = sections.get("recent_events", [])
-    if re:
-        lines.append("## Recent Activity\n")
+    recent = sections.get("recent_events", [])
+    if recent:
+        activity = ["## Recent Activity\n"]
         type_counts: dict[str, int] = {}
-        for e in re:
-            et = e.get("event_type", "unknown")
-            type_counts[et] = type_counts.get(et, 0) + 1
-        for et, count in sorted(type_counts.items()):
-            lines.append(f"- {count} {et}")
-        lines.append("")
+        for event in recent:
+            event_type = event.get("event_type", "unknown")
+            type_counts[event_type] = type_counts.get(event_type, 0) + 1
+        for event_type, count in sorted(type_counts.items()):
+            activity.append(f"- {count} {event_type}")
+        activity.append("")
+        blocks.append((None, activity))
 
-    # Suggested actions
-    sna = sections.get("suggested_next_actions", [])
-    if sna:
-        lines.append("## Suggested Next Actions\n")
-        for item in sna[:10]:
-            lines.append(f"- **{item.get('title', '?')}** ({item.get('risk', 'low')})")
+    suggested = sections.get("suggested_next_actions", [])
+    if suggested:
+        todos = ["## Suggested Next Actions\n"]
+        for item in suggested[:10]:
+            todos.append(f"- **{item.get('title', '?')}** ({item.get('risk', 'low')})")
             if item.get("why"):
-                lines.append(f"  - _Why: {item['why']}_")
-        lines.append("")
+                todos.append(f"  - _Why: {item['why']}_")
+        todos.append("")
+        blocks.append(("todos", todos))
 
-    # System health
-    sh = sections.get("system_health", {})
-    if sh:
-        lines.append("## System Health\n")
-        lines.append(f"- State files: {sh.get('state_files', '?')}")
-        ps = sh.get("pending_summary", {})
-        if ps:
-            parts = [f"{v} {k}" for k, v in ps.items() if v]
-            lines.append(f"- Pending: {', '.join(parts) if parts else 'empty'}")
-        lines.append("")
+    health = sections.get("system_health", {})
+    if health:
+        system = [
+            "## System Health\n",
+            f"- State files: {health.get('state_files', '?')}",
+        ]
+        pending_summary = health.get("pending_summary", {})
+        if pending_summary:
+            parts = [f"{count} {name}" for name, count in pending_summary.items() if count]
+            system.append(f"- Pending: {', '.join(parts) if parts else 'empty'}")
+        system.append("")
+        blocks.append((None, system))
 
-    # Knowledge maintenance
-    km = sections.get("knowledge_maintenance", {})
-    if km and (km.get("wiki_pages_updated") or km.get("wiki_pages_created")
-               or km.get("memory_records_created") or km.get("memory_records_updated")
-               or km.get("duplicates_flagged") or km.get("conflicts_flagged")
-               or km.get("total_records")):
-        lines.append("## Knowledge Maintenance\n")
-        if km.get("wiki_pages_updated"):
-            lines.append(f"- Updated {km['wiki_pages_updated']} wiki page(s)")
-        if km.get("wiki_pages_created"):
-            lines.append(f"- Created {km['wiki_pages_created']} new wiki draft page(s)")
-        if km.get("memory_records_created"):
-            lines.append(f"- Created {km['memory_records_created']} memory record(s)")
-        if km.get("memory_records_updated"):
-            lines.append(f"- Updated {km['memory_records_updated']} memory record(s)")
-        if km.get("observations_added"):
-            lines.append(f"- Added {km['observations_added']} source-backed observation(s)")
-        if km.get("backlinks_added"):
-            lines.append(f"- Added {km['backlinks_added']} backlink(s)")
-        if km.get("duplicates_flagged"):
-            lines.append(f"- Flagged {km['duplicates_flagged']} possible duplicate(s)")
-        if km.get("conflicts_flagged"):
-            lines.append(f"- Flagged {km['conflicts_flagged']} conflict(s)")
-        if km.get("open_questions_added"):
-            lines.append(f"- Added {km['open_questions_added']} open question(s)")
-        if km.get("total_records"):
-            lines.append(f"- Memory records: {km['total_records']} total")
-        lines.append("")
+    knowledge = sections.get("knowledge_maintenance", {})
+    if knowledge and (
+        knowledge.get("wiki_pages_updated") or knowledge.get("wiki_pages_created")
+        or knowledge.get("memory_records_created") or knowledge.get("memory_records_updated")
+        or knowledge.get("duplicates_flagged") or knowledge.get("conflicts_flagged")
+        or knowledge.get("total_records")
+    ):
+        maintained = ["## Knowledge Maintenance\n"]
+        if knowledge.get("wiki_pages_updated"):
+            maintained.append(f"- Updated {knowledge['wiki_pages_updated']} wiki page(s)")
+        if knowledge.get("wiki_pages_created"):
+            maintained.append(f"- Created {knowledge['wiki_pages_created']} new wiki draft page(s)")
+        if knowledge.get("memory_records_created"):
+            maintained.append(f"- Created {knowledge['memory_records_created']} memory record(s)")
+        if knowledge.get("memory_records_updated"):
+            maintained.append(f"- Updated {knowledge['memory_records_updated']} memory record(s)")
+        if knowledge.get("observations_added"):
+            maintained.append(f"- Added {knowledge['observations_added']} source-backed observation(s)")
+        if knowledge.get("backlinks_added"):
+            maintained.append(f"- Added {knowledge['backlinks_added']} backlink(s)")
+        if knowledge.get("duplicates_flagged"):
+            maintained.append(f"- Flagged {knowledge['duplicates_flagged']} possible duplicate(s)")
+        if knowledge.get("conflicts_flagged"):
+            maintained.append(f"- Flagged {knowledge['conflicts_flagged']} conflict(s)")
+        if knowledge.get("open_questions_added"):
+            maintained.append(f"- Added {knowledge['open_questions_added']} open question(s)")
+        if knowledge.get("total_records"):
+            maintained.append(f"- Memory records: {knowledge['total_records']} total")
+        maintained.append("")
+        blocks.append((None, maintained))
 
-    _append_loader_source_text(lines, _daily_bookkeeper_sources(sections))
+    divergence: list[str] = []
+    _append_loader_source_text(divergence, _daily_bookkeeper_sources(sections))
+    if divergence:
+        blocks.append((None, divergence))
 
-    lines.append("---")
-    lines.append("_No external mutations, approvals, or executions performed._")
+    blocks.append((
+        "footer",
+        ["---", "_No external mutations, approvals, or executions performed._"],
+    ))
+    return _pack_markdown_sections(blocks)
 
-    return "\n".join(lines)
+
+def render_markdown(briefing: dict[str, Any]) -> str:
+    """Render briefing as markdown for email/notification."""
+    if isinstance(briefing, dict) and briefing.get("kind") == "weekly":
+        return render_weekly_text(briefing)
+    return "\n".join(body for _section_id, body in render_markdown_sections(briefing))
 
 
 def render_json(briefing: dict[str, Any]) -> str:
