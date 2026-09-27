@@ -255,8 +255,8 @@ def _expected_effect(action_type: str, target: str, payload: Mapping[str, Any]) 
         return f"Create contact {name!r}."
     if action_type == "contacts.update":
         # Field names only — the new values are personal data and stay in the payload.
-        fields = [k for k in ("given_name", "family_name", "email", "phone", "organization", "note")
-                  if payload.get(k)]
+        fields = [k for k in ("given_name", "family_name", "email", "emails", "phone", "organization",
+                              "note") if payload.get(k)]
         return (f"Overwrite {', '.join(fields) or 'no fields'} on contact "
                 f"{payload.get('person_id') or target}.")
     if action_type == "contacts.delete":
@@ -364,9 +364,33 @@ def cmd_preview(args: argparse.Namespace) -> int:
     return 1
 
 
+def _install_refusal(config: Any, action_type: str) -> str | None:
+    """Why this installation cannot execute ``action_type``, if it positively cannot.
+
+    Only install-dependent gaps count (``client.unsupported_reason``, e.g. a
+    google_api.py without ``contacts create``): approving an action that is
+    certain to fail at execution only moves the failure to the worst place.
+    Anything uncertain — no client, an error building it — approves as before.
+    """
+    try:
+        from workspace_capabilities import all_actions
+        if action_type not in all_actions():
+            return None
+        from workspace_client import get_workspace_client
+        client = get_workspace_client(config)
+        if client.supports(action_type):
+            return None
+        reason = client.unsupported_reason(action_type)
+        return reason if isinstance(reason, str) and reason else None
+    except Exception:
+        return None
+
+
 def _approve_one(config: Any, action_id: str, approver: str | None, reason: str | None) -> dict[str, Any] | None:
     action = get_pending_action(config, action_id)
     if not action:
+        return None
+    if _install_refusal(config, str(action.get("type") or action.get("action_type") or "")):
         return None
     return approve_pending_action(config, action_id, approver=approver, reason=reason)
 
@@ -429,6 +453,10 @@ def cmd_approve(args: argparse.Namespace) -> int:
     before = get_pending_action(config, args.action_id)
     if not before:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
+        return 1
+    refusal = _install_refusal(config, str(before.get("type") or before.get("action_type") or ""))
+    if refusal:
+        print(f"Not approved: {refusal}", file=sys.stderr)
         return 1
     result = approve_pending_action(config, args.action_id, approver=args.approver, reason=args.reason)
     if not result:

@@ -42,7 +42,7 @@ except Exception as exc:  # pragma: no cover
 from action_result_cli import print_json
 
 # Contact fields a queued contacts.create/update payload may carry.
-_CONTACT_FIELDS = ("given_name", "family_name", "email", "phone", "organization", "note")
+_CONTACT_FIELDS = ("given_name", "family_name", "email", "emails", "phone", "organization", "note")
 
 
 # ─── Action routing for approve/execute ───────────────────────
@@ -294,8 +294,8 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     unsupported = require_capability(client, action_type, target=action.get("target", ""))
     if unsupported:
-        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}")
-        print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
+        mark_failed(cfg, args.action_id, unsupported["error"])
+        print(f"❌ {unsupported['error']}", file=sys.stderr)
         return 1
 
     # Establish approved execution context — the explicit approval IS the confirmation.
@@ -356,7 +356,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
                 result = client.files_trash(file_id=payload.get("file_id", ""))
             elif action_type == "contacts.create":
                 result = client.contacts_create(**{
-                    k: payload.get(k, "") for k in _CONTACT_FIELDS})
+                    k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)})
             elif action_type == "contacts.update":
                 result = client.contacts_update(
                     person_id=payload.get("person_id") or action.get("target", ""),

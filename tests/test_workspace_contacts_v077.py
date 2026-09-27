@@ -24,6 +24,7 @@ Now:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -38,6 +39,10 @@ FIXTURES = PLUGIN_ROOT / "tests" / "fixtures" / "google_api"
 LIST_ONLY = FIXTURES / "contacts_list_only.py"
 FULL = FIXTURES / "contacts_full.py"
 WRITES = ("contacts.create", "contacts.update", "contacts.delete")
+# Captured at import, before conftest sandboxes the environment: the contract
+# test below reads (only reads) the operator's real google_api.py.
+_OPERATOR_SCRIPT_ENV = {k: os.environ.get(k) for k in
+                        ("GOOGLE_WORKSPACE_API", "CHIEF_OF_STAFF_HERMES_HOME", "HERMES_HOME")}
 
 
 @pytest.fixture(autouse=True)
@@ -117,14 +122,20 @@ class TestProbe:
         script.write_text(FULL.read_text())
         assert probe_cli_contacts(script) == frozenset({"list", "create", "update", "delete"})
 
-    def test_installed_skill_contract(self):
+    def test_installed_skill_contract(self, monkeypatch):
         """Runs the REAL google-workspace skill's script when one is installed.
 
-        No credentials needed. Whatever it offers, the probe must be able to
-        read it — otherwise the plugin cannot tell what it may do.
+        No credentials needed — ``contacts --help`` only. Whatever it offers,
+        the probe must be able to read it, or the plugin cannot tell what it
+        may do.
         """
         from providers.google_contacts import probe_cli_contacts
         from providers.google_workspace import _find_google_api_script
+        for key, value in _OPERATOR_SCRIPT_ENV.items():
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
         try:
             script = _find_google_api_script()
         except FileNotFoundError:
@@ -433,3 +444,10 @@ def test_preview_names_emails_without_values():
     effect = review_queue._expected_effect("contacts.update", "people/1",
                                            {"person_id": "people/1", "emails": ["secret@example.com"]})
     assert "emails" in effect and "secret@example.com" not in effect
+
+
+def test_suite_never_sees_the_operators_google_credentials():
+    """With GOOGLE_SERVICE_ACCOUNT_PATH set, contacts tests would reach the live
+    account through the People API path."""
+    assert "GOOGLE_SERVICE_ACCOUNT_PATH" not in os.environ
+    assert "GOOGLE_WORKSPACE_API" not in os.environ

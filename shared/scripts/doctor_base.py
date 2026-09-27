@@ -1252,6 +1252,26 @@ def _check_smoke_test(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("smoke_test", "warn", "no smoke-test checklist found")
 
 
+def _check_google_contacts(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Can this install perform contacts writes, and by which path?"""
+    workspace = ((data or {}).get("integrations") or {}).get("workspace") or {}
+    provider = str(workspace.get("provider") or "google_api") if isinstance(workspace, dict) else "google_api"
+    if provider != "google_api":
+        return CheckResult("google_contacts", "pass", f"not applicable (provider {provider})")
+    try:
+        from providers.google_contacts import unavailable_summary, write_backends
+        backends = write_backends(data or {})
+        gap = unavailable_summary(data or {})
+    except Exception as exc:
+        return CheckResult("google_contacts", "warn", f"cannot check contacts writes: {exc}")
+    if gap:
+        return CheckResult("google_contacts", "warn", gap)
+    paths = sorted({backend for backend, _ in backends.values()})
+    via = {"rest": "the People API (service account)", "cli": "google_api.py contacts subcommands"}
+    return CheckResult("google_contacts", "pass",
+                       "contacts writes via " + " and ".join(via[p] for p in paths))
+
+
 def _check_cron_prompts(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     try:
         from cron_prompts import check_cron_prompts
@@ -1316,7 +1336,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_packages, _check_audit_runs,
     _check_briefing_archive,
     _check_workspace_provider, _check_composio, _check_m365,
-    _check_webhook_config, _check_state_files, _check_orphaned_executing,
+    _check_webhook_config, _check_google_contacts, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,
     _check_cron_skill_files, _check_stale_run, _check_unhonored_advancement, _check_workflow_crons_doc,
 ]

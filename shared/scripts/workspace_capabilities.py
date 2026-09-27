@@ -54,10 +54,13 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # via drive delete (default is trash, reversible)
         "files.untrash": True,      # Drive REST files.update trashed=False (SA) — mirrors soft-delete restore
-        # Contacts (People API via google_api.py contacts subcommands) — all four
-        # execution-verified 2026-09-25 against the live Phronesis Workspace
-        # account (DWD contacts write scope granted; create → merge-update →
-        # delete cycle green, zero residue).
+        # Contacts — list via google_api.py. Writes are True in this table but
+        # depend on the install: People API with a service account, else a
+        # google_api.py that has the subcommand (the shipped skill has only
+        # `list`). GoogleWorkspaceClient.supports() and capability_report
+        # apply that per install (providers/google_contacts.py). The CLI write
+        # path was execution-verified 2026-09-25 against a script that had
+        # the subcommands.
         "contacts.list": True,
         "contacts.create": True,
         "contacts.update": True,
@@ -480,16 +483,21 @@ def require_capability(client: Any, action: str, target: str | None = None) -> d
     Error messages include a specific reason and provider recommendation.
     """
     if not client.supports(action):
-        reason = get_unsupported_reason(client.provider_name, action)
-        recommendation = recommend_provider_for(action)
+        install_reason = getattr(client, "unsupported_reason", lambda _a: None)(action)
+        if isinstance(install_reason, str) and install_reason:
+            error = install_reason
+        else:
+            reason = get_unsupported_reason(client.provider_name, action)
+            recommendation = recommend_provider_for(action)
+            error = (f"{action} is not supported by provider {client.provider_name} because {reason}. "
+                     f"Use provider={recommendation} for this workflow.")
         return {
             "success": False,
             "action": action,
             "provider": client.provider_name,
             "target": target or "",
             "data": {},
-            "error": f"{action} is not supported by provider {client.provider_name} because {reason}. "
-                     f"Use provider={recommendation} for this workflow.",
+            "error": error,
             "audited": False,
         }
     return None
