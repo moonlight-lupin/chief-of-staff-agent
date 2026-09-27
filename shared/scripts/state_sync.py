@@ -47,7 +47,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 # must never be copied here; the sidecars are transient and checkpointed away.
 # .runs/ holds per-run operational logs: rewritten on every command, so tracking
 # it would leave the tree permanently dirty.
-GITIGNORE_ENTRIES = (".env", ".env.*", "*.db-wal", "*.db-shm", "*.db-journal", "__pycache__/", ".runs/")
+GITIGNORE_ENTRIES = (".env", ".env.*", "*.db-wal", "*.db-shm", "*.db-journal", "__pycache__/", ".runs/", ".cos-backups/", ".cos-tmp/", ".cos-briefing.lock")
 
 _FALLBACK_IDENTITY = ("-c", "user.name=Chief of Staff", "-c", "user.email=chief-of-staff@localhost")
 _REMEDY = "Run: .venv/bin/python shared/scripts/chief_of_staff.py sync push"

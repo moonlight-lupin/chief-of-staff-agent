@@ -744,6 +744,59 @@ def _check_audit_runs(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("audit_runs_dirs", "pass" if not missing else "warn", "present" if not missing else f"missing: {missing}", applied)
 
 
+def _check_briefing_archive(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Report when the briefing archive was last merged, and warn after 36h."""
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from briefing_attribution import LOG_NAME
+
+        root = _project_root_from_data(data, config_path)
+        if root is None:
+            raise RuntimeError("config missing")
+        archive_exists = (root / "briefing.md").is_file()
+        log_path = root / LOG_NAME
+        entries: list[tuple[datetime, str]] = []
+        if log_path.is_file():
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if not isinstance(item, dict) or "ts" not in item:
+                    raise ValueError("log entry missing ts")
+                ts_raw = str(item["ts"])
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                entries.append((ts, ts_raw))
+        if entries:
+            ts, ts_raw = max(entries, key=lambda pair: pair[0])
+            if datetime.now(timezone.utc) - ts > timedelta(hours=36) and archive_exists:
+                return CheckResult(
+                    "briefing_archive",
+                    "warn",
+                    f"briefing archive last merged: {ts_raw} (>36h ago)",
+                )
+            return CheckResult(
+                "briefing_archive",
+                "pass",
+                f"briefing archive last merged: {ts_raw}",
+            )
+        if archive_exists:
+            return CheckResult(
+                "briefing_archive",
+                "warn",
+                "briefing archive not merged in the last 36h (or ever) — attribution helper unused",
+            )
+        return CheckResult(
+            "briefing_archive",
+            "pass",
+            "no briefing archive yet (attribution helper idle)",
+        )
+    except Exception as exc:
+        return CheckResult("briefing_archive", "warn", f"briefing archive unavailable: {exc}")
+
+
 def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     """Check which workspace provider is configured and report capabilities."""
     integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
@@ -1176,6 +1229,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_jurisdiction_pack, _check_config_file("drive-map.yaml"), _check_config_file("queries.yaml"),
     _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_cron_prompts, _check_compile,
     _check_packages, _check_audit_runs,
+    _check_briefing_archive,
     _check_workspace_provider, _check_composio, _check_m365,
     _check_webhook_config, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,

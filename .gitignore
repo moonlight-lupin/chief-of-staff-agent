@@ -19,3 +19,8 @@ skills.local/
 # Local plugin venv and per-session Claude Code state
 .venv/
 .claude/*.local
+
+# Generated-Section Attribution runtime (data-repo ignore)
+.cos-backups/
+.cos-tmp/
+.cos-briefing.lock

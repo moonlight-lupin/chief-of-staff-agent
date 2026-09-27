@@ -158,6 +158,26 @@ Formatting rules:
 - Use client codes instead of full client names when `delivery.use_client_codes: true` or the delivery channel may be observed.
 - Do not expose full email bodies, private invoice details, or sensitive contract terms in notification channels. Include IDs and short summaries.
 
+## Archive Merge (Generated-Section Attribution)
+
+The briefing archive (`project_root/briefing.md`) preserves operator annotations across daily runs. The composed Telegram briefing itself is never marked; plain-text delivery stays unmarked.
+
+After composing the Output Format message, write section bodies to `project_root/.cos-tmp/briefing-sections.json`:
+
+```json
+{"version": 1, "sections": {"<registry-id>": "<markdown body>"}}
+```
+
+Registry ids: `urgent`, `calendar`, `deadlines`, `pipeline`, `finance`, `todos`, `inbox-summary`, `all-clear`, `pending-high`, `pending-medium`, `pending-low`. Omit sections with no content (omitted = not emitted = known-but-empty). `header` and `footer` are CLI-only; never include them.
+
+Then invoke:
+
+```bash
+python3 shared/scripts/briefing_attribution.py merge --artifact briefing --sections <project_root>/.cos-tmp/briefing-sections.json
+```
+
+Never merge manually, and never edit `briefing.md` markers. Check stdout JSON `status`: `merged` or `noop` is success. `refused` or `error` means report `reason` to the operator and do not retry with modified content. The helper deletes the envelope on every exit except a crash. Verify `status` and pass `reason` through on refusal.
+
 ## Section Guidance
 
 ### 🔴 Urgent / Action Needed
