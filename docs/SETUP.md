@@ -57,6 +57,13 @@ python shared/scripts/bootstrap.py --company "Your Company" --jurisdiction SG --
    - Authorize scopes in the [Domain-wide Delegation page](https://admin.google.com/ac/owl/domainwidedelegation) (menu path: Security → Access and data control → API controls → Domain-wide delegation → Manage domain-wide delegation). The direct link is preferred; menu labels drift between console redesigns.
    - Enable each Google API you will use in the [GCP Console API Library](https://console.cloud.google.com/apis/library) — an API disabled in the project returns 403 `SERVICE_DISABLED` even with delegation in place (e.g. People API for contacts).
    - Download the JSON key file
+   - **Contacts writes** (create/update/delete) go through the People API with
+     this service account, so its delegation needs the
+     `https://www.googleapis.com/auth/contacts` scope. The google-workspace
+     skill's `google_api.py` only lists contacts. Without a service account,
+     writes run through `google_api.py` only if it has `contacts create`/
+     `update`/`delete`. `doctor` (`google_contacts`) and `capabilities` say
+     which path this install uses, or why neither works.
 
 4. Update `shared/config/company.yaml`:
 ```yaml

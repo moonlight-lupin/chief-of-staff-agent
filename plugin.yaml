@@ -1,10 +1,15 @@
 name: chief-of-staff
-version: 0.7.6
+version: 0.7.7
 author: moonlight-lupin
 license: Apache-2.0
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, docs, calendar, knowledge base, research, travel, bookkeeping, self-signing, e-signature, and backups."
 requires_skills: []
 optional_skills:
+  # google-workspace provides google_api.py for reads. Its shipped script
+  # offers `contacts list` only; contacts writes use the People API via the
+  # service account instead. The installed surface is probed at runtime
+  # (doctor: google_contacts; capabilities: contacts_write_backend), so a
+  # missing subcommand is refused up front, never at execution.
   - google-workspace
 
 # Skill profiles — determines which skills may be registered.
