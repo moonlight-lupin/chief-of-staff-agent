@@ -744,8 +744,55 @@ def _check_audit_runs(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("audit_runs_dirs", "pass" if not missing else "warn", "present" if not missing else f"missing: {missing}", applied)
 
 
+def _parse_briefing_merge_log_line(
+    line: str,
+) -> tuple[Any, str, str, str, str] | None:
+    """Parse one merge-log line.
+
+    Returns ``(ts, ts_raw, artifact, status, reason)`` or ``None`` when the
+    line is unreadable (bad JSON, or no usable ``ts``). Blank lines are not
+    passed here. ``reason`` is the audit field of that name; the writer omits
+    it, so a missing value is an empty string.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        item = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(item, dict) or "ts" not in item:
+        return None
+    ts_raw = item.get("ts")
+    if not isinstance(ts_raw, str) or not ts_raw.strip():
+        return None
+    try:
+        ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    artifact = item.get("artifact")
+    status = item.get("status")
+    reason = item.get("reason")
+    if not isinstance(artifact, str):
+        artifact = ""
+    if not isinstance(status, str):
+        status = ""
+    if reason is None:
+        reason = ""
+    elif not isinstance(reason, str):
+        reason = str(reason)
+    return ts, ts_raw, artifact, status, reason
+
+
 def _check_briefing_archive(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    """Report when the briefing archive was last merged, and warn after 36h."""
+    """Report when the briefing archive was last merged, and warn after 36h.
+
+    Staleness follows successful briefing merges only (``merged`` / ``noop``).
+    A newer ``refused`` or ``error`` is surfaced as the last attempt. Malformed
+    log lines are skipped and counted; the check warns unavailable only when
+    the log file is non-empty and no line is readable.
+    """
     try:
         from datetime import datetime, timedelta, timezone
 
@@ -756,42 +803,80 @@ def _check_briefing_archive(fix: bool, data: dict[str, Any] | None, config_path:
             raise RuntimeError("config missing")
         archive_exists = (root / "briefing.md").is_file()
         log_path = root / LOG_NAME
-        entries: list[tuple[datetime, str]] = []
+        successes: list[tuple[Any, str]] = []
+        failures: list[tuple[Any, str, str, str]] = []
+        overall: list[tuple[Any, str, str, str]] = []
+        readable = 0
+        unreadable = 0
         if log_path.is_file():
             for line in log_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                item = json.loads(line)
-                if not isinstance(item, dict) or "ts" not in item:
-                    raise ValueError("log entry missing ts")
-                ts_raw = str(item["ts"])
-                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                entries.append((ts, ts_raw))
-        if entries:
-            ts, ts_raw = max(entries, key=lambda pair: pair[0])
-            if datetime.now(timezone.utc) - ts > timedelta(hours=36) and archive_exists:
-                return CheckResult(
-                    "briefing_archive",
-                    "warn",
-                    f"briefing archive last merged: {ts_raw} (>36h ago)",
-                )
+                parsed = _parse_briefing_merge_log_line(line)
+                if parsed is None:
+                    unreadable += 1
+                    continue
+                readable += 1
+                ts, ts_raw, artifact, status, reason = parsed
+                if artifact != "briefing":
+                    continue
+                overall.append((ts, ts_raw, status, reason))
+                if status in ("merged", "noop"):
+                    successes.append((ts, ts_raw))
+                elif status in ("refused", "error"):
+                    failures.append((ts, ts_raw, status, reason))
+
+        def detail(base: str, last_attempt: str | None = None) -> str:
+            parts = [base]
+            if last_attempt:
+                parts.append(last_attempt)
+            if unreadable:
+                parts.append(f"{unreadable} unreadable log lines")
+            return "; ".join(parts)
+
+        if readable == 0 and unreadable > 0:
             return CheckResult(
                 "briefing_archive",
-                "pass",
-                f"briefing archive last merged: {ts_raw}",
+                "warn",
+                f"briefing archive unavailable: {unreadable} unreadable log lines",
+            )
+        if successes:
+            ts, ts_raw = max(successes, key=lambda pair: pair[0])
+            stale = archive_exists and datetime.now(timezone.utc) - ts > timedelta(hours=36)
+            base = f"briefing archive last merged: {ts_raw}"
+            if stale:
+                base += " (>36h ago)"
+            last_attempt = None
+            newest = max(overall, key=lambda item: item[0])
+            if newest[2] in ("refused", "error") and newest[0] > ts:
+                last_attempt = f"last attempt: {newest[1]} {newest[2]}: {newest[3]}"
+            return CheckResult(
+                "briefing_archive",
+                "warn" if stale else "pass",
+                detail(base, last_attempt),
+            )
+        if failures and archive_exists:
+            ts, ts_raw, status, reason = max(failures, key=lambda item: item[0])
+            return CheckResult(
+                "briefing_archive",
+                "warn",
+                detail(
+                    "briefing archive not successfully merged "
+                    f"(last attempt: {ts_raw} {status}: {reason})"
+                ),
             )
         if archive_exists:
             return CheckResult(
                 "briefing_archive",
                 "warn",
-                "briefing archive not merged in the last 36h (or ever) — attribution helper unused",
+                detail(
+                    "briefing archive not merged in the last 36h (or ever) — attribution helper unused"
+                ),
             )
         return CheckResult(
             "briefing_archive",
             "pass",
-            "no briefing archive yet (attribution helper idle)",
+            detail("no briefing archive yet (attribution helper idle)"),
         )
     except Exception as exc:
         return CheckResult("briefing_archive", "warn", f"briefing archive unavailable: {exc}")

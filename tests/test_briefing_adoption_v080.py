@@ -203,6 +203,119 @@ class TestA16Doctor:
         assert result.status == "warn"
         assert result.detail == f"briefing archive last merged: {old} (>36h ago)"
 
+    def test_stale_success_with_fresh_refused_warns(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        fresh = datetime.now(timezone.utc).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        reason = "operator edit in span"
+        (project / ba.LOG_NAME).write_text(
+            json.dumps({"artifact": "briefing", "ts": old, "status": "merged"})
+            + "\n"
+            + json.dumps(
+                {
+                    "artifact": "briefing",
+                    "ts": fresh,
+                    "status": "refused",
+                    "reason": reason,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "warn"
+        assert result.detail == (
+            f"briefing archive last merged: {old} (>36h ago); "
+            f"last attempt: {fresh} refused: {reason}"
+        )
+
+    def test_failure_only_log_warns_not_successfully_merged(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        fresh = datetime.now(timezone.utc).isoformat()
+        reason = "undeclared section id"
+        (project / ba.LOG_NAME).write_text(
+            json.dumps(
+                {
+                    "artifact": "briefing",
+                    "ts": fresh,
+                    "status": "refused",
+                    "reason": reason,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "warn"
+        assert result.detail == (
+            "briefing archive not successfully merged "
+            f"(last attempt: {fresh} refused: {reason})"
+        )
+
+    def test_stale_success_with_fresh_error_warns(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        fresh = datetime.now(timezone.utc).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        reason = "backup failed"
+        (project / ba.LOG_NAME).write_text(
+            json.dumps({"artifact": "briefing", "ts": old, "status": "merged"})
+            + "\n"
+            + json.dumps(
+                {
+                    "artifact": "briefing",
+                    "ts": fresh,
+                    "status": "error",
+                    "reason": reason,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "warn"
+        assert result.detail == (
+            f"briefing archive last merged: {old} (>36h ago); "
+            f"last attempt: {fresh} error: {reason}"
+        )
+
+    def test_naive_timestamp_older_than_36h_warns(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        naive = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=37)
+        ts_raw = naive.isoformat()
+        assert "+" not in ts_raw and "Z" not in ts_raw
+        (project / ba.LOG_NAME).write_text(
+            json.dumps({"artifact": "briefing", "ts": ts_raw, "status": "merged"}) + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "warn"
+        assert result.detail == f"briefing archive last merged: {ts_raw} (>36h ago)"
+
+    def test_fresh_merged_with_one_malformed_line_passes(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        fresh = datetime.now(timezone.utc).isoformat()
+        (project / ba.LOG_NAME).write_text(
+            "{not-json\n"
+            + json.dumps({"artifact": "briefing", "ts": fresh, "status": "merged"})
+            + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "pass"
+        assert result.detail == (
+            f"briefing archive last merged: {fresh}; 1 unreadable log lines"
+        )
+
+    def test_all_malformed_log_warns_unavailable(self, project):
+        (project / "briefing.md").write_text("archive\n", encoding="utf-8")
+        (project / ba.LOG_NAME).write_text(
+            "{bad\n" + json.dumps({"artifact": "briefing", "status": "merged"}) + "\n",
+            encoding="utf-8",
+        )
+        result = self._check(project)
+        assert result.status == "warn"
+        assert result.detail == "briefing archive unavailable: 2 unreadable log lines"
+
     def test_no_archive_and_no_log_is_idle(self, project):
         result = self._check(project)
         assert result.status == "pass"
@@ -225,12 +338,38 @@ class TestA16Doctor:
 
 
 class TestGitignore:
-    def test_plugin_gitignore_lists_attribution_runtime_paths(self):
+    def test_plugin_gitignore_lists_attribution_runtime_paths(self, tmp_path):
         text = (PLUGIN_ROOT / ".gitignore").read_text(encoding="utf-8")
         lines = text.splitlines()
         assert "# Generated-Section Attribution runtime (data-repo ignore)" in lines
-        for entry in (".cos-backups/", ".cos-tmp/", ".cos-briefing.lock"):
+        runtime = (".cos-backups/", ".cos-tmp/", ".cos-briefing.lock")
+        for entry in runtime:
             assert entry in lines
+
+        import state_sync
+
+        for entry in runtime:
+            assert entry in state_sync.GITIGNORE_ENTRIES
+        old = [
+            ".env",
+            ".env.*",
+            "*.db-wal",
+            "*.db-shm",
+            "*.db-journal",
+            "__pycache__/",
+            ".runs/",
+        ]
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("\n".join(old) + "\n", encoding="utf-8")
+        state_sync._ensure_gitignore(tmp_path)
+        once = gitignore.read_text(encoding="utf-8").splitlines()
+        state_sync._ensure_gitignore(tmp_path)
+        twice = gitignore.read_text(encoding="utf-8").splitlines()
+        assert once == twice
+        assert once[: len(old)] == old
+        for entry in runtime:
+            assert once.count(entry) == 1
+        assert once[-3:] == list(runtime)
 
 
 class TestSkillAdoption:
@@ -243,7 +382,15 @@ class TestSkillAdoption:
         section = text[archive_at:guidance_at]
         assert "project_root/.cos-tmp/briefing-sections.json" in section
         assert '"version": 1' in section
-        assert "python3 shared/scripts/briefing_attribution.py merge --artifact briefing --sections" in section
+        assert (
+            ".venv/bin/python shared/scripts/briefing_attribution.py merge "
+            "--artifact briefing --sections"
+        ) in section
+        assert "plugin root" in section
+        assert "os.makedirs" in section and "json.dumps" in section
+        assert "lock-busy (exit 4)" in section
+        assert "leave the envelope in place" in section
+        assert "one unchanged retry" in section
         for sid in (
             "urgent",
             "calendar",

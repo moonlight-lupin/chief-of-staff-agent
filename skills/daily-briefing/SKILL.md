@@ -170,13 +170,29 @@ After composing the Output Format message, write section bodies to `project_root
 
 Registry ids: `urgent`, `calendar`, `deadlines`, `pipeline`, `finance`, `todos`, `inbox-summary`, `all-clear`, `pending-high`, `pending-medium`, `pending-low`. Omit sections with no content (omitted = not emitted = known-but-empty). `header` and `footer` are CLI-only; never include them.
 
-Then invoke:
+Write the envelope from the plugin root:
 
 ```bash
-python3 shared/scripts/briefing_attribution.py merge --artifact briefing --sections <project_root>/.cos-tmp/briefing-sections.json
+.venv/bin/python - <<'PY'
+import json, os
+from pathlib import Path
+root = Path("<project_root>")
+os.makedirs(root / ".cos-tmp", exist_ok=True)
+envelope = {"version": 1, "sections": {"<registry-id>": "<markdown body>"}}
+(root / ".cos-tmp" / "briefing-sections.json").write_text(
+    json.dumps(envelope),
+    encoding="utf-8",
+)
+PY
 ```
 
-Never merge manually, and never edit `briefing.md` markers. Check stdout JSON `status`: `merged` or `noop` is success. `refused` or `error` means report `reason` to the operator and do not retry with modified content. The helper deletes the envelope on every exit except a crash. Verify `status` and pass `reason` through on refusal.
+Then invoke the helper from the plugin root:
+
+```bash
+.venv/bin/python shared/scripts/briefing_attribution.py merge --artifact briefing --sections <project_root>/.cos-tmp/briefing-sections.json
+```
+
+Never merge manually, and never edit `briefing.md` markers. Check stdout JSON `status`: `merged` or `noop` is success. `refused` or `error` means report `reason` to the operator and do not retry with modified content. The helper deletes the envelope on every exit except lock-busy (exit 4) and crash. On exit 4, report to the operator and leave the envelope in place; one unchanged retry after waiting is acceptable, and never retry with modified content. Verify `status` and pass `reason` through on refusal.
 
 ## Section Guidance
 
