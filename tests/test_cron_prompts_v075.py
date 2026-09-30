@@ -97,7 +97,7 @@ def test_unknown_namespaced_skill_is_flagged_with_scope_hint():
     assert finding["kind"] == "skill"
     assert finding["ref"] == "chief-of-staff:workspace-knowledge-capture"
     assert "not a chief-of-staff plugin skill" in finding["hint"]
-    assert "prefix" in finding["hint"], "tell the user how to reference an agent-scope skill"
+    assert "agent-scope skills take no plugin prefix" in finding["hint"]
 
 
 def test_unknown_skill_in_prompt_text_is_flagged():

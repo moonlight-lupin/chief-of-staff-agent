@@ -38,7 +38,12 @@ class GoogleClient:
 
     def _find_google_api(self) -> Path:
         candidates = []
-        hermes_home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+        try:
+            from config_loader import get_hermes_home
+            hermes_home = get_hermes_home()
+        except Exception:
+            env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
+            hermes_home = Path(env).expanduser() if env else Path.home() / ".hermes"
         candidates.append(hermes_home / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py")
         candidates.append(hermes_home / "skills" / "google-workspace" / "scripts" / "google_api.py")
         for path in candidates:

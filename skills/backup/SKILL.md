@@ -155,17 +155,15 @@ The cron prompt must be self-contained and must not rely on prior conversation h
 The script uses command shapes like:
 
 ```bash
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive upload \
-  --file {archive_path} --parent-id {drive_folder_id}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive upload {archive_path} --parent {drive_folder_id}
 
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive list \
-  --folder-id {drive_folder_id}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive search "'{drive_folder_id}' in parents and name contains '.tar.gz'" \
+  --raw-query --max 200
 
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive delete \
-  --file-id {file_id}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive delete {file_id}
 ```
 
 If `backup.drive_folder_id` is absent, resolve `backup.drive_folder` through Drive Filer or ask the user to run onboarding. Do not upload to an unknown folder.

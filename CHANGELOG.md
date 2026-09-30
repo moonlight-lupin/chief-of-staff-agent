@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.7.8 — Field follow-up (cron bindings, backup CLI, test isolation)
+
+Production follow-up after v0.7.5’s `cron_prompts` doctor and suite sandboxing
+(Hermes Agent v0.21.5, headless daily crons, plugin v0.5.7 → v0.7.7).
+
+### Changes
+
+- **Upgrade: bind scheduled work through workflows, not freeform cron paths.**
+  Cron jobs keep their own prompt text; hardcoding plugin script paths or
+  `chief-of-staff:…` skill refs breaks across upgrades when files move or the
+  skill is agent-scope. The supported path is `chief_of_staff.py workflows
+  install` (writes `skills.local/` + optional cron binding) and the v0.7.5
+  `cron_prompts` doctor check. Re-run `doctor --summary` after upgrading and
+  fix any flagged jobs; doctor does not edit cron jobs. See `docs/SETUP.md`
+  (Upgrading).
+- **`cron_prompts` agent-scope hint.** Unknown `chief-of-staff:<name>` skills
+  now say explicitly that **agent-scope skills take no plugin prefix** (reference
+  them without `chief-of-staff:`).
+- **Backup skill matches the google-workspace `google_api.py` CLI.** Hermes
+  v0.21.x drops `--account` / `--as`; Drive upload is positional file +
+  `--parent`, folder listing uses `drive search … --raw-query`, and delete passes
+  the file id positionally. The skill prefers the google-workspace skill venv
+  Python when present. When the connector surface changes, plugin skill updates
+  ship in the same release. Contract tests in
+  `tests/test_backup_google_api_v078.py` stub the CLI via
+  `tests/fixtures/google_api/backup_drive.py`.
+- **Hermes home isolation in tests.** `doctor`’s google-workspace skill check,
+  `google_client`, and briefing/calendar `google_api_script()` helpers now
+  resolve through `get_hermes_home()` / `HERMES_HOME` instead of
+  `Path.home() / ".hermes"`. Regression tests prove an install under the real
+  home is not visible when the suite sandbox env is set.
+
 ## v0.7.7 — Contacts writes that match the install
 
 Field report on v0.7.6 (provider `google_api`, service account with

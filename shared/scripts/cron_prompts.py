@@ -88,7 +88,11 @@ def _skill_hint(name: str, known: list[str]) -> str:
     close = difflib.get_close_matches(name, known, n=1)
     if close:
         hint += f" Did you mean {NAMESPACE}{close[0]}?"
-    return hint + f" If it is one of your own agent skills, reference it without the '{NAMESPACE}' prefix."
+    return (
+        hint
+        + " agent-scope skills take no plugin prefix; reference them without the "
+        f"'{NAMESPACE}' prefix."
+    )
 
 
 def _path_finding(token: str, plugin_root: Path, skill_dirs: Iterable[Path],
