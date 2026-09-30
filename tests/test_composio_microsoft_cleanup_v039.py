@@ -89,7 +89,7 @@ class TestFamilySlugs:
         assert ms["files_get"] == "ONE_DRIVE_GET_ITEM"
         assert ms["files_recycle_list"] == "SHARE_POINT_LIST_RECYCLE_BIN_ITEMS"
         assert ms["files_recycle_restore"] == "SHARE_POINT_RESTORE_RECYCLE_BIN_ITEM"
-        assert "mail_move" not in FAMILY_SLUGS["google"]
+        assert FAMILY_SLUGS["google"]["mail_move"] == "GMAIL_BATCH_MODIFY_MESSAGES"
         assert FAMILY_SLUGS["google"]["files_trash"] == "GOOGLEDRIVE_TRASH_FILE"
         assert FAMILY_SLUGS["google"]["files_untrash"] == "GOOGLEDRIVE_UNTRASH_FILE"
 

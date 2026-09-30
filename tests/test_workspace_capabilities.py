@@ -34,7 +34,8 @@ class TestCapabilities:
         assert caps["mail.archive"] is True        # execution-verified 2026-07-16 (v0.3.14 hardened path)
         assert caps["drive.search"] is True
         assert caps["files.untrash"] is True       # GOOGLEDRIVE_UNTRASH_FILE (v0.3.17)
-        assert caps["calendar.cancel"] is False
+        assert caps["calendar.cancel"] is True
+        assert caps["mail.move"] is True
 
     def test_composio_microsoft_writes_reflect_live_execution(self):
         # A write is True ONLY if it EXECUTED successfully against the live
@@ -94,7 +95,8 @@ class TestCapabilities:
         assert supports("composio", "files.untrash") is True
         assert supports("composio_microsoft", "files.untrash") is False
         assert supports("m365", "files.untrash") is False
-        assert supports("composio", "calendar.cancel") is False
+        assert supports("composio", "calendar.cancel") is True
+        assert supports("composio", "mail.move") is True
 
     def test_unsupported_actions(self):
         from workspace_capabilities import unsupported_actions
@@ -102,7 +104,7 @@ class TestCapabilities:
         assert "gmail.draft" not in google_unsup
         assert "gmail.send" not in google_unsup
         composio_unsup = unsupported_actions("composio")
-        assert "calendar.cancel" in composio_unsup
+        assert "calendar.cancel" not in composio_unsup
         assert "gmail.send" not in composio_unsup
         assert "files.trash" not in composio_unsup   # GDrive trash execution-verified 2026-07-16
         assert "files.upload" not in composio_unsup   # binary via MCP sandbox staging (PR #14)
@@ -126,7 +128,7 @@ class TestCapabilities:
     def test_unsupported_reasons_exist(self):
         from workspace_capabilities import UNSUPPORTED_REASONS
         assert ("google_api", "gmail.draft") not in UNSUPPORTED_REASONS
-        assert ("composio:mcp", "calendar.cancel") in UNSUPPORTED_REASONS
+        assert ("composio:mcp", "calendar.cancel") not in UNSUPPORTED_REASONS
         assert ("composio:mcp", "files.upload") not in UNSUPPORTED_REASONS  # supported via MCP sandbox staging (PR #14)
         assert ("composio:mcp", "files.trash") not in UNSUPPORTED_REASONS  # execution-verified True
 

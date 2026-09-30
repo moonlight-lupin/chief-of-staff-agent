@@ -54,11 +54,15 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         "mail_list_tags": "GMAIL_LIST_LABELS",
         "mail_create_tag": "GMAIL_CREATE_LABEL",
         "mail_modify_labels": "GMAIL_ADD_LABEL_TO_EMAIL",  # archive/unarchive/tag
+        "mail_move": "GMAIL_BATCH_MODIFY_MESSAGES",  # label-id moves (message batch)
+        "mail_modify_thread_labels": "GMAIL_MODIFY_THREAD_LABELS",
         "mail_trash": "GMAIL_MOVE_TO_TRASH",
         "mail_untrash": "GMAIL_UNTRASH_MESSAGE",
         "calendar_list": "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS",
         "calendar_create": "GOOGLECALENDAR_CREATE_EVENT",
         "calendar_update": "GOOGLECALENDAR_UPDATE_EVENT",
+        "calendar_delete": "GOOGLECALENDAR_DELETE_EVENT",
+        "calendar_batch": "GOOGLECALENDAR_BATCH_EVENTS",
         "files_search": "GOOGLEDRIVE_FIND_FILE",
         # Text create — MCP-native (name+content, no Files API staging).
         # Execution-verified 2026-07-16, analog of OneDrive CREATE_TEXT_FILE.
@@ -1183,6 +1187,111 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         self._execute_composio_tool(slug, args, operation="mail_modify_labels")
         return {"id": message_id, "add_label_ids": add or [], "remove_label_ids": remove or []}
 
+    def _google_batch_modify_labels(
+        self,
+        message_ids: list[str],
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """GMAIL_BATCH_MODIFY_MESSAGES — message-level label add/remove."""
+        for mid in message_ids:
+            self._google_reject_draft_id(mid)
+        slug = self._slug_for("mail_move")
+        args: dict[str, Any] = {"message_ids": message_ids}
+        if add:
+            args["add_label_ids"] = add
+        if remove:
+            args["remove_label_ids"] = remove
+        self._execute_composio_tool(slug, args, operation="mail_move")
+        return {
+            "ids": message_ids,
+            "add_label_ids": add or [],
+            "remove_label_ids": remove or [],
+        }
+
+    def _google_modify_thread_labels(
+        self,
+        thread_id: str,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """GMAIL_MODIFY_THREAD_LABELS — when the caller has a thread id."""
+        slug = self._slug_for("mail_modify_thread_labels")
+        args: dict[str, Any] = {"thread_id": thread_id}
+        if add:
+            args["add_label_ids"] = add
+        if remove:
+            args["remove_label_ids"] = remove
+        self._execute_composio_tool(slug, args, operation="mail_modify_thread_labels")
+        return {
+            "thread_id": thread_id,
+            "add_label_ids": add or [],
+            "remove_label_ids": remove or [],
+        }
+
+    @staticmethod
+    def _google_mail_move_result(
+        message_id: str,
+        destination: str,
+        *,
+        add: list[str],
+        remove: list[str],
+    ) -> dict[str, Any]:
+        """Label-move payload with symmetric undo ops (swap add/remove for undo)."""
+        return {
+            "id": message_id,
+            "destination": destination,
+            "add_label_ids": add,
+            "remove_label_ids": remove,
+            "undo_add_label_ids": list(remove),
+            "undo_remove_label_ids": list(add),
+            "restore_target": message_id,
+            "reversible": True,
+        }
+
+    def _google_mail_move(self, message_id: str, destination: str) -> dict[str, Any]:
+        """Move a Gmail message by applying label ids (not Outlook folders).
+
+        ``destination`` is a ``Label_…`` id, a system label (``INBOX``, …), or a
+        display name resolvable via ``mail_list_tags``. Well-known ``archive`` /
+        ``inbox`` mirror ``mail_archive`` / ``mail_unarchive``. Custom labels use
+        ``GMAIL_BATCH_MODIFY_MESSAGES`` with the destination label **and**
+        ``remove_label_ids: ["INBOX"]`` (Gmail-style move out of the inbox).
+        Undo is the inverse batch modify (``undo_add_label_ids`` /
+        ``undo_remove_label_ids`` on the result).
+        """
+        token = (destination or "").strip()
+        if not token:
+            raise RuntimeError("Gmail label id/name is empty")
+        lower = token.lower()
+        if lower == "archive":
+            remove = ["INBOX"]
+            self._google_modify_labels(message_id, remove=remove)
+            return self._google_mail_move_result(
+                message_id, "archive", add=[], remove=remove,
+            )
+        if lower == "inbox":
+            add = ["INBOX"]
+            self._google_modify_labels(message_id, add=add)
+            return self._google_mail_move_result(
+                message_id, "inbox", add=add, remove=[],
+            )
+        label_id = self._google_resolve_label_id(token)
+        add = [label_id]
+        remove: list[str] = []
+        if label_id != "INBOX":
+            remove = ["INBOX"]
+        elif label_id == "INBOX":
+            add = ["INBOX"]
+        self._google_batch_modify_labels(
+            [message_id], add=add, remove=remove or None,
+        )
+        return self._google_mail_move_result(
+            message_id, label_id, add=add, remove=remove,
+        )
+
     def mail_list_folders(self, include_hidden: bool = False,
                           max_results: int = 100) -> list[dict[str, Any]]:
         """List top-level Outlook mail folders (OUTLOOK_LIST_MAIL_FOLDERS)."""
@@ -1253,11 +1362,13 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
         }
 
     @guarded("mail.move", target_arg="message_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("mail_move"),
-             tool_slug=lambda self: self._ms_cleanup_slug("mail_move"))
+             audit_tool=lambda self: self._cleanup_slug("mail_move"),
+             tool_slug=lambda self: self._cleanup_slug("mail_move"))
     def mail_move_to_folder(self, message_id: str, folder_id: str) -> dict[str, Any]:
-        """Move a message to any folder id or well-known name (Phase 3)."""
-        return self._ms_mail_move(message_id, folder_id)
+        """Move a message: Outlook folder id / well-known name, or Gmail label id."""
+        if self.family == "microsoft":
+            return self._ms_mail_move(message_id, folder_id)
+        return self._google_mail_move(message_id, folder_id)
 
     def mail_list_tags(self) -> list[dict[str, Any]]:
         """List tags: Outlook master categories or Gmail labels."""
@@ -1624,17 +1735,55 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             data if isinstance(data, dict) else {}
         )
 
+    @guarded("calendar.cancel", target_arg="event_id", audit_provider="composio",
+             audit_tool=lambda self: self._slug_for("calendar_update"),
+             tool_slug=lambda self: self._slug_for("calendar_update"))
+    def calendar_cancel(self, event_id: str) -> dict[str, Any]:
+        """Soft-cancel a Google Calendar event (status=cancelled via UPDATE_EVENT).
+
+        Reversible via ``calendar_uncancel`` (status=confirmed). Microsoft family
+        remains unsupported (no Graph restore path).
+        """
+        if self.family == "microsoft":
+            raise NotImplementedError(
+                "calendar_cancel is not implemented for Composio Microsoft "
+                "(no restore-path parity with the soft-delete promise)"
+            )
+        slug = self._slug_for("calendar_update")
+        self._execute_composio_tool(
+            slug,
+            {"event_id": event_id, "status": "cancelled"},
+            operation="calendar_cancel",
+        )
+        return {"id": event_id, "reversible": True, "restore_target": event_id}
+
+    @guarded("calendar.uncancel", target_arg="event_id", audit_provider="composio",
+             audit_tool=lambda self: self._slug_for("calendar_update"),
+             tool_slug=lambda self: self._slug_for("calendar_update"))
+    def calendar_uncancel(self, event_id: str) -> dict[str, Any]:
+        """Restore a soft-cancelled Google Calendar event (status=confirmed)."""
+        if self.family == "microsoft":
+            raise NotImplementedError(
+                "calendar_uncancel is not implemented for Composio Microsoft"
+            )
+        slug = self._slug_for("calendar_update")
+        self._execute_composio_tool(
+            slug,
+            {"event_id": event_id, "status": "confirmed"},
+            operation="calendar_uncancel",
+        )
+        return {"id": event_id}
+
     @guarded("calendar.delete", target_arg="event_id", audit_provider="composio",
-             audit_tool=lambda self: self._ms_cleanup_slug("calendar_delete"),
-             tool_slug=lambda self: self._ms_cleanup_slug("calendar_delete"),
+             audit_tool=lambda self: self._cleanup_slug("calendar_delete"),
+             tool_slug=lambda self: self._cleanup_slug("calendar_delete"),
              block_error="cancelled by guardrail (requires CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1)")
     def calendar_delete(self, event_id: str) -> dict[str, Any]:
-        """Delete a calendar event (Microsoft family; used for verify cleanup).
+        """Hard-delete a calendar event (DELETE_EVENT slug).
 
-        Distinct from ``calendar.cancel`` (unsupported — no restore path).
+        Distinct from ``calendar.cancel`` (soft cancel via UPDATE_EVENT).
         Destructive: requires ``CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1``.
         """
-        self._require_microsoft_cleanup("calendar_delete")
         slug = self._slug_for("calendar_delete")
         self._execute_composio_tool(
             slug, {"event_id": event_id}, operation="calendar_delete",
