@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v0.7.8 — Composio Google calendar.cancel (soft) + mail.move (label ids)."""
+"""v0.7.9 — Composio Google calendar.cancel (soft) + mail.move (label ids)."""
 from __future__ import annotations
 
 import os
@@ -90,6 +90,40 @@ class TestGoogleMailMove:
             "add_label_ids": ["Label_42"],
             "remove_label_ids": ["INBOX"],
         }
+        assert res["data"]["undo_add_label_ids"] == ["INBOX"]
+        assert res["data"]["undo_remove_label_ids"] == ["Label_42"]
+
+    def test_move_undo_round_trip_via_batch_modify(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
+        client._mcp_client = mock
+        moved = client.mail_move_to_folder("msg-hex", "Label_42")
+        undo = moved["data"]
+        client._google_batch_modify_labels(
+            [undo["restore_target"]],
+            add=undo["undo_add_label_ids"],
+            remove=undo["undo_remove_label_ids"],
+        )
+        undo_call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert undo_call["arguments"] == {
+            "message_ids": ["msg-hex"],
+            "add_label_ids": ["INBOX"],
+            "remove_label_ids": ["Label_42"],
+        }
+
+    def test_archive_remove_inbox_with_undo(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        mock.call_tool.return_value = _ok({})
+        client._mcp_client = mock
+        res = client.mail_move_to_folder("msg-1", "archive")
+        assert res["success"] is True
+        call = mock.call_tool.call_args[0][1]["tools"][0]
+        assert call["tool_slug"] == "GMAIL_ADD_LABEL_TO_EMAIL"
+        assert call["arguments"]["remove_label_ids"] == ["INBOX"]
+        assert res["data"]["undo_add_label_ids"] == ["INBOX"]
+        assert res["data"]["undo_remove_label_ids"] == []
 
     def test_move_rejects_draft_id(self, mcp_key, tmp_project):
         client = self._client()
@@ -175,5 +209,50 @@ class TestGoogleCancelMoveCapabilities:
         client = ComposioMCPWorkspaceClient(_google_workspace())
         assert client.supports("mail.move") is True
         assert client.supports("calendar.cancel") is True
+        assert client.supports("calendar.uncancel") is True
         assert client.supports("calendar.delete") is True
         assert supports("composio", "calendar.cancel") is True
+        assert supports("composio:mcp", "calendar.uncancel") is True
+
+
+def _ms_workspace(**extra):
+    ws = {
+        "provider": "composio",
+        "mode": "mcp",
+        "family": "microsoft",
+        "user_id": "test-user",
+        "toolkits": ["outlook", "one_drive"],
+        "mcp": {
+            "endpoint": "https://connect.composio.dev/mcp",
+            "key_env": "COMPOSIO_MCP_KEY",
+        },
+    }
+    ws.update(extra)
+    return {
+        "integrations": {"workspace": ws},
+        "paths": {"project_root": "/tmp/test-ms-cancel-refuse"},
+    }
+
+
+class TestMicrosoftCalendarCancelRefused:
+    def _client(self):
+        from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient
+        return ComposioMCPWorkspaceClient(_ms_workspace())
+
+    def test_calendar_cancel_not_implemented(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        client._mcp_client = mock
+        res = client.calendar_cancel("evt-ms")
+        assert res["success"] is False
+        assert "not implemented" in res["error"].lower()
+        assert mock.call_tool.call_count == 0
+
+    def test_calendar_uncancel_not_implemented(self, mcp_key, tmp_project):
+        client = self._client()
+        mock = MagicMock()
+        client._mcp_client = mock
+        res = client.calendar_uncancel("evt-ms")
+        assert res["success"] is False
+        assert "not implemented" in res["error"].lower()
+        assert mock.call_tool.call_count == 0

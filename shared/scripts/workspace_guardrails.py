@@ -133,7 +133,7 @@ SAFE_WRITE_ACTIONS: frozenset[str] = frozenset({
     "mail.unarchive",
     "mail.trash",       # reversible: 30-day Deleted Items recovery
     "mail.untrash",
-    "mail.move",        # reversible: move back to previous folder
+    "mail.move",        # reversible: Outlook → prior folder id; Gmail → undo_* label batch
     "mail.tag",         # reversible: remove the category
     "mail.create_tag",  # reversible: delete the category
     "gmail.archive",

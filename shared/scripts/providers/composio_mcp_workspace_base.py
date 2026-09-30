@@ -1231,50 +1231,66 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
             "remove_label_ids": remove or [],
         }
 
+    @staticmethod
+    def _google_mail_move_result(
+        message_id: str,
+        destination: str,
+        *,
+        add: list[str],
+        remove: list[str],
+    ) -> dict[str, Any]:
+        """Label-move payload with symmetric undo ops (swap add/remove for undo)."""
+        return {
+            "id": message_id,
+            "destination": destination,
+            "add_label_ids": add,
+            "remove_label_ids": remove,
+            "undo_add_label_ids": list(remove),
+            "undo_remove_label_ids": list(add),
+            "restore_target": message_id,
+            "reversible": True,
+        }
+
     def _google_mail_move(self, message_id: str, destination: str) -> dict[str, Any]:
         """Move a Gmail message by applying label ids (not Outlook folders).
 
         ``destination`` is a ``Label_…`` id, a system label (``INBOX``, …), or a
         display name resolvable via ``mail_list_tags``. Well-known ``archive`` /
-        ``inbox`` mirror ``mail_archive`` / ``mail_unarchive``. Prior label sets
-        are not captured — ``restore_target`` is the message id for a best-effort
-        reverse move via another ``mail.move``.
+        ``inbox`` mirror ``mail_archive`` / ``mail_unarchive``. Custom labels use
+        ``GMAIL_BATCH_MODIFY_MESSAGES`` with the destination label **and**
+        ``remove_label_ids: ["INBOX"]`` (Gmail-style move out of the inbox).
+        Undo is the inverse batch modify (``undo_add_label_ids`` /
+        ``undo_remove_label_ids`` on the result).
         """
         token = (destination or "").strip()
         if not token:
             raise RuntimeError("Gmail label id/name is empty")
         lower = token.lower()
         if lower == "archive":
-            out = self._google_modify_labels(message_id, remove=["INBOX"])
-            return {
-                **out,
-                "destination": "archive",
-                "restore_target": message_id,
-                "reversible": True,
-            }
+            remove = ["INBOX"]
+            self._google_modify_labels(message_id, remove=remove)
+            return self._google_mail_move_result(
+                message_id, "archive", add=[], remove=remove,
+            )
         if lower == "inbox":
-            out = self._google_modify_labels(message_id, add=["INBOX"])
-            return {
-                **out,
-                "destination": "inbox",
-                "restore_target": message_id,
-                "reversible": True,
-            }
+            add = ["INBOX"]
+            self._google_modify_labels(message_id, add=add)
+            return self._google_mail_move_result(
+                message_id, "inbox", add=add, remove=[],
+            )
         label_id = self._google_resolve_label_id(token)
         add = [label_id]
         remove: list[str] = []
         if label_id != "INBOX":
             remove = ["INBOX"]
-        out = self._google_batch_modify_labels(
+        elif label_id == "INBOX":
+            add = ["INBOX"]
+        self._google_batch_modify_labels(
             [message_id], add=add, remove=remove or None,
         )
-        return {
-            **out,
-            "id": message_id,
-            "destination": label_id,
-            "restore_target": message_id,
-            "reversible": True,
-        }
+        return self._google_mail_move_result(
+            message_id, label_id, add=add, remove=remove,
+        )
 
     def mail_list_folders(self, include_hidden: bool = False,
                           max_results: int = 100) -> list[dict[str, Any]]:
