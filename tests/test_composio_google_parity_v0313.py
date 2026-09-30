@@ -241,15 +241,15 @@ class TestGoogleCapabilities:
         # (GOOGLEDRIVE_CREATE_FILE_FROM_TEXT → GOOGLEDRIVE_TRASH_FILE → confirmed in
         # Trash). files.upload is True (PR #14): text via CREATE_FILE_FROM_TEXT,
         # binary via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging (no
-        # COMPOSIO_API_KEY). calendar.cancel / folders False.
+        # COMPOSIO_API_KEY). mail.move / calendar.cancel True; folders False.
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
         for action in ("mail.list_tags", "mail.create_tag", "mail.send",
                        "mail.archive", "mail.unarchive", "mail.trash",
-                       "mail.untrash", "mail.tag", "files.trash", "files.upload",
+                       "mail.untrash", "mail.tag", "mail.move",
+                       "calendar.cancel", "files.trash", "files.upload",
                        "files.untrash"):
             assert caps[action] is True, f"{action} should be True"
-        assert caps["calendar.cancel"] is False
         assert caps["mail.list_folders"] is False
 
     def test_client_supports(self, mcp_key):
@@ -263,7 +263,8 @@ class TestGoogleCapabilities:
         assert client.supports("files.trash") is True
         assert client.supports("files.upload") is True   # MCP sandbox staging (PR #14)
         assert client.supports("files.untrash") is True
-        assert client.supports("calendar.cancel") is False
+        assert client.supports("mail.move") is True
+        assert client.supports("calendar.cancel") is True
 
     def test_files_trash_google_slug(self, mcp_key, tmp_project):
         client = TestGoogleMailCleanup()._client()

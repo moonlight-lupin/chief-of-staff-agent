@@ -74,8 +74,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # mail.tag / mail.archive / mail.unarchive / mail.trash / mail.untrash: a
     # clean archive→unarchive→trash→untrash cycle plus tag apply ran green on
     # real hex message ids (write_ready: yes, no id-shape errors).
-    # mail.list_folders / mail.move stay False (Gmail uses labels, not Outlook
-    # folders). calendar.cancel stays False.
+    # mail.list_folders stays False (Gmail uses labels, not Outlook folders).
+    # mail.move → GMAIL_BATCH_MODIFY_MESSAGES (label id destination).
+    # calendar.cancel → GOOGLECALENDAR_UPDATE_EVENT status=cancelled (soft, reversible).
     # files.download / files.trash: execution-verified 2026-07-16 — a throwaway
     # file created via GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (MCP-native text create,
     # no key) was trashed via GOOGLEDRIVE_TRASH_FILE and confirmed in Drive Trash.
@@ -90,7 +91,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.draft": True,
         "mail.send": True,          # GMAIL_SEND_EMAIL — execution-verified 2026-07-16 (destructive / approval-gated)
         "mail.list_folders": False, # Gmail uses labels, not folder ids
-        "mail.move": False,
+        "mail.move": True,          # GMAIL_BATCH_MODIFY_MESSAGES → label id
         "mail.archive": True,       # GMAIL_ADD_LABEL_TO_EMAIL remove INBOX — execution-verified 2026-07-16 (v0.3.14 hardened path)
         "mail.unarchive": True,     # add INBOX — execution-verified 2026-07-16
         "mail.trash": True,         # GMAIL_MOVE_TO_TRASH — execution-verified 2026-07-16
@@ -101,7 +102,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
-        "calendar.cancel": False,   # leave unsupported (no restore path parity)
+        "calendar.cancel": True,    # GOOGLECALENDAR_UPDATE_EVENT status=cancelled (soft)
+        "calendar.uncancel": True,  # GOOGLECALENDAR_UPDATE_EVENT status=confirmed (restore)
+        "calendar.delete": True,    # GOOGLECALENDAR_DELETE_EVENT — destructive / approval-gated
         "files.search": True,
         "files.upload": True,       # TEXT via CREATE_FILE_FROM_TEXT; BINARY via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
@@ -120,7 +123,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.draft": True,
         "mail.send": True,          # execution-verified 2026-07-16
         "mail.list_folders": False,
-        "mail.move": False,
+        "mail.move": True,          # GMAIL_BATCH_MODIFY_MESSAGES → label id
         # v0.3.14 hardened (draft-id→message-id, reject r- ids, resolve Label_…)
         # and execution-verified 2026-07-16 (write_ready: yes on real message ids).
         "mail.archive": True,
@@ -133,7 +136,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "calendar.list": True,
         "calendar.create": True,
         "calendar.update": True,
-        "calendar.cancel": False,
+        "calendar.cancel": True,    # GOOGLECALENDAR_UPDATE_EVENT status=cancelled (soft)
+        "calendar.uncancel": True,  # GOOGLECALENDAR_UPDATE_EVENT status=confirmed (restore)
+        "calendar.delete": True,    # GOOGLECALENDAR_DELETE_EVENT — destructive / approval-gated
         "files.search": True,
         "files.upload": True,       # TEXT via CREATE_FILE_FROM_TEXT; BINARY via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging — execution-verified 2026-07-17 (no COMPOSIO_API_KEY)
         "files.download": True,
@@ -359,10 +364,6 @@ _CONTACTS_REASONS = {
 }
 
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
-    ("composio", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
-                                     "(no restore-path parity with the soft-delete promise)",
-    ("composio:mcp", "calendar.cancel"): "calendar.cancel is not offered for Composio Google "
-                                         "(no restore-path parity with the soft-delete promise)",
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
                                  "recreate-event workflow is not implemented, so cancel cannot "
                                  "be honoured behind the reversible soft-delete promise — "

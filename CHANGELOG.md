@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.7.9 — Composio Google calendar.cancel + mail.move
+
+Wire Composio Google-family **soft** `calendar.cancel` (via
+`GOOGLECALENDAR_UPDATE_EVENT` with `status=cancelled`, matching `google_api`)
+and **label-id** `mail.move` (`GMAIL_BATCH_MODIFY_MESSAGES`). Hard delete is
+separate: `calendar.delete` → `GOOGLECALENDAR_DELETE_EVENT` (approval-gated).
+`mail.list_folders` stays False on Google.
+
+### Changes
+
+- `FAMILY_SLUGS["google"]`: `mail_move`, `mail_modify_thread_labels`,
+  `calendar_delete`, `calendar_batch`.
+- `ComposioMCPWorkspaceClient`: `calendar_cancel` / `calendar_uncancel`,
+  Google `mail_move_to_folder`, `calendar_delete` for Google (not MS-only).
+- Capabilities: `calendar.cancel`, `calendar.uncancel`, and `mail.move` True for
+  `composio` and `composio:mcp`; removed `UNSUPPORTED_REASONS` for Google
+  `calendar.cancel`.
+- Gmail `mail.move` removes `INBOX` when filing to a user label and returns
+  `undo_add_label_ids` / `undo_remove_label_ids` for a symmetric batch-modify undo.
+
+
 ## v0.7.8 — Field follow-up (cron bindings, backup CLI, test isolation)
 
 Production follow-up after v0.7.5’s `cron_prompts` doctor and suite sandboxing
