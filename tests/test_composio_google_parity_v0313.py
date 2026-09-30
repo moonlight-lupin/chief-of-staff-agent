@@ -241,7 +241,7 @@ class TestGoogleCapabilities:
         # (GOOGLEDRIVE_CREATE_FILE_FROM_TEXT → GOOGLEDRIVE_TRASH_FILE → confirmed in
         # Trash). files.upload is True (PR #14): text via CREATE_FILE_FROM_TEXT,
         # binary via GOOGLEDRIVE_UPLOAD_FILE + MCP sandbox staging (no
-        # COMPOSIO_API_KEY). mail.move / calendar.cancel True; folders False.
+        # COMPOSIO_API_KEY). mail.move / calendar.cancel / list_folders True.
         from workspace_capabilities import get_capabilities
         caps = get_capabilities("composio:mcp")
         for action in ("mail.list_tags", "mail.create_tag", "mail.send",
@@ -250,7 +250,7 @@ class TestGoogleCapabilities:
                        "calendar.cancel", "files.trash", "files.upload",
                        "files.untrash"):
             assert caps[action] is True, f"{action} should be True"
-        assert caps["mail.list_folders"] is False
+        assert caps["mail.list_folders"] is True
 
     def test_client_supports(self, mcp_key):
         from providers.composio_mcp_workspace import ComposioMCPWorkspaceClient

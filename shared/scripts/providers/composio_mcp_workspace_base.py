@@ -52,6 +52,8 @@ FAMILY_SLUGS: dict[str, dict[str, str]] = {
         # Catalog-verified against docs.composio.dev/toolkits/gmail (v0.3.13).
         "mail_send": "GMAIL_SEND_EMAIL",
         "mail_list_tags": "GMAIL_LIST_LABELS",
+        # Gmail "folders" are labels — same slug as mail_list_tags (list_folders ≈ list_tags).
+        "mail_list_folders": "GMAIL_LIST_LABELS",
         "mail_create_tag": "GMAIL_CREATE_LABEL",
         "mail_modify_labels": "GMAIL_ADD_LABEL_TO_EMAIL",  # archive/unarchive/tag
         "mail_move": "GMAIL_BATCH_MODIFY_MESSAGES",  # label-id moves (message batch)
@@ -1294,7 +1296,15 @@ class ComposioMCPWorkspaceClient(WorkspaceClient):
 
     def mail_list_folders(self, include_hidden: bool = False,
                           max_results: int = 100) -> list[dict[str, Any]]:
-        """List top-level Outlook mail folders (OUTLOOK_LIST_MAIL_FOLDERS)."""
+        """List mail destinations: Outlook folders or Gmail labels.
+
+        On Google, folders are Gmail labels (``GMAIL_LIST_LABELS``) — the same
+        ``{id, name, type}`` records as ``mail_list_tags``. ``mail.move`` still
+        takes a label id. ``include_hidden`` and other Outlook-only args are
+        ignored on Google.
+        """
+        if self.family == "google":
+            return self.mail_list_tags()
         self._require_microsoft_cleanup("mail_list_folders")
         slug = self._slug_for("mail_list_folders")
         try:

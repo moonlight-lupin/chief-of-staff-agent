@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.10 — Composio Google mail.list_folders + contacts refusal copy
+
+Wire Composio Google-family **`mail.list_folders`** as an alias over
+`GMAIL_LIST_LABELS` (same label `{id, name, type}` records as `mail.list_tags`;
+destination for `mail.move` remains a label id). Operator-facing **contacts**
+refusal text for Composio now explains Gmail vs googlecontacts toolkit setup.
+
+### Changes
+
+- `FAMILY_SLUGS["google"]["mail_list_folders"]` → `GMAIL_LIST_LABELS`.
+- `ComposioMCPWorkspaceClient.mail_list_folders`: Google reuses the
+  `mail_list_tags` normalization path; Microsoft unchanged.
+- Capabilities: `mail.list_folders` True for `composio` and `composio:mcp`;
+  stays False on `google_api`.
+- `_CONTACTS_REASONS["composio"]`: self-serve fix (connect **googlecontacts**
+  in Composio dashboard; `google_api` alternate). No contacts CRUD wiring.
+
+
 ## v0.7.9 — Composio Google calendar.cancel + mail.move
 
 Wire Composio Google-family **soft** `calendar.cancel` (via

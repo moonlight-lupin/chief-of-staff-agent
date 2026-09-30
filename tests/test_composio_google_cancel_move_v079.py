@@ -203,7 +203,7 @@ class TestGoogleCancelMoveCapabilities:
         assert caps["calendar.cancel"] is True
         assert caps["calendar.uncancel"] is True
         assert caps["calendar.delete"] is True
-        assert caps["mail.list_folders"] is False
+        assert caps["mail.list_folders"] is True
         assert ("composio:mcp", "calendar.cancel") not in UNSUPPORTED_REASONS
 
         client = ComposioMCPWorkspaceClient(_google_workspace())

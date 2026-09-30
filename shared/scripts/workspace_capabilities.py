@@ -74,7 +74,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # mail.tag / mail.archive / mail.unarchive / mail.trash / mail.untrash: a
     # clean archive→unarchive→trash→untrash cycle plus tag apply ran green on
     # real hex message ids (write_ready: yes, no id-shape errors).
-    # mail.list_folders stays False (Gmail uses labels, not Outlook folders).
+    # mail.list_folders → GMAIL_LIST_LABELS (label records; same data as list_tags).
     # mail.move → GMAIL_BATCH_MODIFY_MESSAGES (label id destination).
     # calendar.cancel → GOOGLECALENDAR_UPDATE_EVENT status=cancelled (soft, reversible).
     # files.download / files.trash: execution-verified 2026-07-16 — a throwaway
@@ -90,7 +90,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,
         "mail.draft": True,
         "mail.send": True,          # GMAIL_SEND_EMAIL — execution-verified 2026-07-16 (destructive / approval-gated)
-        "mail.list_folders": False, # Gmail uses labels, not folder ids
+        "mail.list_folders": True,  # GMAIL_LIST_LABELS (labels as destinations; ≈ list_tags)
         "mail.move": True,          # GMAIL_BATCH_MODIFY_MESSAGES → label id
         "mail.archive": True,       # GMAIL_ADD_LABEL_TO_EMAIL remove INBOX — execution-verified 2026-07-16 (v0.3.14 hardened path)
         "mail.unarchive": True,     # add INBOX — execution-verified 2026-07-16
@@ -110,9 +110,9 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16 (create-from-text → trash → confirmed in Trash)
         "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
-        # Contacts — NOT wired: GOOGLECONTACTS toolkit (BYO OAuth) not connected,
-        # no slugs mapped. False until live-verified (tripwire convention).
-        # Toolkit exists: docs.composio.dev/toolkits/googlecontacts (24 tools).
+        # Contacts — NOT wired: Gmail toolkit read/search tools are not CRUD.
+        # Connect googlecontacts in Composio (People API OAuth, separate from Gmail).
+        # False until slugs mapped and live-verified (tripwire convention).
         "contacts.list": False,
         "contacts.create": False,
         "contacts.update": False,
@@ -122,7 +122,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "mail.search": True,
         "mail.draft": True,
         "mail.send": True,          # execution-verified 2026-07-16
-        "mail.list_folders": False,
+        "mail.list_folders": True,  # GMAIL_LIST_LABELS (labels as destinations; ≈ list_tags)
         "mail.move": True,          # GMAIL_BATCH_MODIFY_MESSAGES → label id
         # v0.3.14 hardened (draft-id→message-id, reject r- ids, resolve Label_…)
         # and execution-verified 2026-07-16 (write_ready: yes on real message ids).
@@ -144,7 +144,7 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "files.download": True,
         "files.trash": True,        # GOOGLEDRIVE_TRASH_FILE — execution-verified 2026-07-16
         "files.untrash": True,      # GOOGLEDRIVE_UNTRASH_FILE — execution-verified 2026-07-17 (create → trash → untrash → FIND confirmed active, trashed=0)
-        # Contacts — NOT wired (see "composio" above); False until live-verified.
+        # Contacts — NOT wired (see composio above); False until live-verified.
         "contacts.list": False,
         "contacts.create": False,
         "contacts.update": False,
@@ -353,8 +353,11 @@ _COMPOSIO_MS_UNTRASH_REASON = (
 )
 
 _CONTACTS_REASONS = {
-    "composio": "Google Contacts is not wired on Composio (the googlecontacts toolkit "
-                "needs its own OAuth connection) — use provider google_api for contacts",
+    "composio": "full contacts CRUD is not available via the Gmail toolkit "
+                "(GMAIL_GET_CONTACTS / GMAIL_SEARCH_PEOPLE are read/search, not CRUD); "
+                "connect the googlecontacts toolkit in the Composio dashboard (People API "
+                "OAuth scopes, separate from Gmail), then re-run capabilities — or use "
+                "provider google_api for contacts",
     "m365": "Contacts are not implemented on the Microsoft Graph client — use provider "
             "google_api for contacts",
     "composio_microsoft": "Contacts are not wired on the Composio Microsoft family (no "
