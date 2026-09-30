@@ -28,8 +28,8 @@ except Exception as exc:  # pragma: no cover
 
 
 def google_api_script() -> Path:
-    env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
-    hermes_home = Path(env).expanduser() if env else Path.home() / ".hermes"
+    from config_loader import get_hermes_home
+    hermes_home = get_hermes_home()
     candidates = [
         PLUGIN_ROOT / "shared" / "scripts" / "google_api.py",
         hermes_home / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py",

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -43,8 +44,14 @@ def test_doctor_google_workspace_skill_does_not_read_path_home_hermes(tmp_path, 
     assert "not found" in result.detail
 
 
-def test_daily_briefing_google_api_script_uses_sandbox_hermes(tmp_path, monkeypatch):
-    """google_api_script() must honour HERMES_HOME, not Path.home()/.hermes."""
+def _assert_google_api_script_uses_sandbox_hermes(
+    tmp_path,
+    monkeypatch,
+    *,
+    skill_dir: str,
+    module_name: str,
+) -> None:
+    """google_api_script() must resolve via get_hermes_home(), not Path.home()/.hermes."""
     fake_home = tmp_path / "userhome"
     fake_home.mkdir()
     decoy = (
@@ -75,10 +82,27 @@ def test_daily_briefing_google_api_script_uses_sandbox_hermes(tmp_path, monkeypa
     monkeypatch.setenv("HERMES_HOME", str(sandbox))
     monkeypatch.setenv("CHIEF_OF_STAFF_HERMES_HOME", str(sandbox))
 
-    daily_scripts = PLUGIN_ROOT / "skills" / "daily-briefing" / "scripts"
-    if str(daily_scripts) not in sys.path:
-        sys.path.insert(0, str(daily_scripts))
-    import importlib
-    mod = importlib.import_module("daily_briefing")
+    scripts = PLUGIN_ROOT / "skills" / skill_dir / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    mod = importlib.import_module(module_name)
     importlib.reload(mod)
     assert mod.google_api_script() == sandbox_script
+
+
+def test_daily_briefing_google_api_script_uses_sandbox_hermes(tmp_path, monkeypatch):
+    _assert_google_api_script_uses_sandbox_hermes(
+        tmp_path,
+        monkeypatch,
+        skill_dir="daily-briefing",
+        module_name="daily_briefing",
+    )
+
+
+def test_calendar_scan_google_api_script_uses_sandbox_hermes(tmp_path, monkeypatch):
+    _assert_google_api_script_uses_sandbox_hermes(
+        tmp_path,
+        monkeypatch,
+        skill_dir="calendar-manager",
+        module_name="calendar_scan",
+    )
