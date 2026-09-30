@@ -67,7 +67,7 @@ class TestFamilySlugsPhase3:
         assert ms["mail_move"] == "OUTLOOK_MOVE_MESSAGE"
         # Google has mail_send (v0.3.13); folders/move stay Microsoft-only.
         assert FAMILY_SLUGS["google"]["mail_send"] == "GMAIL_SEND_EMAIL"
-        assert "mail_list_folders" not in FAMILY_SLUGS["google"]
+        assert FAMILY_SLUGS["google"]["mail_list_folders"] == "GMAIL_LIST_LABELS"
 
 
 class TestMailFoldersAndMove:

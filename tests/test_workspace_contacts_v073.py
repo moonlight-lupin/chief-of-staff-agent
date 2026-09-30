@@ -215,6 +215,8 @@ def test_refusal_reason_is_specific(provider, action):
     reason = get_unsupported_reason(provider, action)
     assert reason != f"{action} is not supported by {provider}"
     assert "google_api" in reason
+    if provider.split(":")[0] == "composio":
+        assert "googlecontacts" in reason.lower()
 
 
 @pytest.mark.parametrize("action", ("contacts.list",) + CONTACT_WRITES)
