@@ -335,7 +335,7 @@ def _check_yaml_stores(fix: bool, data: dict[str, Any] | None, config_path: Path
 
 
 def _check_google_workspace(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
-    home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+    home = get_hermes_home()
     paths = [home / "skills" / "productivity" / "google-workspace" / "SKILL.md", home / "skills" / "google-workspace" / "SKILL.md"]
     ok = any(p.exists() for p in paths)
     return CheckResult("google_workspace_skill", "pass" if ok else "warn", "installed" if ok else "google-workspace skill not found")

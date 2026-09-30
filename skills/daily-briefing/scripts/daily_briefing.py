@@ -76,9 +76,11 @@ def sibling_or_shared(config: Any, filename: str) -> Path:
 
 
 def google_api_script() -> Path:
+    from config_loader import get_hermes_home
+    hermes_home = get_hermes_home()
     candidates = [
         PLUGIN_ROOT / "shared" / "scripts" / "google_api.py",
-        Path.home() / ".hermes" / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py",
+        hermes_home / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py",
     ]
     for path in candidates:
         if path.exists():

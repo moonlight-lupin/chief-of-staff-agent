@@ -36,6 +36,33 @@ python shared/scripts/chief_of_staff.py readiness --summary
 
 The detailed, provider-by-provider reference follows below.
 
+## Upgrading
+
+After pulling a new plugin release, run:
+
+```bash
+.venv/bin/python shared/scripts/chief_of_staff.py doctor --summary
+```
+
+Pay attention to the **`cron_prompts`** check (added in v0.7.5). Headless cron
+jobs carry their own prompt text. If a job hardcodes a plugin script path
+(`skills/.../daily_briefing.py`, an old absolute install path, and so on) or a
+`chief-of-staff:<skill>` reference, that binding breaks silently when files move
+or the skill was never a bundled plugin skill (agent-scope skills take no
+`chief-of-staff:` prefix).
+
+**Supported binding for scheduled work:** define the process as a workflow YAML
+and install it:
+
+```bash
+.venv/bin/python shared/scripts/chief_of_staff.py workflows install <name>
+```
+
+That writes `skills.local/<name>/`, registers the skill, and — when the
+workflow declares a schedule — proposes a cron binding the `cron_skill_files`
+doctor check understands. Do not rely on freeform cron prompts that embed plugin
+paths; update flagged jobs manually (doctor is read-only).
+
 ## Quick Start
 
 ### Option 1: Google Service Account (advanced, self-hosted)

@@ -19,9 +19,11 @@ Backup protects the user's Hermes and Chief of Staff data by creating a timestam
 The `backup.py` script uploads and prunes archives through the file store. Today it drives the `google-workspace` skill's `google_api.py` wrapper directly (the Google/Drive dialect shown below); the same intent — upload archive, list backups, delete old archives — maps onto any workspace provider (`google_api` | `composio` | `m365`) or an equivalent native file connector when configured.
 
 ```bash
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive {command}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive upload {archive_path} --parent {drive_folder_id}
 ```
+
+Auth is via the google-workspace skill / Hermes home (`google_token.json`); backup does not pass legacy `--account` / `--as` flags.
 
 ## When to Use
 
@@ -64,7 +66,7 @@ company:
   name: "Acme Pte Ltd"
 
 google:
-  account: default
+  # Optional for other workspace features; not required for backup Drive calls.
   delegate_email: founder@example.com
 
 backup:
@@ -155,17 +157,15 @@ The cron prompt must be self-contained and must not rely on prior conversation h
 The script uses command shapes like:
 
 ```bash
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive upload \
-  --file {archive_path} --parent-id {drive_folder_id}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive upload {archive_path} --parent {drive_folder_id}
 
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive list \
-  --folder-id {drive_folder_id}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive search "'{drive_folder_id}' in parents and name contains '.tar.gz'" \
+  --raw-query --max 200
 
-.venv/bin/python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
-  --account {account} --as {delegate} drive delete \
-  --file-id {file_id}
+python ~/.hermes/skills/productivity/google-workspace/scripts/google_api.py \
+  drive delete {file_id}
 ```
 
 If `backup.drive_folder_id` is absent, resolve `backup.drive_folder` through Drive Filer or ask the user to run onboarding. Do not upload to an unknown folder.

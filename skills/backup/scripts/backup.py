@@ -60,9 +60,43 @@ def _expand(path: str | Path) -> Path:
 
 def _default_google_api() -> Path:
     """Resolve google_api.py path at runtime via env-configurable home."""
-    env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
-    home = Path(env).expanduser() if env else Path.home() / ".hermes"
+    try:
+        _scripts = Path(__file__).resolve().parents[3] / "shared" / "scripts"
+        if str(_scripts) not in sys.path:
+            sys.path.insert(0, str(_scripts))
+        from config_loader import get_hermes_home
+        home = get_hermes_home()
+    except Exception:
+        env = os.getenv("CHIEF_OF_STAFF_HERMES_HOME") or os.getenv("HERMES_HOME")
+        home = Path(env).expanduser() if env else Path.home() / ".hermes"
     return home / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py"
+
+
+def _resolve_google_api_script(config: dict[str, Any]) -> Path:
+    script = Path(
+        os.environ.get("GOOGLE_WORKSPACE_API")
+        or config.get("google_api_script", "")
+        or str(_default_google_api())
+    ).expanduser()
+    if not script.exists():
+        raise BackupError(f"google_api.py not found: {script}")
+    return script
+
+
+def _google_api_python(script: Path) -> str:
+    """Prefer the google-workspace skill venv when present (google-api client deps)."""
+    override = os.environ.get("GOOGLE_WORKSPACE_PYTHON", "").strip()
+    if override:
+        return override
+    skill_venv = script.parent.parent / ".venv" / "bin" / "python"
+    if skill_venv.is_file():
+        return str(skill_venv)
+    return sys.executable
+
+
+def _drive_folder_query(folder_id: str) -> str:
+    escaped = str(folder_id).replace("'", "\\'")
+    return f"'{escaped}' in parents and name contains '.tar.gz' and trashed = false"
 
 
 def _slug(value: str) -> str:
@@ -234,25 +268,9 @@ def create_backup(config: dict[str, Any], output_path: str | Path) -> BackupResu
     )
 
 
-def _google_identity(config: dict[str, Any]) -> tuple[str, str]:
-    google = config.get("google", {}) if isinstance(config.get("google"), dict) else {}
-    account = google.get("account") or google.get("service_account_path") or "default"
-    delegate = google.get("delegate_email") or google.get("delegate") or google.get("as")
-    if not delegate:
-        raise BackupError("Missing google.delegate_email in company.yaml; cannot call google_api.py with --as.")
-    return str(account), str(delegate)
-
-
 def _run_google_api(config: dict[str, Any], service: str, command: str, args: list[str]) -> Any:
-    script = Path(
-        os.environ.get("GOOGLE_WORKSPACE_API")
-        or config.get("google_api_script", "")
-        or str(_default_google_api())
-    ).expanduser()
-    if not script.exists():
-        raise BackupError(f"google_api.py not found: {script}")
-    account, delegate = _google_identity(config)
-    cmd = [sys.executable, str(script), "--account", account, "--as", delegate, service, command, *args]
+    script = _resolve_google_api_script(config)
+    cmd = [_google_api_python(script), str(script), service, command, *args]
     completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
     if completed.returncode != 0:
         raise BackupError(
@@ -270,21 +288,12 @@ def _run_google_api(config: dict[str, Any], service: str, command: str, args: li
 def upload_backup(config: dict[str, Any], archive_path: str | Path, drive_folder_id: str) -> UploadResult:
     """Upload archive to Google Drive through google_api.py."""
     start = time.monotonic()
-    args = ["--file", str(_expand(archive_path)), "--parent-id", drive_folder_id]
+    script = _resolve_google_api_script(config)
+    archive = str(_expand(archive_path))
+    args = [archive, "--parent", drive_folder_id]
     response = _run_google_api(config, "drive", "upload", args)
     elapsed = round(time.monotonic() - start, 3)
-    account, delegate = _google_identity(config)
-    command = [
-        sys.executable,
-        str(_default_google_api()),
-        "--account",
-        account,
-        "--as",
-        delegate,
-        "drive",
-        "upload",
-        *args,
-    ]
+    command = [_google_api_python(script), str(script), "drive", "upload", *args]
     return UploadResult(elapsed_seconds=elapsed, command=command, response=response)
 
 
@@ -341,7 +350,13 @@ def prune_old_backups(
     """
     if config is None:
         raise BackupError("config is required so prune_old_backups can call google_api.py")
-    response = _run_google_api(config, "drive", "list", ["--folder-id", drive_folder_id])
+    query = _drive_folder_query(drive_folder_id)
+    response = _run_google_api(
+        config,
+        "drive",
+        "search",
+        [query, "--raw-query", "--max", "200"],
+    )
     items = [item for item in _parse_drive_items(response) if str(item.get("name", "")).endswith(".tar.gz")]
     items.sort(key=_item_datetime, reverse=True)
 
@@ -382,7 +397,7 @@ def prune_old_backups(
             skipped.append(f"{name} (dry-run would delete)")
             continue
         try:
-            _run_google_api(config, "drive", "delete", ["--file-id", fid])
+            _run_google_api(config, "drive", "delete", [fid])
             deleted.append(name)
         except BackupError as exc:
             errors.append(f"{name}: {exc}")
