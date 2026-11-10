@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — research skills knowledge port (uncommitted work absorbed)
+## v0.7.11 — Research skills knowledge port (deep-research 1.12.0, entity-research 1.1.0)
 
 deep-research 1.8.1 → **1.12.0**, entity-research 0.1.0 → **1.1.0**: ported the
 current deep-research engine (iterative loop moved to `references/step3-iterative-loop.md`,
