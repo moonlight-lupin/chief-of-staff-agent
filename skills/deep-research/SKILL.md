@@ -1,11 +1,11 @@
 ---
 name: deep-research
-description: "Use when the user asks for deep research or a written multi-source report. For entity dossiers use entity-research; for news digests use news-monitoring."
-version: 1.8.1
-author: moonlight-lupin
+description: "Use when the user asks for \"deep research\", a \"research report on\", a \"comprehensive analysis of\", to \"look into X in depth\", to \"write a report on X\", or any question needing multi-source synthesis beyond a single search — an autonomous multi-step deep research engine implementing an iterative Think → Search → Extract → Synthesize → Stop loop. The LLM drives every decision: what to search, what's relevant, what's missing, and when to stop. Produces a cited, magazine-quality report with inline citations, category-specific formatting, and research stats. For entity vetting/dossiers use entity-research; for news digests use news-monitoring."
 license: MIT
-platforms: [linux, macos, windows]
 metadata:
+  version: 1.12.0
+  author: moonlight-lupin
+  platforms: [linux, macos, windows]
   hermes:
     tags: [research, deep-research, report, synthesis, iterative, citations, evidence-basis, provenance]
     related_skills: [news-monitoring, entity-research, note-taker]
@@ -22,6 +22,9 @@ source quality tiers, and explicit gaps/contradictions sections.
 See `references/structured-evidence-format.md` for the evidence.json layer and
 `references/docsgpt-concepts.md` for adaptive-depth concept mapping.
 
+For the "is there updated or custom firmware for device X?" question class, follow
+`references/firmware-support-status-research.md` — vendor download page + official-forum RSS + GitHub-API triangulation recipe.
+
 ## When to use
 
 - User asks for "deep research", "research report", "comprehensive analysis"
@@ -33,7 +36,6 @@ See `references/structured-evidence-format.md` for the evidence.json layer and
 
 - **Entity vetting/dossiers** → use `entity-research` (has sanctions screening, structured lenses)
 - **Recurring news digests** → use `news-monitoring` (has cron, dedup, multi-language)
-- **Q&A strictly over documents the user supplies** → answer directly from those documents with quotes; this skill researches the open web
 - **Quick factual question** → just use `web_search` directly
 - **Single-source extraction** → use `web_search` + `web_extract`
 
@@ -83,6 +85,24 @@ Before planning, assess whether the question is specific enough to research prod
 
 If the question is already specific, skip this step entirely and proceed to Step 1.
 
+**Proper-noun referent check (before Round 1):** when the question names a term
+that could refer to either the user's own tooling/environment or a public product
+(a bot name, a codename, a vendor feature, a person), disambiguate the referent
+BEFORE running full rounds. If the user is available, ask once with the plausible
+readings as options; if the user does not answer, proceed on the best
+interpretation, say which one you chose in the plan, and let the user correct
+course cheaply. A wrong referent costs entire rounds of searching and a full
+refocus — it is the most expensive research mistake this loop can make, more so
+than any vague scope.
+
+**Acronym referent probe (cheap, before Round 1):** the same check applies to short
+acronyms that collide with unrelated high-ranking terms — a bare "UI", "MAS", or
+"RAG" matches medical scales, entertainment companies, or storage tech at the same
+rank as the intended referent. Run a 2-3 query precision probe (one query per
+candidate reading) before committing rounds. If the probe is ambiguous, state the
+chosen reading in the plan header AND as an interpretation note at the top of the
+final report, so the user can correct course cheaply instead of re-running the loop.
+
 ## Step 1 — Research Plan
 
 Before searching, break the question into a research plan. Output:
@@ -115,13 +135,15 @@ Complexity: [simple | moderate | complex]
 **Complexity assessment and adaptive depth:**
 Classify the question's complexity to determine the maximum number of research rounds. This prevents over-searching simple questions and under-searching complex ones.
 
-| Complexity | Max rounds | When to use |
-|---|---|---|
-| **simple** | 2 | Single-factual question, narrow scope, 1-2 sub-questions. Example: "What is the latest version of Python?" |
-| **moderate** | 3 | Multi-faceted question, 3-4 sub-questions, comparison or how-to. Example: "Compare Qdrant vs pgvector for RAG" |
-| **complex** | 5 | Broad scope, 5-6 sub-questions, requires deep synthesis across domains. Example: "Comprehensive analysis of the self-hosting vs managed API tradeoff for AI infrastructure" |
+| Complexity | Max rounds | Per-round breadth | When to use |
+|---|---|---|---|
+| **simple** | 2 | 2 | Single-factual question, narrow scope, 1-2 sub-questions. Example: "What is the latest version of Python?" |
+| **moderate** | 3 | 3 | Multi-faceted question, 3-4 sub-questions, comparison or how-to. Example: "Compare Qdrant vs pgvector for RAG" |
+| **complex** | 5 | 4 | Broad scope, 5-6 sub-questions, requires deep synthesis across domains. Example: "Comprehensive analysis of the self-hosting vs managed API tradeoff for AI infrastructure" |
 
 The complexity cap is a **maximum**, not a target. The stopping check (Step 3f) still governs early termination. A simple question that finds comprehensive answers in 1 round should stop at 1 — the cap of 2 means it *can* go to 2 if needed, not that it *must*.
+
+**Search budget** (adapted from upstream `research-input.ts` presets + `estimateMaxSearches`): announce the budget in the plan — "Search budget: ≤N queries", N = per-round breadth × max rounds (script: `estimate-budget --breadth B --rounds R`). When round 2+ runs deep-dive chains (§3a), the upper bound is tree-mode: `estimate-budget --breadth B --rounds R --halving`, upstream's breadth-halving recursion. The budget is a ceiling the loop must not exceed; prefer the cheapest round that answers well, per the §3f stopping check.
 
 **Language anchoring:** Detect the output language from the query and normalize to a BCP 47 tag (e.g. `en`, `zh-Hans`, `zh-Hant`, `ja`). Use it consistently throughout — executive summary, analysis, contradictions, gaps, conclusion. Source titles, URLs, proper nouns, and code may stay in their original language; search queries may use any language that helps evidence gathering. If the user explicitly switches language mid-research, update the anchor and use the new language for all subsequent output.
 
@@ -147,156 +169,24 @@ Each round follows: **Query → Search → Extract → Synthesize → Check Stop
 
 Run **max N rounds** where N = complexity cap from Step 1 (simple=2, moderate=3, complex=5). Most topics converge in 2-3 rounds. The cap is a ceiling, not a target.
 
-### 3a — Query Generation (gap-driven)
+Query rules, fetch budgets, quote anchoring, the synthesis template, the evidence store, and stop conditions are in `references/step3-iterative-loop.md`.
 
-Generate 2-4 search queries per round. **Round 1** targets the sub-questions from the plan. **Round 2+** targets gaps identified in the previous synthesis.
-
-Before generating queries, review:
-- Original question and research plan
-- Current research state (what's already found)
-- Round number
-- What's still missing
-
-Generate queries that target the **gaps**, not repeat what's already found.
-
-**Refute polarity requirement:** Round 2+ must include at least one query targeting counter-evidence, opposing viewpoints, or criticisms of the leading hypothesis. If no counter-evidence is found after searching, note it explicitly in the synthesis — refute count = 0 usually means you didn't search well, not that no counter-evidence exists. This prevents confirmation-biased research.
-
-**Progressive empty-search refinement:** 1st empty → broader query or synonyms. 2nd consecutive → fundamentally different angle/domain/language. 3rd → move on; document as a gap rather than burning rounds on dead-end queries.
-
-### 3b — Search and Fetch
-
-**Provider preference (optional, user-set):** On request, use the donsetch MCP search/fetch tools, falling back to `web_search`/`web_extract` if unavailable. Never abort over a provider preference. Record the provider used in the run manifest and stats block.
-```
-web_search(query="...", limit=10)
-```
-
-Run one `web_search` per query. From the results, pick 3-5 URLs per round to fetch in full:
-
-```
-web_extract(urls=["url1", "url2", "url3"])
-```
-
-**Track URLs already fetched** — do not re-fetch the same URL across rounds. Maintain a mental list of analyzed URLs.
-
-### 3b.1 — Evidence Persistence (mandatory for 5+ source reports)
-
-Persist evidence to disk from the first round so it survives context compaction. The run directory is `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/` (project_root from `chief_of_staff.py capabilities`); the final report goes in the same folder as `report.md`. Use `init-run`, `register-source`, `add-claim`, `add-evidence` subcommands of `scripts/research_validation.py`. Add claims and evidence **during** the loop (§3d), not at the end — the append-only `claims.jsonl` is the fabrication-detection backbone for the gates. On context compaction, re-read `claims.jsonl` instead of trusting compressed memory. Full contract: `references/validation-gates.md`.
-
-### 3c — Quality Filter and Extraction
-
-Before extracting content, **discard low-quality results**:
-
-- **Thin content**: landing pages, aggregator stubs, <100 words of substantive text
-- **Irrelevant**: keyword overlap without topical relevance. Use word-boundary matching for topic terms — "port" should not match "transport" or "support"
-- **Duplicate URLs**: already fetched in a previous round
-- **Non-text**: video-only pages, image boards, login walls with no preview
-
-For each quality source, extract **goal-relevant facts**:
-- What facts in this source address a sub-question from the research plan?
-- Ignore noise, navigation, ads, boilerplate
-- Prefer specific data, statistics, named sources, dates over vague claims
-- Record the source URL and title with each extracted fact. Assign each unique source a **numbered citation** `[1]`, `[2]`, etc. on first encounter — reuse the same number for subsequent facts from the same source. This produces cleaner inline citations than full URLs (especially on mobile/messaging platforms) and matches academic/magazine citation style. Deduplicate by URL: the same URL seen twice gets the same number.
-- **Classify source quality** for each source: `primary` (official docs, model cards, SEC filings, original papers), `secondary` (tech journalism, analyst reports, reviews), `tertiary` (Wikipedia, aggregators, forum posts). This tier appears in the final source table and signals evidence strength to the reader.
-- **Grade each fact's evidence basis** as you extract (see below) — you can't tag a report you didn't grade while reading
-
-### Evidence basis — the four-label discipline
-
-Tag every **material fact** with the basis on which you're asserting it. A material fact is any substantive claim a reader would act on or challenge: a statistic, date, named entity or relationship, causal claim, or direct quote. This is deep-research's adaptation of pere-toolkit's canonical evidence discipline — the **same four labels**, applied to *facts* rather than financial figures.
-
-| Label | A fact is `[LABEL]` when it is… |
+| When you hit | Read |
 |---|---|
-| `[VERIFIED]` | corroborated across ≥2 independent, cited, dated sources |
-| `[SOURCED]` | stated by one named / cited source, not independently corroborated |
-| `[REASONED]` | your own analytical judgement or inference — not stated by any source |
-| `[ESTIMATED]` | a calculation or stated assumption (e.g. a figure you derived from source data) |
+| Query generation, search and fetch, extraction, anchoring, synthesis, or the stopping check | `references/step3-iterative-loop.md` |
+| Evidence-store commands and the three delivery gates | `references/validation-gates.md` |
+| The evidence.json intermediate | `references/structured-evidence-format.md` |
+| The default search or reader fails, or the plan needs a country, language or date filter | `references/search-and-fetch-fallbacks.md` |
 
-Rules:
-- **Lead on `[VERIFIED]` / `[SOURCED]`.** Present `[REASONED]` / `[ESTIMATED]` claims as *indicative* ("likely", "suggests", "on these figures") — never as hard fact.
-- **Use these four exact labels** — never an improvised synonym (`[Official]`, `[Expert]`, `[Consensus]` → these are `[SOURCED]`, or `[VERIFIED]` only if independently corroborated).
-- **Don't restate precision you don't have** — a source's "about half" is `~50% [SOURCED]`, not `50.0%`.
-- **Never fabricate to fill a gap** — an unanswerable sub-question is a documented gap, not a `[REASONED]` guess dressed as fact.
-
-**Relationship to source-quality tiers:** the `primary`/`secondary`/`tertiary` tier (above) classifies the *source*; the `[VERIFIED]`/`[SOURCED]`/`[REASONED]`/`[ESTIMATED]` label classifies the *fact*. They are orthogonal: a fact from a single primary source is `[SOURCED]` (strong source, but uncorroborated); the same fact from two independent primary sources becomes `[VERIFIED]`. Use both: tier in the source table, label inline on each claim.
-
-### 3d — Synthesis
-
-After extracting from all sources in the round, integrate findings into the **cumulative research state**:
-
-**Token budget awareness:** Track approximate context consumption across rounds. If the cumulative research state + extracted content is approaching the model's context window or a self-imposed budget (suggested: ~50K tokens for moderate, ~100K for complex), prioritize synthesis and stopping over gathering more sources. When the budget is tight, summarize earlier rounds' findings more aggressively rather than carrying full extracts forward.
-
-**Rough estimation heuristic:** You can't count tokens precisely, but you can estimate: each `web_extract` returning ~5K characters contributes ~1.5K tokens; the research state after N rounds with 3-5 sources per round is roughly N × 8-12K tokens. If you're on round 3+ of a complex topic and the last `web_extract` returned >10K characters, you're likely past 50K — summarize aggressively and head toward synthesis. When in doubt, treat any round-3+ complex research as budget-tight.
-
-```
-## Research State (after Round N)
-[evolving synthesis of all findings so far]
-
-### Sub-question 1: [question]
-Status: [answered / partially answered / unanswered]
-Findings: [synthesized facts, each with a numbered inline citation [N] matching the source table, and an evidence-basis tag, e.g. "adoption grew 40% in 2025 [1] [VERIFIED]"]
-
-### Sub-question 2: [question]
-Status: [...]
-Findings: [...]
-
-### Gaps identified:
-- [what's still missing for round N+1 to target]
-```
-
-Synthesis rules:
-- **Deduplicate** — if multiple sources say the same thing, cite the best one (or cite both for corroboration)
-- **Resolve contradictions** — if sources disagree, present both with attribution. Do not arbitrate silently.
-- **Inline citations** — every factual claim references its source using the numbered citation `[N]` assigned in §3c, matching the source table
-- **Evidence basis** — tag each material fact `[VERIFIED]` / `[SOURCED]` / `[REASONED]` / `[ESTIMATED]` (see §3c). A fact becomes `[VERIFIED]` only once ≥2 *independent* sources corroborate it; a single source is `[SOURCED]`. Corroboration during dedup is what promotes `[SOURCED]` → `[VERIFIED]`.
-- **Update gap list** — what sub-questions are still unanswered or thin?
-
-### 3e — Structured Evidence (recommended for reports with 5+ sources)
-
-Before writing the final report, structure the extracted evidence into a lightweight `evidence.json` intermediate. This separates evidence gathering from report writing and makes fabrication detectable. See `references/structured-evidence-format.md` for the schema, source quality ranking/weighting rules, and worked example.
-
-**When to use:** reports with 5+ sources, comparison/fact-check categories, or when the user may want to verify claims. Skip for quick 2-3 source reports.
-
-**Benefits validated in side-by-side testing** (July 2026):
-- Forced claim precision (every assertion gets a kind + polarity + snippet)
-- Refute polarity requirement surfaced counter-evidence the iterative loop missed
-- Source quality tiers revealed evidence-strength gaps (too many tertiary sources)
-- Explicit gaps + contradictions sections in the final report
-- Full traceability: claim ID → snippet → source URL
-
-**Source quality ranking and weighting** (see `references/structured-evidence-format.md` for full rules):
-- **primary** (3× weight): official docs, model cards, SEC filings, API pricing pages, original papers
-- **secondary** (2× weight): tech journalism, analyst reports, benchmark aggregators
-- **tertiary** (1× weight): Reddit, forums, Wikipedia, blog aggregators — useful for refute polarity and real-world anecdotes, but **never the sole support for a factual claim if a primary/secondary source exists**
-
-**Quality distribution check before writing the report** (`verify-claims` computes it from the store as `source_quality`):
-- **Healthy**: ≥30% primary, ≤30% tertiary → proceed
-- **Acceptable**: ≥1 primary for key claims, <50% tertiary → note thin primary coverage as a gap
-- **Weak**: 0 primary, >50% tertiary → **flag in Gaps section** and attempt to fetch primary sources (official docs, model cards, pricing pages) before finalizing. If primary sources are unavailable, qualify tertiary-sourced claims explicitly ("community reports suggest..." not "X is true")
-
-**Conflict resolution by quality:** When sources disagree, primary > secondary > tertiary. 2 independent secondary sources ≈ 1 primary. Tertiary cannot override secondary/primary — it becomes refute counter-evidence or writing_context instead.
-
-### 3f — Stopping Check
-
-After synthesis (and optional evidence structuring), evaluate whether the report is comprehensive enough:
-
-> Given the research plan's success criteria:
-> - Are all key sub-questions addressed with at least one source?
-> - Are there significant gaps or unanswered aspects?
-> - Is the evidence sufficient and corroborated?
-> - Am I approaching the token budget? (tight context = prioritize synthesis)
->
-> Reply YES (stop) or NO (continue) + one-sentence reason.
-
-**Stop if:**
-- All sub-questions have ≥1 source → YES
-- Most of the complexity cap used (e.g. round 2 of 2 for simple, round 3 of 3 for moderate) and remaining gaps are minor → YES
-- Complexity cap reached (simple=2, moderate=3, complex=5) → YES
-- Token budget approaching limit → YES (synthesize with what you have)
-- Web search returning diminishing returns (same URLs, no new info) → YES
-
-**Continue if:**
-- Major sub-questions unanswered → NO
-- Contradictions unresolved → NO
-- Only 1-2 rounds done and topic is broad → NO
+1. **3a — Query Generation (gap-driven)** — Breadth comes from the Step 1 preset (simple=2, moderate=3, complex=4). Round 1 targets plan sub-questions; later rounds target gaps and recorded follow-ups.
+2. **3b — Search and Fetch** — Use the configured MCP search/fetch tools when the user asked for them; otherwise `web_search` / `web_extract`. Never abort over a provider preference. *Optional, paid:* when the plan needs the **same public facts for several organisations** (size, mandate, sector exposure, recent commitments), one Exa Agent API run can collect them as cited rows (about US$0.10 a run, ceiling US$1.10; quote first; organisations only, never people). Its output enters the evidence store like any other source — each fact keeps the page it cites and gets its own label. Procedure: the entity-research skill's `references/organisation-evidence-exa.md`.
+3. **3b.1 — Evidence Persistence (mandatory for 5+ source reports)** — The run directory is `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/` (project_root from `chief_of_staff.py capabilities`). From round 1, persist with `init-run`, `register-source`, `add-claim`, `add-evidence`, and `check-quote` on `scripts/research_validation.py`.
+4. **3c — Quality Filter and Extraction** — Discard low-quality results before extracting.
+5. **Verbatim snippet anchoring (mandatory for claims you store)** — Every stored claim carries a verbatim contiguous excerpt from that source's page text.
+6. **Evidence basis — the four-label discipline** — Tag every material fact with the basis you are asserting it on.
+7. **3d — Synthesis** — Fold this round's extractions into the cumulative research state.
+8. **3e — Structured Evidence (recommended for reports with 5+ sources)** — Write the `evidence.json` intermediate before the final report. Format: `references/structured-evidence-format.md`.
+9. **3f — Stopping Check** — After synthesis, decide whether the report is comprehensive enough. Otherwise open another round, up to the cap.
 
 ## Step 4 — Final Report
 
@@ -331,7 +221,7 @@ Carry each material fact's **evidence-basis tag** inline (§3c), lead on `[VERIF
 [If sources disagree, present both sides with attribution. Do not silently arbitrate. If no contradictions found, state "No direct contradictions between sources." This section is REQUIRED — its absence is a quality signal that counter-evidence wasn't searched.]
 
 ## Gaps
-[What couldn't be determined from available sources. Each gap should note: what's unknown, why it matters, and whether it could be resolved with more research. If using structured evidence, reference the writing_context items. If no gaps, state "No significant gaps identified."]
+[What couldn't be determined from available sources. Each gap should note: what's unknown, why it matters, and whether it could be resolved with more research. If using structured evidence, reference the writing_context items. If no gaps, state "No significant gaps identified." **Source-set bias check (mandatory):** the first gap line must state the bias your whole source set shares — one dominant language, era, school, jurisdiction, or industry — adapted from Munger inversion. A homogeneous source set is itself a gap, even when every individual source is primary-tier.]
 
 ## Conclusion
 [Synthesis of findings, implications, remaining uncertainties — ties back to the executive summary and overview. The conclusion confirms or qualifies the overview, it doesn't introduce new analysis.]
@@ -375,12 +265,27 @@ After the report, output a compact stats block:
 
 ```
 ---
-📊 Research stats: [duration] · [N] rounds · [N] queries · [N] URLs fetched · [N] sources cited · provider: [donsetch/built-in]
+📊 Research stats: [duration] · [N] rounds · [N] queries · [N] page fetches · [N] sources cited · provider: [mcp/built-in]
 ```
 
 ## Step 5.5 — Validation Gates (mandatory before delivery)
 
 **Deterministic gates** — `scripts/research_validation.py`, stdlib-only, checks structure not judgment. Every report with 5+ sources passes three gates before delivery: `validate-report` (structure), `verify-citations` (inline `[N]` ↔ Sources rows), and `verify-claims --strict` (stored evidence must support each factual claim; a claim stored with `basis: verified` needs sources on ≥2 different sites; at least one `polarity: refute` claim, or `--refute-none "<what you searched>"`). **Loop:** validate → fix → re-run all three, max 3 cycles; still failing → stop and report the remaining problems to the user honestly. Never skip the gates, never deliver with a red gate. Quick 2-3 source reports (no store): `verify-claims` warns instead of failing — record it in the stats block. Full contract, flags, and the failure loop: `references/validation-gates.md`.
+
+**Optional Jev pre-screen.** On instances with TypeSafe Jev configured, add `--jev-prescreen` to `verify-claims` for an advisory semantic pre-check that flags gate false-reds/false-greens before the deterministic run. It degrades to a clean SKIPPED line when Jev is not set up — never blocks, never changes the gate's exit code. See the contract in `references/validation-gates.md`.
+
+**Snippet anchoring prerequisite.** `verify-claims` scores the *stored* snippets — it cannot tell a well-copied quote from a well-paraphrased one. That is what `check-quote` (§3c) is for: a red gate whose snippets never passed `check-quote` means anchoring was skipped, which is itself a defect. Anchor first, store second, gate third.
+
+## Step 6 — Follow-up Report Revision (optional)
+
+For "verify X in the earlier report" / "update the pricing section" requests on a delivered report. Adapted from upstream's evidence panel + `report-revision.ts`: a follow-up researches narrowly and patches **only the passages citing the finding** — the rest of the report stays byte-identical.
+
+1. **Map.** `python3 <skill_dir>/scripts/research_validation.py map-citations --report <report.md> [--citation N]` returns the top-level blocks citing each `[N]` (code fences excluded; exit 1 = no block cites N). This defines exactly what a follow-up may touch — nothing else.
+2. **Bounded follow-up research.** One round, ≤2 query directions derived from the target finding and the user's instruction. Same snippet-first triage and quality filter (§3b/§3c); new page text joins the existing run dir; register new sources before citing them.
+3. **Patch cited blocks only.** Revise the blocks from step 1 (tables and lists are updated as whole blocks). Leave unrelated paragraphs untouched. If the evidence contradicts the existing claim, state the correction; if it is insufficient, say so instead of inventing a fix.
+4. **Sources.** Append new entries to the Sources table with the next free numbers; never renumber existing citations — old inline `[N]`s must keep resolving.
+5. **History.** Save the revision as `<name>-rev.md` next to the original (`-rev2`, `-rev3`, … for further rounds). The original file stays untouched; on failure or cancellation, nothing is saved.
+6. **Re-run all three gates** (Step 5.5) on the revised report before delivery. A red gate after revision means the revision did not land cleanly — fix, don't ship.
 
 ## Follow-on Investment Analysis (optional)
 
@@ -390,7 +295,7 @@ See `references/structured-evidence-format.md` for the evidence.json schema and 
 
 ## Saving the research
 
-Everything for one run lives in `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/`: `report.md`, `run_manifest.json`, `sources.jsonl`, `claims.jsonl`. It travels with the rest of the user's project data — when `storage.mode` is `git` (see `capabilities`), run `chief_of_staff.py sync push` after delivering so the research survives a cloud session. For findings worth keeping long-term, offer to file a short summary with links back to the report into the wiki via `note-taker`.
+Everything for one run lives in `<project_root>/research/<YYYY-MM-DD>-<topic-slug>/` (project_root from `chief_of_staff.py capabilities`): `report.md`, `run_manifest.json`, `sources.jsonl`, `claims.jsonl`, plus the `pages/` source-text files when quote anchoring ran. It travels with the rest of the user's project data — when `storage.mode` is `git` (see `capabilities`), run `chief_of_staff.py sync push` after delivering so the research survives a cloud session. For findings worth keeping long-term, offer to file a short summary with links back to the report into the wiki via `note-taker`.
 
 ## Subagent Mode (optional)
 
@@ -412,9 +317,17 @@ delegate_task(
 
 ## Concurrency and Rate Limits
 
-- Fetch 3-5 URLs per round (not all 10 search results) to avoid rate-limiting
+- Full-page fetches are on-demand and budgeted (§3b): ≤2/round, run-wide cap by complexity — snippets carry the triage
 - If `web_extract` fails on a URL, note it and move on — don't retry endlessly
-- If `web_search` returns no results, apply the progressive empty-search refinement protocol (§3a)
+- If `web_search` returns no results, apply the §3a refinement protocol including the identical-rewrite stop
+
+## External provider head-to-head (optional benchmarking)
+
+When the user wants this stack benchmarked against an external research
+provider (e.g. Perplexity), read `references/research-provider-benchmark.md`
+first. Standing rules: same raw question to both sides, no date or scope
+injection; verify the provider's central claims independently before scoring;
+report cost, breadth, and complementary positioning rather than a single winner.
 
 ## Pitfalls
 
@@ -425,6 +338,13 @@ delegate_task(
 - **Complexity misclassification** — complexity is breadth of synthesis, not how impressive the topic sounds. A narrow factual topic with six sub-questions is moderate.
 - **Token budget fills before the cap** — on long extractions, summarize aggressively when context is tight rather than waiting for the round ceiling.
 - **Word-boundary matching** — "port" matching "transport" or "support" is a false hit; filter on topical relevance, not substring overlap.
+- **Keyless search noise on jurisdiction- or regulator-scoped questions** — when a keyless `web_search` returns `weak:true`/degraded and is dominated by unrelated verticals, re-run with the authority or domain named in the query ("the authority's name", site:<authority-domain>) before concluding anything is absent. Absence from a noisy keyless result set is not evidence of absence — the same query re-scoped routinely returns the primary documents that were missing.
+- **Mid-research re-scope** — when the user narrows the question after Round 1, do not restart the loop on the new scope: run one targeted pass, cite only sources that answer the narrowed scope, and state in the report what changed versus the broader framing.
+- **Store claims are quote-shaped** — the deterministic scorer supports a claim only when ONE stored snippet covers every figure, year AND entity the claim text carries; anything else caps at `partial`−0.01 (strict red for factual). The law, validated live three times in one session: multi-fact claims split per snippet, claim text byte-aligns to its quote, and prose paraphrase stays in the report body. Instances of the same law: **CJK claims** extract no tokens, so even an identical snippet scores ~0.33 — byte-identical claim text (entity axis 1.0) or anchor via `check-quote` (tokenization-free) instead; **glommed capitalized runs** ("Scrape URL FIRECRAWL" → one entity `scrape url`) never set-match a claim that says "Firecrawl" alone; **alphanumeric brand prefixes** ("x402" → figure `402`) cap unless the snippet carries the brand text. Diagnose with the script's `_figures`/`_entities`/`_tokens` helpers before rewriting.
+- **Anchored to the wrong substrate** — `check-quote --source-id` reads `pages/<source_id>.txt`; verify the id resolves to the URL the sentence actually came from before treating a mismatch as fabrication — the same sentence on another page's file gives a false red.
+- **Unanchored snippets** — storing a snippet (or evidence) that never passed `check-quote` is how a smooth paraphrase becomes "evidence": the scorer sees familiar tokens and rates it supported. Verbatim excerpt, checked against the saved page text (`<run_dir>/pages/<source_id>.txt`), repair-once on mismatch — never massage the snippet toward the claim, never splice across paragraphs. No contiguous excerpt exists? The claim is not evidence-backed; store it honestly and let the gate flag it.
+- **Store CLI ordering and field pairs** — the subcommand must precede `--dir` (`research_validation.py add-claim --dir <d> ...`, never `--dir <d> add-claim`). `add-claim` takes claim+kind+polarity+basis+snippet+source_id; `add-evidence` takes evidence_snippet+source_id — swapping the pairs stores the snippet in source_id and surfaces later as unregistered-source_id warnings. `basis` takes ONLY the four labels — a source TIER name (`primary`/`secondary`) is rejected (rc 2), and `kind` takes no `refute` value: refute is a **polarity**. When looping store calls in a script, check every response's JSON — a rejected call exits 2 silently while the loop's "stored" message lies.
+- **Citation density in the body** — every Sources row must be cited at least once (`verify-citations` fails on uncited rows); required sections (`## Executive Summary`, `## Contradictions`, `## Gaps`, `## Conclusion`) must be `##`-level, not `#`.
 - **Fallback if synthesis fails** — compile raw findings with citations and tags; empty output is the failure mode.
 - **Evidence key** — paste the four-label legend under the Sources table so `[VERIFIED]` / `[SOURCED]` / `[REASONED]` / `[ESTIMATED]` decode.
 
@@ -432,11 +352,10 @@ delegate_task(
 
 [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) — PewDiePie's self-hosted AI workspace — includes a "Deep Research" feature with multi-step web research and source reading, conceptually similar to this skill's Think → Search → Extract → Synthesize → Stop loop. This skill is a pure-prompt workflow (no UI, no server) designed to run inside any agent's tool loop.
 
+[AnotiaWang/deep-research-web-ui](https://github.com/AnotiaWang/deep-research-web-ui) (MIT) — Nuxt UI wrapping dzhng/deep-research with a hardened engine, and the main vendor source for this skill. **Vendored:** verbatim-quote evidence anchoring, v1.8.2 (`shared/utils/search-learning.ts` → `check-quote`, §3c); structured search mini-plans with frozen constraints, planning discipline and provider guidance, v1.9.0 (`shared/utils/search-plan.ts` → §3a); search-budget presets + breadth-halving estimate, v1.9.0 (`shared/utils/research-input.ts` → Step 1 + `estimate-budget`); bounded deep-dive threading on follow-up directions, v1.9.0 (`lib/core/deep-research.ts` → §3a); six-way round-outcome taxonomy with per-reason bounded retry, v1.9.1 (`shared/utils/search-assessment.ts` → §3a); snippet-first on-demand reading with fetch budgets, v1.9.0 (`lib/core/read-source.ts` → §3b); term-scored verbatim passage selection, v1.9.0 (`lib/core/source-context.ts` → §3d); surgical report revision with citation→block mapping, v1.9.0 (`shared/utils/report-revision.ts` → Step 6 + `map-citations`). **Evaluated, not vendored:** full tree recursion, streaming-JSON structured-output repair, UI/deployment layers, and dzhng's "the source is irrelevant" prompt (contradicts this skill's provenance discipline). Full two-sided map: `references/anotiawang-deep-research-concepts.md`.
+
+[Anjos2/recursive-research](https://github.com/Anjos2/recursive-research) (MIT) — Claude Code prompt skill for long-cycle recursive research. **Vendored (v1.9.2, guidance-level):** saturation-based stop signal (§3f), coverage balancing across plan sub-questions (§3a), mandatory source-set bias check in the Gaps section (Step 4). **Not vendored:** cycle machinery, WDM weighted-source scoring, per-domain seed source lists, preventive context-pause thresholds, local-corpus mode. The ≤5% threshold is unvalidated upstream (repo last pushed 2026-04-22, no field hardening); it ships as a signal, not a rule. Map: `references/recursive-research-concepts.md`.
+
 [DocsGPT](https://github.com/arc53/DocsGPT) (arc53, MIT) — ResearchAgent Plan → Research → Synthesize with adaptive depth, clarification, token-budget tracking, and empty-search refinement. Mapping: `references/docsgpt-concepts.md`.
 
-## Evals
-
-`evals/routing-fixtures.json` holds lightweight contract fixtures — sample request →
-expected routing, required output fields, and forbidden output patterns. They are
-specs, not run against a live model; the repo-root `tests/test_routing_fixtures.py`
-validates they stay well-formed and route to real skills.
+`references/skills-monetization.md` — condensed AI-skills monetization knowledge bank (marketplaces, what sells, pricing) from the 2026-07-01 research dossier.

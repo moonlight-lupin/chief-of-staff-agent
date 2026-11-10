@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — research skills knowledge port (uncommitted work absorbed)
+
+deep-research 1.8.1 → **1.12.0**, entity-research 0.1.0 → **1.1.0**: ported the
+current deep-research engine (iterative loop moved to `references/step3-iterative-loop.md`,
+quote anchoring + `check-quote`, search `estimate-budget`, report revision via
+`map-citations`, search/fetch fallback page, firmware-status recipe, referent
+disambiguation checks, provider benchmark page) and the entity-research Exa
+organisation-evidence option (`references/organisation-evidence-exa.md`).
+Provider references generified (no operator-specific names). The plugin-owned
+contracts are unchanged: research run directories stay under
+`<project_root>/research/`, the Apache-2.0/MIT licence split and the
+`mm`-not-million scoring doc fix survive, and all gate-contract tests pass (121).
+
+
 ## v0.7.10 — Composio Google mail.list_folders + contacts refusal copy
 
 Wire Composio Google-family **`mail.list_folders`** as an alias over
