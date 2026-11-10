@@ -730,7 +730,8 @@ def _jev_prescreen_report(run_dir: Path) -> dict:
                     "reason": "Jev not configured in this instance "
                               "(no TYPESAFE_KEY) — deterministic gate runs alone",
                     "claims": 0}
-        import subprocess, sys as _sys
+        import subprocess
+        import sys as _sys
         r = subprocess.run(
             [_sys.executable, str(prescreen_path),
              "--dir", str(run_dir), "--conf-floor", "0.60"],
