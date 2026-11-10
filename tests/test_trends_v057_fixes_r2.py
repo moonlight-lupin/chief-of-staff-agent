@@ -375,15 +375,24 @@ def test_flatten_realistic_payload_prefixed_and_coerced(tmp_path):
 
 
 def test_series_sorts_by_parsed_timestamp(tmp_path):
+    from datetime import datetime, timezone, timedelta as _td
+
     from state_db import StateDB
     from trend_history import TREND_KV_STORE, TREND_ROOT_KEY, get_series
 
     root = tmp_path / "proj"
     root.mkdir()
     config = cfg(root)
+    # Relative timestamps: get_series cuts off at now - days, so fixed dates
+    # drift out of the 30-day window and the test would time-bomb. Keep the
+    # mixed timezone offsets — the property under test is offset-aware sorting.
+    now = datetime.now(timezone.utc)
+    tz_plus2 = timezone(_td(hours=2))
+    ts_earlier = (now - _td(hours=2)).astimezone(tz_plus2).isoformat()
+    ts_later = (now - _td(hours=1)).isoformat()
     StateDB(config).set_kv(TREND_KV_STORE, {TREND_ROOT_KEY: [
-        {"ts": "2026-09-19T01:00:00+02:00", "kind": "daily", "counters": {"needs_attention": 1}},
-        {"ts": "2026-09-19T00:30:00+00:00", "kind": "daily", "counters": {"needs_attention": 2}},
+        {"ts": ts_earlier, "kind": "daily", "counters": {"needs_attention": 1}},
+        {"ts": ts_later, "kind": "daily", "counters": {"needs_attention": 2}},
     ]})
     series = get_series(config, "needs_attention", days=30)
     assert [p["value"] for p in series] == [1, 2]
