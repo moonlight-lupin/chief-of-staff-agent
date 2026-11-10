@@ -1,11 +1,10 @@
 ---
 name: entity-research
 description: "Use when the user says \"research this company / person\", \"background check on X\", \"any negative press / adverse media on X\", \"who owns / who runs X\", \"is X sanctioned / sanctions check on X\", \"vet this vendor / counterparty / candidate / partner\", or \"entity search\" — deep background research on an entity (a company OR a person) into a cited dossier: identity & background, ownership & key management, adverse / negative media, public sanctions-list name-match signals, PEP indications from public research, and litigation / regulatory history. It RESEARCHES and COMPILES with sources; it is NOT a compliance/AML/CDD determination and NOT a sanctions or PEP clearance — a sanctions-list or PEP signal is a SIGNAL to escalate to a human compliance function, never a \"clear\" or \"block\". Research a person only for a legitimate purpose and only from public information."
+version: 1.1.0
+author: moonlight-lupin
 license: Apache-2.0
-metadata:
-  version: 1.1.0
-  author: moonlight-lupin
-  platforms: [linux, macos, windows]
+platforms: [linux, macos, windows]
 ---
 
 # Entity Research
