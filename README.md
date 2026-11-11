@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.7.11
+> **Status:** v0.7.12
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -85,7 +85,7 @@ The daily loop is deliberately **read-only** — it reports and recommends, it n
 | **Research** | Cited deep research and entity due-diligence dossiers |
 | **Reliability** | Readiness verdicts, self-diagnosis, redacted support bundles, backups, audit logs |
 
-Twenty skills across command centre, planning, meetings and email, documents, commercial operations, knowledge, workflows, travel, and resilience — nineteen register on a default install, with `esign-connector` appearing once DocuSeal is configured. Start with five (briefing, review queue, pipeline, bookkeeper, notes) and grow from there.
+Twenty-one skills across command centre, planning, meetings and email, documents, commercial operations, knowledge, workflows, travel, and resilience — twenty register on a default install, with `esign-connector` appearing once DocuSeal is configured. Start with five (briefing, review queue, pipeline, bookkeeper, notes) and grow from there.
 
 ---
 

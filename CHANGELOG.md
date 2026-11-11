@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.7.12 — Research skills 1.13.0 sync + task-brief skill
+
+deep-research 1.12.0 → **1.13.0** and entity-research 1.1.0 → **1.2.0**
+(pulled from the morning `agent-skills` PRs, three-way-merged so the
+plugin-owned contracts survive), plus a new **task-brief 1.3.0**
+skill (Done-when tests + reusable-prompt mode), which deep-research now
+takes as plan input when confirmed.
+
+### Changes
+
+- `deep-research` 1.13.0: new `references/evidence-hygiene.md` (source
+  families — count one story once, `[VERIFIED]` needs two source *families*;
+  shelf life for time-sensitive facts; money-figure bases; user-supplied
+  reports) and `references/comparison-mode-and-recipes.md` (items × fields
+  grid with a user-approved outline); `step3-iterative-loop.md` gains the
+  near-duplicate-query skip and typed standing instructions
+  (`focus` / `exclude` / `prioritise` / `stop`) that persist across rounds;
+  Done-when tests + load-bearing-claims planning in Step 1; Step 0 carries a
+  confirmed task brief straight into the plan.
+- `entity-research` 1.2.0: gap-analysis pass wording and Weigh-step detail.
+- `task-brief` 1.3.0: new skill — goal with 2–5 checkable "done when" tests,
+  constraints injected not asked, tooling routing, reusable-prompt mode.
+- Plugin contracts unchanged: research run directories still live under
+  `<project_root>/research/`, stats still report `provider: [mcp/built-in]`,
+  Apache-2.0 (entity) / MIT (deep-research, task-brief) licence split intact,
+  search/fetch worded for the MCP tier.
+
 ## v0.7.11 — Research skills knowledge port (deep-research 1.12.0, entity-research 1.1.0)
 
 deep-research 1.8.1 → **1.12.0**, entity-research 0.1.0 → **1.1.0**: ported the
