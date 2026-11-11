@@ -37,13 +37,16 @@ Generate queries that target the **gaps**, not repeat what's already found.
 
 **Mini search plan per query** (adapted from upstream `search-plan.ts`): plan a search task, not a bag of keywords. Each generated query carries:
 - **one angle** — a concise domain-keyword query, an exact identifier, or a natural-language question. Preserve error messages, standards, paper titles, model numbers, and technical terminology verbatim in the query text; never force them into a conversational sentence or truncate by word count. Avoid unrelated keyword piles ("official blog OR paper").
-- **intent** — the search provider's `intent` vertical (when the provider supports one): `web` (default), `news`, `paper`, `entity`, `code`. Broad AI news gets complementary discovery queries across models, products, and industry — never silently narrowed to LLM papers.
-- **time window + domain scope** — recorded in the research state and expressed in the query text (the configured search tier has no structural SERP filters). Never invent a domain or publisher whitelist; scope domains only when the user requested it or the domain is already verified in earlier sources. **Publication metadata is a hint, not proof** — a search result's date never becomes the claim's date; verify event dates in source text (§3c).
+- **intent** — the donsetch `web_search` `intent` vertical: `web` (default), `news`, `paper`, `entity`, `code`. Broad AI news gets complementary discovery queries across models, products, and industry — never silently narrowed to LLM papers.
+- **time window + domain scope** — recorded in the research state and expressed in the query text (the donsetch tier has no structural SERP filters). Never invent a domain or publisher whitelist; scope domains only when the user requested it or the domain is already verified in earlier sources. **Publication metadata is a hint, not proof** — a search result's date never becomes the claim's date; verify event dates in source text (§3c).
 - **source preference** — `any` or `primary`; `primary` steers §3c toward official docs, filings, papers. It is an extraction preference, never a keyword or a fabricated tier.
 
 **Frozen constraints on rewrite:** the time window and domain scope stay fixed across rounds and rewrites — a weak result is not permission to broaden them. On empty or thin results, only the query text changes:
 - 1st empty → broader query or synonyms. 2nd consecutive → fundamentally different angle/domain/language. 3rd → move on; document as a gap rather than burning rounds on dead-end queries.
 - **Identical-rewrite stop** — if the refined query equals the previous one modulo whitespace, stop refining that angle: move to the gap list, don't re-run the same search.
+- **Near-duplicate skip** — before running any query, compare it with every query already run this session; one that differs only in word order, a synonym or a filler word is the same search — change the angle or drop it.
+
+**Standing instructions from the user:** when the user interjects mid-run ("leave out X", "focus on 2025 deals", "stop on pricing"), record it in the research state as a typed rule — `focus`, `exclude`, `prioritise` or `stop` — apply it from the next round, and keep applying it until the user lifts it (it never lapses because a round "covered" it). List the rules in the stats block.
 
 **Round-outcome classification** (adapted from upstream `search-assessment.ts`): after each round's extraction settles, classify the round outcome and let the reason pick the next move — the taxonomy replaces ad-hoc retry judgement with a bounded, reason-specific response. Classify exactly one of:
 
@@ -66,7 +69,7 @@ Relevance itself stays agent-judged — the taxonomy assigns each reason a singl
 
 ### 3b — Search and Fetch
 
-**Provider preference (optional, user-set):** On request, use the configured MCP search/fetch tools, falling back to `web_search`/`web_extract` if unavailable. Never abort over a provider preference. Record the provider used in the run manifest and stats block.
+**Provider preference (optional, user-set):** On request, use the donsetch MCP search/fetch tools, falling back to `web_search`/`web_extract` if unavailable. Never abort over a provider preference. Record the provider used in the run manifest and stats block.
 ```
 web_search(query="...", limit=10)
 ```
@@ -76,7 +79,7 @@ Run one `web_search` per query (plus `query_variants` when two distinct angles s
 - **Triage before fetching.** Run §3c's quality filter on snippets and titles; a fetched page is a budgeted event, not a default. Fetch full page text only when a **concrete missing question** exists that the snippet cannot answer (missing date, statistic, named entity, or evidence for a targeted sub-question), or when the source is a primary-tier candidate for a key claim. Do not reject a promising candidate solely because its snippet lacks a date — that is exactly the fetch signal.
 - **Budget the fetches.** ≤2 full-page fetches per round; run-wide ≤4 for moderate, ≤6 for complex reports (simple reports rarely need any). Track URLs already fetched — never re-fetch across rounds. Count page fetches in the stats block.
 - **Keep evidence source types separate.** A snippet supports what it *states* — at most `[SOURCED]`, never independently corroborated. The fetched page text is the verbatim-quote substrate for §3c anchoring: a claim whose snippet was thin must be re-anchored to the page text before its snippet goes in the store.
-- **Reading tools.** An MCP reader's modes (`scan`/`read`/`deep` budgets, `focus`/`section` for targeted reading, `toc` for structure) are the primary reading path; built-in `web_extract` (head+tail with an on-disk full-text path) is the fallback.
+- **Reading tools.** donsetch `web_fetch` modes are the primary reading path (`scan`/`read`/`deep` budgets, `focus`/`section` for targeted reading, `toc` for structure); built-in `web_extract` (head+tail with an on-disk full-text path) is the fallback.
 - **Other providers, for a named reason only.** When the reading tools cannot read a page (a PDF, a script-built page), a key quote keeps failing `check-quote`, or search stays thin on the 2nd refinement rung or cannot target the subject's country or language, step up to whichever page reader or search provider the user has connected — any vendor, judged by what it returns. Paid tools are quoted once per run and approved first; fallback reads count against the fetch budget; cite the page, never the tool. Procedure: `references/search-and-fetch-fallbacks.md`.
 
 ```
@@ -95,6 +98,13 @@ Before extracting content, **discard low-quality results**:
 - **Irrelevant**: keyword overlap without topical relevance. Use word-boundary matching for topic terms — "port" should not match "transport" or "support"
 - **Duplicate URLs**: already fetched in a previous round
 - **Non-text**: video-only pages, image boards, login walls with no preview
+
+Then, while extracting (rules: `references/evidence-hygiene.md`):
+
+- **Count one story once.** Pages repeating one press release, filing, report or syndicated article are one **source family**: cite the original and note `[N] = family of [M]` in the research state. `[VERIFIED]` needs two families, not two sites.
+- **Date every time-sensitive fact** with its as-of period and flag it as stale past its shelf life; undated figures are flagged as undated, never used as current.
+- **State the basis of every money figure** — offer vs completion, gross vs net, headline vs effective, 100% vs share — and reconcile conflicting amounts by basis before choosing.
+- **Reports the user supplies** are read locally and cited as "supplied by user".
 
 For each quality source, extract **goal-relevant facts**:
 - What facts in this source address a sub-question from the research plan?
@@ -144,7 +154,7 @@ After extracting from all sources in the round, integrate findings into the **cu
 
 **Token budget awareness:** Track approximate context consumption across rounds. If the cumulative research state + extracted content is approaching the model's context window or a self-imposed budget (suggested: ~50K tokens for moderate, ~100K for complex), prioritize synthesis and stopping over gathering more sources. When the budget is tight, summarize earlier rounds' findings more aggressively rather than carrying full extracts forward.
 
-**Passage selection over summarization** (adapted from upstream `source-context.ts`): when a must-keep source is huge, do not summarize its evidence away — select the **original passages** scoring highest on query-term overlap, keep them verbatim (they stay anchor-eligible for §3c), and mark elided spans. A generated paraphrase cannot later pass `check-quote`; a verbatim passage can. An MCP reader with `focus`/`section` modes does this natively; with built-in `web_extract`, re-read the on-disk full-text path around term-matching sections instead of trusting the truncated head+tail window.
+**Passage selection over summarization** (adapted from upstream `source-context.ts`): when a must-keep source is huge, do not summarize its evidence away — select the **original passages** scoring highest on query-term overlap, keep them verbatim (they stay anchor-eligible for §3c), and mark elided spans. A generated paraphrase cannot later pass `check-quote`; a verbatim passage can. donsetch `web_fetch focus`/`section` does this natively; with built-in `web_extract`, re-read the on-disk full-text path around term-matching sections instead of trusting the truncated head+tail window.
 
 **Rough estimation heuristic:** You can't count tokens precisely, but you can estimate: each `web_extract` returning ~5K characters contributes ~1.5K tokens; the research state after N rounds with 3-5 sources per round is roughly N × 8-12K tokens. If you're on round 3+ of a complex topic and the last `web_extract` returned >10K characters, you're likely past 50K — summarize aggressively and head toward synthesis. When in doubt, treat any round-3+ complex research as budget-tight.
 
@@ -162,6 +172,9 @@ Findings: [...]
 
 ### Gaps identified:
 - [what's still missing for round N+1 to target]
+
+### Standing instructions:
+- [focus | exclude | prioritise | stop]: [the user's rule, as given] (since round N)
 ```
 
 Synthesis rules:
