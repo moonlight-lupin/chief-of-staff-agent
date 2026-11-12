@@ -303,3 +303,20 @@ def test_the_new_name_is_registered_on_the_next_load(monkeypatch):
     ctx = Ctx()
     plugin.register(ctx)
     assert {"bea", "cos"} == set(ctx.commands)
+
+
+def test_large_json_output_is_parsed_whole(monkeypatch):
+    """Long paths (CI's TMPDIR) push capabilities past any byte cap: never cut JSON."""
+    big = {"paths": ["/very/long/path/" + "x" * 200 for _ in range(200)]}
+    monkeypatch.setattr(hs.subprocess, "run",
+                        lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout=json.dumps(big), stderr=""))
+    out = json.loads(hs.tool_handler("cos_capabilities")({}))
+    assert out["ok"] is True and out["result"] == big
+
+
+def test_large_text_output_is_capped(monkeypatch):
+    monkeypatch.setattr(hs.subprocess, "run",
+                        lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="line\n" * 20000, stderr=""))
+    out = json.loads(hs.tool_handler("cos_review_queue")({}))
+    assert out["ok"] is True and len(out["result"]) <= hs._MAX_TEXT + 200
+    assert "truncated" in out["result"]

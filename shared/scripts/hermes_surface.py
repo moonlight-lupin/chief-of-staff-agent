@@ -40,7 +40,7 @@ TOOLSET = "chief-of-staff"
 DEFAULT_TIMEOUT = 180
 OWNER_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 _ACTION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}")
-_MAX_OUTPUT = 12_000
+_MAX_TEXT = 12_000          # cap for plain-text output only; JSON is never cut
 
 
 # ------------------------------------------------------------ running scripts
@@ -56,7 +56,13 @@ def run_script(script: str, args: list[str], timeout: int = DEFAULT_TIMEOUT) -> 
     proc = subprocess.run([sys.executable, str(SCRIPTS / script), *args], capture_output=True, text=True,
                           timeout=timeout, env=env, cwd=str(PLUGIN_ROOT), check=False)
     return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
-            "stdout": (proc.stdout or "")[:_MAX_OUTPUT], "stderr": (proc.stderr or "")[-2000:]}
+            "stdout": proc.stdout or "", "stderr": (proc.stderr or "")[-2000:]}
+
+
+def _cap(text: str) -> str:
+    if len(text) <= _MAX_TEXT:
+        return text
+    return text[:_MAX_TEXT] + f"\n... [truncated {len(text) - _MAX_TEXT} characters]"
 
 
 def _valid_id(value: Any) -> str | None:
@@ -144,7 +150,7 @@ def tool_handler(name: str) -> Callable[..., str]:
             try:
                 result: Any = json.loads(run["stdout"])
             except ValueError:
-                result = run["stdout"]
+                result = _cap(run["stdout"])
             out = {"ok": run["ok"], "result": result}
             if not run["ok"]:
                 out["error"] = run["stderr"].strip() or f"exit code {run['exit_code']}"
@@ -213,7 +219,7 @@ def _approver(platform: str, source: Any, config: Mapping[str, Any]) -> tuple[st
 
 
 def _text(run: Mapping[str, Any]) -> str:
-    body = (run.get("stdout") or "").strip()
+    body = _cap((run.get("stdout") or "").strip())
     if run.get("ok"):
         return body or "Done."
     return (body + "\n" if body else "") + (run.get("stderr") or "").strip() or f"Failed (exit {run.get('exit_code')})."
