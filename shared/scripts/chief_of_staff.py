@@ -1695,6 +1695,11 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
         print(f"  Live-verified             {'YES' if report['provider_verified'] else 'NO'}")
         if report["provider_verification_note"]:
             print(f"    ! {report['provider_verification_note']}")
+        counts = (report.get("verification") or {}).get("counts") or {}
+        if counts:
+            print(f"  Verification              {counts.get('live', 0)} live, "
+                  f"{counts.get('catalog', 0)} catalog, {counts.get('mocked', 0)} mocked "
+                  f"(verification_matrix.py --provider {report['verification']['provider']})")
         print(f"  Supported actions         {len(report['supported'])}")
         print(f"  Unsupported actions       {len(report['unsupported'])}")
         for action, reason in sorted(report["unsupported_reasons"].items()):

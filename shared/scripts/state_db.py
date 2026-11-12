@@ -50,6 +50,13 @@ KV_ROOT_KEY = "__root__"
 EXPIRY_HOURS = 72
 APPROVED_EXPIRY_HOURS = 24
 MAX_RETRIES = 3
+# Actions that are not safe to repeat: a failure may have been a timeout after
+# the provider acted, so a retry could send or create twice. Their failure is
+# final — a retry is a new action and a new approval.
+NON_IDEMPOTENT_ACTIONS = frozenset({
+    "gmail.send", "mail.send", "gmail.draft", "mail.draft",
+    "calendar.create", "drive.upload", "files.upload", "contacts.create",
+})
 REPLAY_TTL_SECONDS = 3600 * 24
 PROCESSING_LEASE_SECONDS = 300
 MAX_BACKUPS = 20
@@ -1165,8 +1172,10 @@ class StateDB:
                 extra["last_error"] = fields["last_error"]
             elif "error" in fields:
                 extra["last_error"] = fields["error"]
-            if retry_count >= MAX_RETRIES or self._signing_enforced():
-                # Signed stores: a failure is final; a retry is a new signed approval.
+            if (retry_count >= MAX_RETRIES or self._signing_enforced()
+                    or current.get("type") in NON_IDEMPOTENT_ACTIONS):
+                # Final: signed stores (a retry is a new signed approval) and
+                # actions that may already have happened (never silently re-run).
                 extra["failed_at"] = now
                 new_state = "failed"
             else:

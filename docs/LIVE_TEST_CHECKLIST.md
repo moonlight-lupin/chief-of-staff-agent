@@ -3,6 +3,22 @@
 Two providers are supported: **Composio MCP** and **Google service-account**.
 Test the active provider configured in `company.yaml` under `integrations.workspace.provider`.
 
+## Recording evidence (any provider)
+
+A live run counts only when it leaves evidence. Add `--record-evidence` to
+the verify command:
+
+```bash
+.venv/bin/python shared/scripts/connect_workspace.py --verify-writes --record-evidence
+.venv/bin/python shared/scripts/verification_matrix.py --candidates <printed evidence file>
+```
+
+The evidence file holds check statuses, the date and the plugin version, and
+no message text. A maintainer adds the listed candidates to
+`verification_matrix.EVIDENCE` in a reviewed change. `capabilities` then
+reports them as `live`. Mail sending is never exercised by the harness, so it
+needs a separate, deliberate test.
+
 ## Prerequisites (both providers)
 
 - [ ] `company.yaml` exists and passes `python shared/scripts/doctor.py`

@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Live-integration verification is evidence, not a comment
+
+- **New `shared/scripts/verification_matrix.py`.** Every supported action has
+  one of four levels:
+  - `live`: executed against a real account, with a date and evidence;
+  - `catalog`: listed in the vendor's tool catalog, never executed;
+  - `mocked`: unit tests only;
+  - `unverified`.
+
+  The dated "execution-verified" comments in the capability table became
+  data. A `live` entry without a date or evidence fails the test suite.
+- **`capabilities`** reports the matrix. `provider_verified` is now derived
+  from it rather than from a hand-kept list, and `--summary` prints a
+  "Verification: N live, N catalog, N mocked" line. Native `m365` remains 0
+  live.
+- **Opt-in live harness.**
+  - Run `connect_workspace.py --verify[-writes] --record-evidence`. It writes a
+    dated evidence file of check statuses (no message text) to
+    `<project_root>/verify/evidence/`.
+  - Then run `verification_matrix.py --candidates <file>`. It lists what that
+    run could promote to `live`.
+  - Promotion is a reviewed code change. Nothing edits the matrix on its own.
+- **No silent retry of a write that may have happened.**
+  - A failed send, draft, calendar create, upload or contact create is now
+    final, even on unsigned stores. It used to return to `approved`, so an
+    agent could claim it again and send twice after a timeout.
+  - A retry is a new action and a new approval.
+  - Idempotent actions (archive, trash, tag) keep the manual retry.
+  - New tests pin the existing transport contract: Composio MCP tool calls
+    are never retried on a 5xx or a timeout, and native Graph never retries
+    POST.
+- Corrected one claim: Composio Drive `files.download` was marked
+  execution-verified, but the recorded 2026-07-16 run covered trash only. It is
+  now `mocked`.
+
 ### Untrusted content is data, not authority
 
 - **New `shared/scripts/payload_policy.py`.** `drive.download` writes only

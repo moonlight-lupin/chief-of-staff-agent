@@ -170,7 +170,7 @@ class TestFailedActionRetryUX:
     def test_retry_increments_count(self, temp_project):
         from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
         config, project = temp_project
-        action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
+        action = create_pending_action(config, "gmail.archive", "google_api", "m1", {"message_id": "m1"})
         approve_pending_action(config, action["id"])
         # First attempt
         mark_executing(config, action["id"])
@@ -184,7 +184,7 @@ class TestFailedActionRetryUX:
     def test_retry_then_success(self, temp_project):
         from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, mark_executed, get_pending_action
         config, project = temp_project
-        action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
+        action = create_pending_action(config, "gmail.archive", "google_api", "m1", {"message_id": "m1"})
         approve_pending_action(config, action["id"])
         mark_executing(config, action["id"])
         mark_failed(config, action["id"], "timeout")
@@ -195,7 +195,8 @@ class TestFailedActionRetryUX:
         assert loaded["retry_count"] == 1
 
     def test_send_email_execute_handles_exception(self, temp_project, auto_approve):
-        """When provider raises exception, mark_failed is called and state is approved."""
+        """When the provider raises, the send is marked failed — and stays failed:
+        it may have gone out, so a retry is a new action and a new approval."""
         config, project = temp_project
         mock_client = MagicMock()
         mock_client.provider_name = "google_api"
@@ -211,7 +212,7 @@ class TestFailedActionRetryUX:
             rc = send_email.main(["execute", "--action-id", action["id"]])
         assert rc == 1
         loaded = get_pending_action(config, action["id"])
-        assert loaded["state"] == "approved"  # back to approved for retry
+        assert loaded["state"] == "failed"
         assert "Network error" in loaded.get("last_error", "")
 
     def test_delete_execute_handles_exception(self, temp_project, auto_approve):
