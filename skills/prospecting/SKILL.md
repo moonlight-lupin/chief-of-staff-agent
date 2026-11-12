@@ -101,7 +101,9 @@ sized to the estimate, then stop for approval (`review_queue.py preview`, then
 
 - **Exit 0:** call `monid_run`, poll if async, then record what it cost:
   `spend.py record --reservation <id> --actual <cost> --run-id <runId>`. On
-  failure, record `--status failure` with the amount actually charged.
+  failure, record `--status failure` with the amount actually charged. The
+  `--run-id` is required in practice: `ingest` refuses Monid data whose
+  `run_id` has no recorded spend.
 - **Exit 3, or any refusal:** do **not** call. Tell the user why. Propose a new
   envelope if they want to continue.
 - Broken or useless results: `monid_dispute`.

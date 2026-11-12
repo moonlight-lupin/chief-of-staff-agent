@@ -42,7 +42,8 @@ def _spend_section(config: Any) -> dict[str, Any]:
             "active_envelopes": [e for e in status(config) if e["state"] == "approved"],
             "month_to_date": month_to_date(config),
             "rule": ("Paid calls need an approved spend envelope: reserve before each call "
-                     "(spend.py reserve), record after. Refusals go back to the user."),
+                     "(spend.py reserve), record after. Refusals go back to the user. Budgets are a "
+                     "local estimate from recorded costs, not the provider's invoice."),
         }
     except Exception:
         return {}

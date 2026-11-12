@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Spend envelopes: overruns, currency, recovery, provenance
+
+- **A month-to-date total over `spend.<provider>.monthly_cap`** is now
+  surfaced by `record` (`over_monthly_cap`, audited), `status` and the daily
+  briefing. Previously it was recorded without any signal.
+- **One provider's envelopes cannot mix currencies,** even when
+  `spend.currency` is unset. `reserve --currency` refuses a mismatch with
+  `currency_mismatch`.
+- **New `spend.py stale`** lists open reservations older than a day, each with
+  its envelope, estimate and age, and the two honest ways to close it: `record`
+  if the call ran, `release` if it did not. `close` points to it.
+- **Prospecting `ingest` validates paid provenance.** Data from a provider
+  with a `spend:` section needs a *recorded* call with that `run_id` on an
+  approved envelope of this company. An invented, borrowed or other-company
+  `envelope_id` is refused, and the envelope id is filled in from the ledger.
+- **Budgets are labelled a local estimate** in `status`, the briefing,
+  `capabilities` and `docs/MULTI_COMPANY.md`.
+
 ### Live-integration verification is evidence, not a comment
 
 - **New `shared/scripts/verification_matrix.py`.** Every supported action has
