@@ -1,0 +1,18 @@
+# Changes to these paths need the owner's review (enable "Require review from
+# Code Owners" in branch protection to enforce it). They hold the approval,
+# signing, execution and spend boundaries, and the supply chain.
+*                                           @moonlight-lupin
+/.github/                                   @moonlight-lupin
+/requirements.txt                           @moonlight-lupin
+/pyproject.toml                             @moonlight-lupin
+/plugin.yaml                                @moonlight-lupin
+/hooks.py                                   @moonlight-lupin
+/shared/scripts/approval_signing.py         @moonlight-lupin
+/shared/scripts/workspace_guardrails.py     @moonlight-lupin
+/shared/scripts/state_db.py                 @moonlight-lupin
+/shared/scripts/payload_policy.py           @moonlight-lupin
+/shared/scripts/company_registry.py         @moonlight-lupin
+/shared/scripts/hermes_surface.py           @moonlight-lupin
+/shared/scripts/spend.py                    @moonlight-lupin
+/shared/scripts/verification_matrix.py      @moonlight-lupin
+/skills/document-preparer/scripts/          @moonlight-lupin

@@ -74,3 +74,28 @@ Out of scope:
   a workspace, that is a reportable bug.
 - **Support bundles are redacted by construction**, but skim one before
   attaching it to a public issue.
+
+## Supply chain
+
+`tests/test_supply_chain.py` enforces these in CI:
+
+- **GitHub Actions** are pinned to full commit SHAs, with the version in a
+  comment.
+- **Workflows** run with a read-only token (`permissions: contents: read`).
+  Checkout does not keep the token, and `pull_request_target` is not used.
+- **Dependencies** in `requirements.txt` and `pyproject.toml` are identical
+  and bounded above. A `security` CI job audits them with a pinned
+  `pip-audit`. Dependabot proposes weekly updates for pip and Actions, and each
+  update is a reviewed PR with CI.
+- **No secret, key, credential file, `.env`, state database or user data**
+  (pipeline, invoices, expenses, todos, wiki) may be tracked. The scan looks
+  for real key material, so fake fixtures in tests pass.
+- **Every manifest** (`plugin.yaml`, `pyproject.toml`, `.claude-plugin/*.json`,
+  `chief_of_staff.py`) carries the release version, and `CHANGELOG.md` names
+  it.
+- **`.github/CODEOWNERS`** names the owner for the approval, signing,
+  execution and spend boundaries and for CI. Some protections are repository
+  settings, which a file cannot enforce. The maintainer should turn on:
+  - "Require review from Code Owners";
+  - required status checks (`test (3.11)`, `test (3.12)`, `security`);
+  - GitHub secret scanning with push protection.
