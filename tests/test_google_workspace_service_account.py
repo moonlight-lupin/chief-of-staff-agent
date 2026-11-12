@@ -41,7 +41,7 @@ def make_config(account_alias="acme-advisory", delegate="alicia@acme-advisory.ex
             "account_alias": account_alias,
         },
         "integrations": {"workspace": {"provider": "google_api"}},
-        "paths": {"project_root": "/tmp/test-google", "upload_roots": [__import__("tempfile").gettempdir()]},
+        "paths": {"project_root": "/tmp/test-google", "upload_roots": ["/tmp", __import__("tempfile").gettempdir()]},
     }
 
 
