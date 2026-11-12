@@ -18,6 +18,8 @@ HIGH_RISK_TYPES: set[str] = {
     "bookkeeper.invoice.delete",
     "pipeline.deal.delete",
     "notion.page.archive",
+    # Changes the structure of the operator's database.
+    "notion.db.add_property",
 }
 
 MEDIUM_RISK_TYPES: set[str] = {
@@ -35,6 +37,8 @@ MEDIUM_RISK_TYPES: set[str] = {
     "notion.page.create",
     "notion.page.update",
     "notion.pull",
+    "notion.link",
+    "notion.resolve",
 }
 
 LOW_RISK_TYPES: set[str] = {

@@ -272,6 +272,16 @@ def _expected_effect(action_type: str, target: str, payload: Mapping[str, Any]) 
     if action_type in {"notion.page.create", "notion.page.update"}:
         verb = "Create" if action_type == "notion.page.create" else "Replace the content of"
         return f"{verb} Notion page {payload.get('title')!r} from wiki/{payload.get('source_path')}."
+    if action_type == "notion.db.add_property":
+        return (f"Add a {payload.get('type')} column '{payload.get('property')}' to Notion database "
+                f"{payload.get('database_id')} ({payload.get('domain')}). Existing rows are not changed.")
+    if action_type == "notion.link":
+        return (f"Record {len(payload.get('matches') or [])} match(es) between existing Notion "
+                f"{payload.get('domain')} rows and plugin records. No data changes; later syncs use the links.")
+    if action_type == "notion.resolve":
+        side = "plugin's values to Notion" if payload.get("keep") == "store" else "Notion's values into the plugin"
+        return (f"Settle the conflict on {payload.get('record_id')}: the next sync proposes copying the "
+                f"{side} (still needs approval).")
     if action_type == "notion.pull":
         fields = ", ".join(sorted((payload.get("changes") or {}).keys()))
         if payload.get("op") == "create":
@@ -302,6 +312,9 @@ def _reversal_hint(action_type: str) -> str:
         "notion.page.update": "Restore the prior version from the Notion page history.",
         "notion.page.archive": "Restore the page from Notion trash while retention allows.",
         "notion.pull": "Edit the record back in the plugin; the store audit log holds the prior values.",
+        "notion.db.add_property": "Delete the column in Notion (its values are lost with it).",
+        "notion.link": "Links only affect later syncs; re-link after removing them from the mirror.",
+        "notion.resolve": "Nothing is copied until the follow-up sync action is approved; dismiss that instead.",
     }
     return hints.get(action_type, "Review provider audit logs and undo manually if supported.")
 

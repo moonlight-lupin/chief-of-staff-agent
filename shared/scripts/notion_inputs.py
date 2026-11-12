@@ -51,12 +51,6 @@ def _parse_day(value: Any) -> date | None:
         return None
 
 
-def _prop(row: Mapping[str, Any], name: str) -> Any:
-    value = (row.get("properties") or {}).get(name)
-    if isinstance(value, str):
-        value = value.strip() or None
-    return value
-
 
 def _recent_pages(pages: Iterable[Mapping[str, Any]], since: datetime) -> list[dict[str, Any]]:
     recent = [p for p in pages if (_parse(p.get("last_edited_time")) or since - timedelta(1)) >= since]
@@ -86,6 +80,18 @@ def _mentions(block: Mapping[str, Any], since: datetime) -> list[dict[str, Any]]
     return out
 
 
+def _values(config: Any, domain: str, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Row values under the plugin's column names, honouring notion.columns."""
+    from notion_mirror import PROPERTY_MAP, NotionConfigError, row_values
+
+    if domain not in PROPERTY_MAP:
+        return dict(row.get("properties") or {})
+    try:
+        return row_values(config, domain, row)
+    except NotionConfigError:
+        return dict(row.get("properties") or {})
+
+
 def _notion_only_tasks(config: Any, rows: list[Mapping[str, Any]], today: date) -> list[dict[str, Any]]:
     from notion_mirror import KEY_PROP, load_mirror
 
@@ -93,14 +99,15 @@ def _notion_only_tasks(config: Any, rows: list[Mapping[str, Any]], today: date) 
     soon = today + timedelta(days=1)
     tasks: list[dict[str, Any]] = []
     for row in rows:
-        if _prop(row, KEY_PROP) or row.get("page_id") in mirrored_pages:
+        vals = _values(config, "todos", row)
+        if vals.get(KEY_PROP) or row.get("page_id") in mirrored_pages:
             continue  # already in the store; the store's own todos cover it
-        if str(_prop(row, "Status") or "open").lower() in DONE_STATUSES:
+        if str(vals.get("Status") or "open").lower() in DONE_STATUSES:
             continue
-        due = _parse_day(_prop(row, "Due"))
+        due = _parse_day(vals.get("Due"))
         if due is None or due > soon:
             continue
-        tasks.append({"title": _prop(row, "Name") or "(untitled)", "due": due.isoformat(),
+        tasks.append({"title": vals.get("Name") or "(untitled)", "due": due.isoformat(),
                       "overdue": due < today, "page_id": row.get("page_id")})
     tasks.sort(key=lambda t: t["due"])
     return tasks
@@ -251,8 +258,9 @@ def meeting_context(config: Any, block: Mapping[str, Any] | None, attendees: Ite
                         "last_edited_time": page.get("last_edited_time"), "matched": matched})
     for domain, rows in (block.get("databases") or {}).items():
         for row in rows:
-            name = _prop(row, "Name")
-            matched = reasons(name, _prop(row, "Contact"), _prop(row, "Email"))
+            vals = _values(config, domain, row)
+            name = vals.get("Name")
+            matched = reasons(name, vals.get("Contact"), vals.get("Email"))
             if matched:
                 out.append({"kind": f"{domain} row", "title": name or row.get("page_id"),
                             "page_id": row.get("page_id"), "last_edited_time": row.get("last_edited_time"),

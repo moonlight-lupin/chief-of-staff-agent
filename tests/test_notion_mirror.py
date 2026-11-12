@@ -56,12 +56,28 @@ def _config(tmp_path: Path, notion: str = NOTION):
     return config
 
 
+FULL_SCHEMA = {
+    "pipeline": {"CoS ID": "rich_text", "Name": "title", "Stage": "status", "Status": "select",
+                 "Value": "number", "Currency": "select", "Contact": "rich_text", "Email": "email",
+                 "Last activity": "date"},
+    "todos": {"CoS ID": "rich_text", "Name": "title", "Status": "status", "Priority": "select",
+              "Due": "date", "Tags": "multi_select"},
+}
+
+
+def _checked(cfg):
+    """Record a passing schema check for each mapped database (sync requires one)."""
+    for domain in nm.notion_settings(cfg)["databases"]:
+        assert nm.check_schema(cfg, domain, FULL_SCHEMA[domain])["ready"]
+    return cfg
+
+
 @pytest.fixture
 def config(tmp_path):
     cfg = _config(tmp_path)
     state_db.save_store_atomic("pipeline", {"deals": [dict(DEAL)]}, config=cfg)
     state_db.save_store_atomic("todos", {"todos": [dict(TODO)]}, config=cfg)
-    return cfg
+    return _checked(cfg)
 
 
 def _row(page_id: str, props: dict, edited: str = "2026-11-10T00:00:00Z") -> dict:

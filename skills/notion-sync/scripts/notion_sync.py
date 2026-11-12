@@ -26,7 +26,10 @@ if str(SHARED_SCRIPTS) not in sys.path:
 
 from company_registry import RegistryError, apply_company_flag  # noqa: E402
 from config_loader import load_config  # noqa: E402
-from notion_mirror import PROPERTY_MAP, NotionConfigError, plan_sync, queue_plan  # noqa: E402
+from notion_mirror import (  # noqa: E402
+    PROPERTY_MAP, NotionConfigError, check_schema, plan_link, plan_sync, queue_add_columns, queue_link,
+    queue_plan, queue_resolve,
+)
 
 
 def _summary(plan: dict, queued: dict | None) -> str:
@@ -60,6 +63,24 @@ def main(argv: list[str] | None = None) -> int:
     plan_p.add_argument("--domain", choices=sorted(PROPERTY_MAP), help="Overrides the envelope's domain")
     plan_p.add_argument("--queue", action="store_true", help="Create pending actions for approval")
     plan_p.add_argument("--summary", action="store_true", help="Human-readable output")
+
+    check_p = sub.add_parser("check", help="Check a database's columns against what sync needs")
+    check_p.add_argument("--input", required=True,
+                         help='JSON: {"domain": ..., "properties": {"<column name>": "<notion type>"}}')
+    check_p.add_argument("--domain", choices=sorted(PROPERTY_MAP))
+    check_p.add_argument("--add", action="append", default=[], metavar="COLUMN",
+                         help="Queue adding this missing column (e.g. 'CoS ID'); needs approval")
+
+    link_p = sub.add_parser("link", help="Match an existing database's rows to plugin records (once)")
+    link_p.add_argument("--input", required=True, help="Rows envelope, as for plan")
+    link_p.add_argument("--domain", choices=sorted(PROPERTY_MAP))
+    link_p.add_argument("--queue", action="store_true", help="Queue the link for approval")
+
+    res_p = sub.add_parser("resolve", help="Resolve a conflict by choosing the side to keep")
+    res_p.add_argument("--input", required=True, help="Rows envelope, as for plan")
+    res_p.add_argument("--domain", choices=sorted(PROPERTY_MAP))
+    res_p.add_argument("--record", required=True, help="Record id in conflict")
+    res_p.add_argument("--keep", required=True, choices=["store", "notion"])
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
@@ -71,11 +92,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Cannot read envelope {args.input}: {exc}", file=sys.stderr)
         return 1
     domain = args.domain or envelope.get("domain")
-    rows = envelope.get("rows")
-    if domain not in PROPERTY_MAP or not isinstance(rows, list):
-        print("Envelope needs 'domain' (pipeline|todos) and a 'rows' list", file=sys.stderr)
+    if domain not in PROPERTY_MAP:
+        print("Envelope needs 'domain' (pipeline|todos)", file=sys.stderr)
         return 1
+
+    def emit(payload: dict) -> int:
+        print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+        return 0
+
     try:
+        if args.command == "check":
+            report = check_schema(config, domain, envelope.get("properties") or {})
+            queued = queue_add_columns(config, report, args.add) if args.add else []
+            return emit({"report": report,
+                         "queued": [{"id": a["id"], "type": a["type"], "summary": a["summary"]} for a in queued]})
+        rows = envelope.get("rows")
+        if not isinstance(rows, list):
+            print("Envelope needs a 'rows' list", file=sys.stderr)
+            return 1
+        if args.command == "link":
+            plan = plan_link(config, domain, rows)
+            action = queue_link(config, plan) if args.queue else None
+            return emit({"plan": plan, "queued": {"id": action["id"], "summary": action["summary"]} if action else None})
+        if args.command == "resolve":
+            action = queue_resolve(config, domain, args.record, args.keep, rows)
+            return emit({"queued": {"id": action["id"], "summary": action["summary"]}})
         plan = plan_sync(config, domain, rows)
     except NotionConfigError as exc:
         print(f"Notion sync refused: {exc}", file=sys.stderr)

@@ -239,14 +239,14 @@ def cmd_execute(args: argparse.Namespace) -> int:
         return 0
 
     # ─── Notion: pulls apply locally; writes to Notion are agent-path only ──
-    if action_type == "notion.pull":
-        from notion_mirror import execute_pull
-        result = execute_pull(cfg, args.action_id)
+    if action_type in {"notion.pull", "notion.link", "notion.resolve"}:
+        from notion_mirror import execute_local
+        result = execute_local(cfg, args.action_id)
         if not result.get("success"):
-            print(f"❌ Notion pull error: {result.get('error')}", file=sys.stderr)
+            print(f"❌ Notion {action_type.split('.')[-1]} error: {result.get('error')}", file=sys.stderr)
             return 1
         if args.summary:
-            print(f"✅ Executed: {action_type} ({args.action_id}) → {result.get('record_id')}")
+            print(f"✅ Executed: {action_type} ({args.action_id})")
         else:
             print_json(result)
         return 0

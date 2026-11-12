@@ -2,6 +2,26 @@
 
 ## Unreleased — Multi-company phases 1 and 2, Notion mirror
 
+### Onboarding an existing Notion database
+
+**Adds `notion.db.add_property` (high risk, agent path) and `notion.link` /
+`notion.resolve` (medium risk, local).**
+
+- `notion.columns.<domain>` maps plugin columns to an existing database's own
+  names. `null` marks a column the database doesn't have.
+- `notion_sync.py check`: compares the database's properties with what sync
+  needs and suggests a column mapping. `plan_sync` now refuses to run until
+  the latest check passes, and again after the mapping changes.
+- `check --add <column>` queues adding a missing column, the `CoS ID` column
+  included. It runs only after approval, and the check is cleared afterwards.
+- Sync refuses an existing database whose rows are not linked yet, instead
+  of duplicating them. `notion_sync.py link` matches rows by name, with
+  contact email or due date as tie-breakers. Ambiguous matches are reported,
+  not guessed. Links are applied after approval.
+- `notion_sync.py resolve --keep store|notion` settles a conflict. The
+  copying itself is still a separate approved sync action.
+- The briefing and meeting-prep Notion inputs honour the column map.
+
 ### Notion as an input to existing skills
 
 - The workspace envelope (`--input`) accepts an optional `notion` block: pages,

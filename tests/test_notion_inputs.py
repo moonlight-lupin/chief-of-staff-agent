@@ -18,7 +18,7 @@ import notion_inputs as ni
 import notion_mirror as nm
 import schemas
 import state_db
-from test_notion_mirror import DEAL, TODO, _config, _row
+from test_notion_mirror import DEAL, TODO, _checked, _config, _row
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 12, 9, 0, tzinfo=timezone.utc)
@@ -41,7 +41,7 @@ def config(tmp_path, monkeypatch):
     monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(cfg.source_path))
     state_db.save_store_atomic("pipeline", {"deals": [dict(DEAL)]}, config=cfg)
     state_db.save_store_atomic("todos", {"todos": [dict(TODO)]}, config=cfg)
-    return cfg
+    return _checked(cfg)
 
 
 NOTION_BLOCK = {
