@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased — Multi-company phases 1 and 2
+## Unreleased — Multi-company phases 1 and 2, Notion mirror
+
+### Notion mirror (phase 3)
+
+**Adds agent-path action types and a new local action, `notion.pull`.**
+
+- New `shared/scripts/notion_mirror.py`. The plugin store stays the source of
+  truth and Notion is a mirror. Each record is compared three ways against
+  the hash stored at the last sync. A store change is queued as
+  `notion.db.upsert`. A Notion edit is queued as `notion.pull` and applied
+  only after approval. An edit on both sides is a conflict and produces no
+  action. A record removed from the store is queued as `notion.page.archive`.
+  A new Notion row is queued as a `notion.pull` create. Planning is
+  read-only, and queueing never duplicates an open action.
+- Notion edits can change only allowlisted fields (pipeline: stage, value,
+  contact; todos: title, status, priority, due). Other edits are reported as
+  ignored. Values the store would reject are refused at planning. A pull is
+  refused if the store record changed after planning.
+- New skills `notion-sync` and `notion-wiki` (wiki Markdown → Notion pages,
+  republished as an update only when the file changed). Both are registered
+  only when `notion:` is configured.
+- Risk levels: `notion.db.upsert` low, `notion.page.create`/`update` and
+  `notion.pull` medium, `notion.page.archive` high. `preview` explains the
+  effect and how to reverse each one.
+- `notion.*` writes are refused on the Python `execute` path; they go through
+  claim → record-execution. `record-execution` updates the mirror and warns
+  when `page_id` is missing. After approval, agent-path actions now point to
+  `claim` instead of `execute`.
+- `capabilities` reports a `notion` section. `claim` returns the declared
+  Notion account as `expected_account`.
+
 
 ### Phase 2 — group scope, sharing, roll-up, connector accounts
 

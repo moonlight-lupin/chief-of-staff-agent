@@ -263,6 +263,20 @@ def _expected_effect(action_type: str, target: str, payload: Mapping[str, Any]) 
                 f"{payload.get('person_id') or target}.")
     if action_type == "contacts.delete":
         return f"Permanently delete contact {payload.get('person_id') or target} (no trash step)."
+    if action_type == "notion.db.upsert":
+        verb = "Update" if payload.get("page_id") else "Create"
+        return (f"{verb} the Notion {payload.get('domain')} row for {payload.get('record_id')} "
+                f"(database {payload.get('database_id')}) with the plugin's current values.")
+    if action_type == "notion.page.archive":
+        return f"Archive Notion page {payload.get('page_id')} (record {payload.get('record_id')} was removed)."
+    if action_type in {"notion.page.create", "notion.page.update"}:
+        verb = "Create" if action_type == "notion.page.create" else "Replace the content of"
+        return f"{verb} Notion page {payload.get('title')!r} from wiki/{payload.get('source_path')}."
+    if action_type == "notion.pull":
+        fields = ", ".join(sorted((payload.get("changes") or {}).keys()))
+        if payload.get("op") == "create":
+            return f"Add a new {payload.get('domain')} record from Notion page {payload.get('page_id')} ({fields})."
+        return f"Change {fields} on {payload.get('record_id')} in the plugin store to match Notion."
     return f"Run {action_type or 'unknown action'} against target {target or '(none)'} with the stored payload."
 
 
@@ -283,6 +297,11 @@ def _reversal_hint(action_type: str) -> str:
         "contacts.create": "Delete the created contact.",
         "contacts.update": "No prior values are recorded — re-enter the old values by hand if you have them.",
         "contacts.delete": "Permanent — no undo. Recreate the contact by hand from your own records.",
+        "notion.db.upsert": "Restore the prior version from the Notion page history.",
+        "notion.page.create": "Delete (archive) the created Notion page.",
+        "notion.page.update": "Restore the prior version from the Notion page history.",
+        "notion.page.archive": "Restore the page from Notion trash while retention allows.",
+        "notion.pull": "Edit the record back in the plugin; the store audit log holds the prior values.",
     }
     return hints.get(action_type, "Review provider audit logs and undo manually if supported.")
 
@@ -292,6 +311,14 @@ def _load_config_or_exit(config_path: str | None) -> Any | None:
     if config is None:
         return None
     return config
+
+
+def _next_step(action_id: str, action: Mapping[str, Any] | None) -> str:
+    """What to run after approval: agent-path actions are claimed, not executed."""
+    if str((action or {}).get("provider") or "") == "agent":
+        return (f"claim with: {_command('claim', action_id)}, perform it with your connector, "
+                f"then record-execution")
+    return f"execute with: {_command('execute', action_id)}"
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -429,6 +456,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
         approved: list[str] = []
         failed: list[str] = []
+        by_id = {str(a.get("id") or ""): a for a in candidates}
         for action in candidates:
             action_id = str(action.get("id") or "")
             result = _approve_one(config, action_id, args.approver, args.reason)
@@ -438,7 +466,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
                 failed.append(action_id)
         print(f"✅ Bulk approved {len(approved)} low-risk {args.action_type} action(s)")
         for action_id in approved:
-            print(f"   {action_id} — execute with: {_command('execute', action_id)}")
+            print(f"   {action_id} — {_next_step(action_id, by_id.get(action_id))}")
         if failed:
             print(f"⚠️  Failed to approve {len(failed)} action(s): {', '.join(failed)}", file=sys.stderr)
             return 1
@@ -478,7 +506,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         print(f"   Approver: {args.approver}")
     if args.reason:
         print(f"   Reason: {args.reason}")
-    print(f"   Execute with: {_command('execute', args.action_id)}")
+    print(f"   {_next_step(args.action_id, result)}")
     return 0
 
 
@@ -699,6 +727,10 @@ def cmd_record_execution(args: argparse.Namespace) -> int:
     if executed is None:
         print(f"Could not record execution for {args.action_id}", file=sys.stderr)
         return 1
+    if str(action.get("type") or "").startswith("notion."):
+        from notion_mirror import on_executed
+
+        on_executed(config, action, data)
 
     print(json.dumps({
         "action_id": args.action_id,

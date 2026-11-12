@@ -44,6 +44,23 @@ _COMPANY_NOTE = (
 )
 
 
+def _notion_section(config: Any) -> dict[str, Any]:
+    try:
+        from notion_mirror import notion_settings
+
+        settings = notion_settings(config)
+    except Exception:
+        settings = {"databases": {}, "wiki_parent_page": None}
+    configured = bool(settings["databases"] or settings["wiki_parent_page"])
+    return {
+        "configured": configured,
+        "domains": sorted(settings["databases"]),
+        "wiki": bool(settings["wiki_parent_page"]),
+        "execution": ("agent connector: plan with notion-sync, approve, claim, record-execution; "
+                      "Notion edits return as notion.pull actions for approval") if configured else "",
+    }
+
+
 def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     """Describe this installation's operating envelope in one JSON object.
 
@@ -143,6 +160,7 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     return {
         "version": version,
         "company": company,
+        "notion": _notion_section(config),
         "company_note": _COMPANY_NOTE if company else "",
         "provider": provider,
         "provider_verified": verified,

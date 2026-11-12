@@ -39,6 +39,8 @@ skill_profiles:
       - esign-connector
       - news-monitoring
       - workflow-architect
+      - notion-sync
+      - notion-wiki
   enterprise:
     registered:
       - daily-briefing
@@ -61,3 +63,5 @@ skill_profiles:
       - esign-connector
       - news-monitoring
       - workflow-architect
+      - notion-sync
+      - notion-wiki

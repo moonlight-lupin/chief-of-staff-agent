@@ -1,6 +1,6 @@
 # Multi-company, Notion and Monid: design decisions
 
-Status: accepted (2026-11-12). Phases 1 and 2 are implemented; phases 3 and 4 are planned.
+Status: accepted (2026-11-12). Phases 1 to 3 are implemented; phase 4 is planned.
 
 ## Decisions
 
@@ -74,7 +74,7 @@ Every call is audited along with its cost.
 |---|---|
 | 1 | Registry, active-company resolution, disjoint-store validation, `company_id` binding on actions, `capabilities` shows the company. |
 | 2 | Group store and queue, `share:` read policy, `daily --group` roll-up, expected-account declaration and executing-account audit. |
-| 3 | Notion action types (`notion.page.create/update`, `notion.db.upsert`, `notion.page.archive`) and skills `notion-sync`, `notion-wiki`, `notion-capture`. |
+| 3 | Done. `shared/scripts/notion_mirror.py` with action types `notion.db.upsert` (low), `notion.page.create/update` (medium), `notion.pull` (medium) and `notion.page.archive` (high), plus skills `notion-sync` (pipeline and todos; new Notion tasks come in through it, so no separate capture skill is needed) and `notion-wiki`. |
 | 4 | Spend envelopes, then Monid skills `prospecting`, `seo-audit`, `competitor-watch`. Covers PDPA data minimisation, a source record for every lead, and a Do Not Call flag before any contact. |
 
 ## Registry format

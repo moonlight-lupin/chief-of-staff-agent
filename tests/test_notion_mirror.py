@@ -215,7 +215,11 @@ def test_approved_pull_updates_the_store_and_mirror(config):
     deal = state_db.load_store("pipeline", config)["deals"][0]
     assert deal["stage"] == "Proposal Sent"
     assert deal["stage_history"][-1]["stage"] == "Proposal Sent"
-    assert nm.plan_sync(config, "pipeline", rows)["in_sync"] == ["deal-001"]
+    # The stage move also refreshed last_activity in the store; that goes back
+    # to Notion as a push, never as another pull.
+    plan = nm.plan_sync(config, "pipeline", rows)
+    assert plan["pull"] == [] and plan["conflicts"] == []
+    assert [p["properties"]["Last activity"] for p in plan["push"]] == [deal["last_activity"]]
 
 
 def test_edits_to_fields_outside_the_allowlist_are_ignored_and_reported(config):
@@ -313,10 +317,10 @@ def test_wiki_page_outside_the_wiki_is_refused(config, tmp_path):
 def test_risk_levels():
     import action_risk
 
-    assert action_risk.get_action_risk("notion.db.upsert")["level"] == "low"
-    assert action_risk.get_action_risk("notion.page.create")["level"] == "medium"
-    assert action_risk.get_action_risk("notion.pull")["level"] == "medium"
-    assert action_risk.get_action_risk("notion.page.archive")["level"] == "high"
+    assert action_risk.get_action_risk("notion.db.upsert") == "low"
+    assert action_risk.get_action_risk("notion.page.create") == "medium"
+    assert action_risk.get_action_risk("notion.pull") == "medium"
+    assert action_risk.get_action_risk("notion.page.archive") == "high"
 
 
 def test_claim_names_the_notion_account(config, capsys):
@@ -366,3 +370,15 @@ def test_sync_cli_plans_from_an_envelope(config, tmp_path, capsys):
 
     assert module.main(["--config", str(config.source_path), "plan", "--input", str(envelope), "--queue"]) == 0
     assert len(json.loads(capsys.readouterr().out)["queued"]["created"]) == 1
+
+
+def test_approval_points_agent_path_actions_at_claim(config, capsys):
+    import review_queue
+
+    _queue(config, "pipeline", [])
+    assert review_queue._main([
+        "--config", str(config.source_path), "approve", "--all", "--risk", "low",
+        "--type", "notion.db.upsert", "--approver", "op", "--reason", "sync", "--confirm-low-risk-bulk",
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "claim --action-id" in out and "execute --action-id" not in out

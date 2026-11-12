@@ -105,16 +105,24 @@ def _get_registered_skills() -> list[str]:
         return _with_overlay_skills(_filter_configured_skills(list(_FALLBACK_REGISTERED_SKILLS)))
 
 
+NOTION_SKILLS = frozenset({"notion-sync", "notion-wiki"})
+
+
 def _filter_configured_skills(skills: list[str]) -> list[str]:
     """Hide externally-backed skills when their required config is absent."""
-    if "esign-connector" not in skills:
+    if "esign-connector" not in skills and not NOTION_SKILLS & set(skills):
         return skills
     config_path = _config_path(os.getenv("CHIEF_OF_STAFF_CONFIG"))
     data, _ = _parse_config(config_path)
-    esign = data.get("esign") if isinstance(data, dict) and isinstance(data.get("esign"), dict) else {}
-    if str(esign.get("url") or "").strip():
-        return skills
-    return [skill for skill in skills if skill != "esign-connector"]
+    data = data if isinstance(data, dict) else {}
+    hidden: set[str] = set()
+    esign = data.get("esign") if isinstance(data.get("esign"), dict) else {}
+    if not str(esign.get("url") or "").strip():
+        hidden.add("esign-connector")
+    notion = data.get("notion") if isinstance(data.get("notion"), dict) else {}
+    if not (notion.get("databases") or notion.get("wiki_parent_page")):
+        hidden |= NOTION_SKILLS
+    return [skill for skill in skills if skill not in hidden]
 
 
 def get_all_skills():

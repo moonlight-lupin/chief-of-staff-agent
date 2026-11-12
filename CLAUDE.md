@@ -56,7 +56,7 @@ remediation command.
 | `.env` (plugin root) | Secrets only. Auto-loaded; shell env wins. **Never echo, never commit, never paste into chat.** |
 | `paths.project_root` | The user's data: `pipeline.yaml`, `invoices.yaml`, `expenses.yaml`, `todos.yaml`, `wiki/`. Plain YAML and Markdown. |
 | `shared/scripts/` | Shared machinery — guardrails, state, providers, audit. |
-| `skills/<name>/` | The nineteen skills, each with `SKILL.md` and its own `scripts/`. |
+| `skills/<name>/` | The skills, each with `SKILL.md` and its own `scripts/`. Notion skills appear only when `notion:` is configured. |
 
 ## Scheduled / headless runs
 
