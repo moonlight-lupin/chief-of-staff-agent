@@ -83,6 +83,9 @@ paths:
   templates: "~/.hermes/plugins/chief-of-staff/shared/templates/"
   # Optional downloads/staging directory for Drive Filer and document workflows.
   staging: "~/.hermes/projects/acme-advisory/staging/"
+  # Uploads (drive.upload) may only read files under project_root or these
+  # folders; credentials and the plugin's state are always refused.
+  # upload_roots: ["~/Documents/outbox"]
 
 # Delivery preferences for scheduled agent outputs.
 # bootstrap clears home_chat_id so the sample chat id never leaks.

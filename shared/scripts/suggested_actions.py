@@ -124,8 +124,8 @@ SUGGESTION_TEMPLATES: dict[str, list[dict[str, Any]]] = {
             "title": "Download shared document",
             "reason": "Document shared — download for offline review",
             "confidence": 0.50,
-            "risk": "low",
-            "requires_approval": False,
+            "risk": "medium",
+            "requires_approval": True,
         },
     ],
     "unknown": [],
@@ -135,7 +135,7 @@ SUGGESTION_TEMPLATES: dict[str, list[dict[str, Any]]] = {
 def _risk_for_action(action_type: str) -> str:
     """Determine risk level for an action type."""
     high_risk = {"gmail.send", "gmail.trash", "drive.trash", "calendar.cancel"}
-    medium_risk = {"gmail.draft", "calendar.create", "calendar.update", "drive.upload"}
+    medium_risk = {"gmail.draft", "calendar.create", "calendar.update", "drive.upload", "drive.download"}
     if action_type in high_risk:
         return "high"
     if action_type in medium_risk:

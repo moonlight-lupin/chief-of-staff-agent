@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Untrusted content is data, not authority
+
+- **New `shared/scripts/payload_policy.py`.** `drive.download` writes only
+  inside the project root. `drive.upload` reads only from the project root or
+  `paths.upload_roots`, and never from `.env`, keys, `~/.ssh`, `~/.hermes` or
+  `state.db`. Symlinks are resolved. Paths are checked when the action is
+  proposed and again at execution.
+- **`drive.download` is now medium risk** and can no longer be bulk-approved.
+- **Wiki context injected into the model** is a labelled data block,
+  sanitised to one line per note. Pages curated from external events give
+  only their title.
+- **Workflows.**
+  - Step text that approves, dismisses or turns on break-glass is refused.
+  - `bind_action` requires an existing action of the step's declared type.
+  - A command signal counts only when the command actually runs, not when it
+    is echoed or grepped.
+- **Redaction** covers prefixed secret names (`COMPOSIO_API_KEY=`,
+  `M365_CLIENT_SECRET=`, `*_TOKEN=`, `GOOGLE_SERVICE_ACCOUNT_JSON=`). Tool
+  errors returned to the model are redacted.
+- **Notion pulls** refuse a `contact_email` that is not a plain address.
+- **Hardening from an adversarial review**, each fix with a regression test:
+  - **Paths:**
+    - Enforced inside every guarded upload or download, and at `claim`, as
+      well as at proposal.
+    - Downloads never overwrite an existing file, and never write into the
+      user's records, `wiki/`, `workflows/` or `skills.local/`.
+    - Uploads and attachments refuse credential-looking names, the configured
+      key file and hard-linked files.
+    - `upload_roots` of `/` or `$HOME` are ignored.
+    - Every path key in a payload is checked.
+  - **Workflow verification files** now live under `<project_root>/verify/`.
+  - **`bind_action`** requires a freshly proposed action (state `requested`),
+    created after the run started and not bound to another run. It fails
+    closed without a config.
+  - **Workflows:** every string that ends up in the generated skill is checked,
+    after NFKC normalisation and with invisible characters removed. Telling
+    the user to approve is still allowed.
+  - **Command signals:** wrappers (`env`, `timeout`, `nohup`) are seen
+    through, and printing, editing or searching a file no longer counts as
+    running it.
+  - **Wiki fence:** strips format, private-use and tag-block characters, and
+    event notes are referenced by a slug, never their subject.
+  - **Redaction:** covers JSON keys, `key: value` lines, auth headers and
+    `--api-key`, without redacting booleans or paging tokens.
+  - **`suggested_actions`:** downloads are medium risk and need approval.
+- **`docs/SECURITY_MODEL.md`** gains the trust-boundary table. The adversarial
+  fixtures are in `tests/test_untrusted_content.py`.
+
+
 ### Account binding: refuse the wrong account before the write
 
 - **Workspace actions are bound when they are created.** This covers mail,

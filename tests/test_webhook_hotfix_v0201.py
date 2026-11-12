@@ -494,7 +494,7 @@ class TestMethodSignatures:
         from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="drive.upload", provider="google_api",
-            target="test", payload={"file_path": "/tmp/test.pdf", "parent_id": "folder-1"},
+            target="test", payload={"file_path": str(project / "test.pdf"), "parent_id": "folder-1"},
             summary="Test",
         )
         approve_pending_action(config, action["id"], approver="MH", reason="test")
@@ -504,7 +504,7 @@ class TestMethodSignatures:
              patch("workspace_capabilities.require_capability", return_value=None):
             webhook_events.main(["execute", "--action-id", action["id"]])
         mock_client.files_upload.assert_called_once_with(
-            file_path="/tmp/test.pdf", parent_id="folder-1")
+            file_path=str(project / "test.pdf"), parent_id="folder-1")
 
     def test_drive_download_uses_output_path(self, with_secret):
         config, project = with_secret
@@ -515,7 +515,7 @@ class TestMethodSignatures:
         from state_db import create_pending_action, approve_pending_action
         action = create_pending_action(
             config=config, action_type="drive.download", provider="google_api",
-            target="test", payload={"file_id": "f1", "output_path": "/tmp/out.pdf"},
+            target="test", payload={"file_id": "f1", "output_path": str(project / "out.pdf")},
             summary="Test",
         )
         approve_pending_action(config, action["id"], approver="MH", reason="test")
@@ -525,7 +525,7 @@ class TestMethodSignatures:
              patch("workspace_capabilities.require_capability", return_value=None):
             webhook_events.main(["execute", "--action-id", action["id"]])
         mock_client.files_download.assert_called_once_with(
-            file_id="f1", output_path="/tmp/out.pdf")
+            file_id="f1", output_path=str(project / "out.pdf"))
 
 
 # ─── Receiver OIDC Integration ──────────────────────────────

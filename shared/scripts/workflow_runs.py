@@ -510,6 +510,14 @@ def skip_step(
     )
 
 
+def _parse_dt_safe(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def bind_action(
     run_id: str,
     step_id: str,
@@ -525,6 +533,21 @@ def bind_action(
     step_id = _require_non_empty_str(step_id, "step_id")
     action_id = _require_non_empty_str(action_id, "action_id")
 
+    from state_db import get_pending_action
+
+    # The bound action must be a fresh proposal for THIS run: a step can never
+    # be satisfied by an action that already ran, was dismissed, predates the
+    # run, or belongs to another run (P0.3).
+    if config is None:
+        raise WorkflowRunError("bind needs the company config (it could not be loaded); nothing was bound")
+    bound_action = get_pending_action(config, action_id)
+    if not bound_action:
+        raise WorkflowRunError(f"no action {action_id} in the review queue; propose it first")
+    if bound_action.get("state") != "requested":
+        raise WorkflowRunError(
+            f"action {action_id} is {bound_action.get('state')}; only a freshly proposed (requested) action can be bound"
+        )
+
     def _bind(data: dict[str, Any]) -> dict[str, Any]:
         runs = _runs_map(data)
         run = _get_existing(runs, run_id)
@@ -539,6 +562,21 @@ def bind_action(
                 break
         if found_index is None or step is None:
             raise WorkflowRunError(f"step {step_id!r} is not in run {run_id}")
+        started = _parse_dt_safe(run.get("started_at"))
+        created = _parse_dt_safe(bound_action.get("created_at"))
+        if started is not None and created is not None and created < started:
+            raise WorkflowRunError(f"action {action_id} was proposed before this run started; propose it again")
+        for other_id, other in runs.items():
+            if other_id == run_id or not isinstance(other, Mapping):
+                continue
+            if any(isinstance(st, Mapping) and st.get("action_id") == action_id for st in _steps(other)):
+                raise WorkflowRunError(f"action {action_id} is already bound to another run ({other_id})")
+        expected_type = ((step.get("review_queue") or {}).get("action_type")
+                         if isinstance(step.get("review_queue"), Mapping) else None)
+        if expected_type and bound_action and bound_action.get("type") != expected_type:
+            raise WorkflowRunError(
+                f"step {step_id} expects a {expected_type} action, not {bound_action.get('type')} ({action_id})"
+            )
         existing = step.get("action_id")
         if existing and existing != action_id:
             raise WorkflowRunError(

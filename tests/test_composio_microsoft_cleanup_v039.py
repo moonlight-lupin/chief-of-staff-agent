@@ -37,7 +37,7 @@ def _ms_workspace(**extra):
         "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
     }
     ws.update(extra)
-    return {"integrations": {"workspace": ws}, "paths": {"project_root": "/tmp/test-ms-cleanup"}}
+    return {"integrations": {"workspace": ws}, "paths": {"project_root": "/tmp/test-ms-cleanup", "upload_roots": [__import__("tempfile").gettempdir()]}}
 
 
 def _google_workspace():
@@ -54,7 +54,7 @@ def _google_workspace():
                 },
             }
         },
-        "paths": {"project_root": "/tmp/test-g-cleanup"},
+        "paths": {"project_root": "/tmp/test-g-cleanup", "upload_roots": [__import__("tempfile").gettempdir()]},
     }
 
 

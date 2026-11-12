@@ -87,6 +87,7 @@ import datetime
 import json as _json
 import os
 import tempfile
+from pathlib import Path
 import warnings
 from typing import Any, Callable, Mapping
 
@@ -147,6 +148,19 @@ _OPTIONAL_CHECKS = frozenset({"mail_tags_list"})
 
 
 # ── small helpers ──────────────────────────────────────────────────────────
+
+def _verify_dir(config) -> str | None:
+    """Verification files live under the project root (payload_policy confines
+    uploads and downloads there), in a visible verify/ folder."""
+    try:
+        from config_loader import get_project_root
+
+        path = Path(get_project_root(config)).expanduser() / "verify"
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+    except Exception:
+        return None
+
 
 def _mk(status: str, detail: str) -> dict[str, str]:
     return {"status": status, "detail": detail}
@@ -444,7 +458,8 @@ def _check_files_write(client: Any) -> dict[str, str]:
     tmp_path: str | None = None
     download_path: str | None = None
     try:
-        fd, tmp_path = tempfile.mkstemp(prefix="cos-verify-", suffix=".txt")
+        verify_dir = _verify_dir(getattr(client, "config", None))
+        fd, tmp_path = tempfile.mkstemp(prefix="cos-verify-", suffix=".txt", dir=verify_dir)
         with os.fdopen(fd, "w") as fh:
             fh.write("Chief-of-Staff workspace verification. Safe to delete.\n")
         filename = os.path.basename(tmp_path)
@@ -459,8 +474,9 @@ def _check_files_write(client: Any) -> dict[str, str]:
 
         downloaded = False
         if _supported(client, "files.download"):
-            fd2, download_path = tempfile.mkstemp(prefix="cos-verify-dl-", suffix=".txt")
-            os.close(fd2)
+            # A fresh name, not a pre-created file: downloads never overwrite (payload_policy).
+            download_path = os.path.join(verify_dir or tempfile.gettempdir(),
+                                         f"cos-verify-dl-{os.getpid()}-{os.urandom(4).hex()}.txt")
             try:
                 dl = _result_dict(client.files_download(file_id, download_path))
             except NotImplementedError:

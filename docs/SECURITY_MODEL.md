@@ -72,6 +72,29 @@ approvals:
     - '*webhook_events.py*approve*'
 ```
 
+## Untrusted content: trust boundaries
+
+External content (mail, attachments, calendar descriptions, Notion pages,
+web research, prospect and competitor data, agent-written workflow YAML) is
+**data**. It can be read, summarised and quoted. It can never approve
+anything, choose where a file goes, or become standing instructions
+unchecked.
+
+| Where content enters | What it could reach | Control |
+|---|---|---|
+| Any content → a proposed action | Approval | Approval is signed by the user (above). No text in content can approve. |
+| Action payload → a local file path (`drive.upload` / `drive.download`, attachments) | Plugin code, the user's records, another company's store, credentials | Downloads write a new file inside the project root, never overwriting one and never into records, `wiki/`, `workflows/` or `skills.local/`. Uploads and attachments come from the project root or `paths.upload_roots` (never `/` or `$HOME`), never a credential-looking, key, state or hard-linked file. Checked at proposal, at `claim`, and inside every guarded upload or download. `drive.download` is medium risk, so it can't be bulk-approved. |
+| Curated wiki notes → the model's context on later turns | Persistent instructions | Injected as a labelled data block, sanitised to one line each. Pages curated from external events contribute only their title. |
+| Workflow YAML → a registered skill | Standing instructions | Step text that approves, dismisses or turns on break-glass is refused at validation. |
+| Workflow YAML → run progress | Advancing a step | `bind_action` needs a real action of the step's declared type. A command signal counts only when the command actually runs (`echo <pattern>` does not). |
+| Notion rows → CRM fields | A later email recipient | Pulled `contact_email` must be a plain address, and the pull itself needs approval. |
+| Errors and logs → the model, support bundles | Secrets | Prefixed secret names (`COMPOSIO_API_KEY=`, `*_SECRET=`, `*_TOKEN=`) are redacted, including in tool errors returned to the model. |
+| Paid-data results (Monid) | Spend | Paid calls need a signed spend budget; content cannot reserve or extend it. |
+
+The adversarial fixtures for these boundaries are in
+`tests/test_untrusted_content.py`, `tests/test_approval_signing.py` and
+`tests/test_account_binding.py`.
+
 ## Limits we state plainly
 
 - **Not a sandbox.** Signed approvals stop an agent from approving through

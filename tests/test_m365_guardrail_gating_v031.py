@@ -53,7 +53,7 @@ def m365_config(tmp_path):
             "auth": "client_credentials",
             "user_principal": "cos@acme.com",
         },
-        "paths": {"project_root": str(tmp_path)},
+        "paths": {"project_root": str(tmp_path), "upload_roots": [__import__("tempfile").gettempdir()]},
     }
 
 

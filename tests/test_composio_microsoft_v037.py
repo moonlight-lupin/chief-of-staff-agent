@@ -48,7 +48,7 @@ def _ms_workspace(**extra):
         "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
     }
     ws.update(extra)
-    return {"integrations": {"workspace": ws}, "paths": {"project_root": "/tmp/test-ms"}}
+    return {"integrations": {"workspace": ws}, "paths": {"project_root": "/tmp/test-ms", "upload_roots": ["/tmp", __import__("tempfile").gettempdir()]}}
 
 
 def _google_workspace(**extra):
@@ -60,7 +60,7 @@ def _google_workspace(**extra):
         "mcp": {"endpoint": "https://connect.composio.dev/mcp", "key_env": "COMPOSIO_MCP_KEY"},
     }
     ws.update(extra)
-    return {"integrations": {"workspace": ws}, "paths": {"project_root": "/tmp/test-g"}}
+    return {"integrations": {"workspace": ws}, "paths": {"project_root": "/tmp/test-g", "upload_roots": ["/tmp", __import__("tempfile").gettempdir()]}}
 
 
 @pytest.fixture

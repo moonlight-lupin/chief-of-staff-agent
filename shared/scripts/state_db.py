@@ -980,6 +980,9 @@ class StateDB:
         payload: dict,
         summary: str | None = None,
     ) -> dict | None:
+        from payload_policy import enforce as _enforce_payload
+
+        _enforce_payload(self.config, type, payload)   # refused paths never enter the queue (P0.3)
         action_id = str(uuid.uuid4())[:12]
         risk = None
         if type in ("gmail.send", "mail.send"):

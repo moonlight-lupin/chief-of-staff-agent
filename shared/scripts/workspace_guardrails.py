@@ -350,6 +350,18 @@ def _grant_allows(grant: dict, action: str, details: Mapping[str, Any]) -> bool:
     return True
 
 
+def _payload_path_refusal(config: Any, action_id: str, arguments: Mapping[str, Any]) -> str | None:
+    """Local file paths on guarded uploads/downloads follow payload_policy,
+    whatever called the client (queue executor, CLI, or a direct call)."""
+    from payload_policy import DOWNLOAD_TYPES, UPLOAD_TYPES, check_payload
+
+    family = action_id.split(".", 1)[-1]
+    if action_id not in DOWNLOAD_TYPES | UPLOAD_TYPES and family not in {"upload", "download"}:
+        return None
+    kind = "files.download" if family == "download" else "files.upload"
+    return check_payload(config, kind, {k: v for k, v in arguments.items() if isinstance(v, (str, os.PathLike))})
+
+
 def _store_enforced(config: Any) -> bool:
     if config is None:
         return False
@@ -541,6 +553,20 @@ def guarded(
             bound = sig.bind(self, *args, **kwargs)
             bound.apply_defaults()
             target = str(bound.arguments.get(target_arg, "") or "")
+            path_refusal = _payload_path_refusal(getattr(self, "config", None), action_id, bound.arguments)
+            if path_refusal:
+                try:
+                    from workspace_audit import audit_workspace_action
+
+                    audit_workspace_action(getattr(self, "config", None), audit_provider, audit_operation or action_id,
+                                           "guarded", target=target, status="blocked",
+                                           extra={"reason": "payload_path_refused", "detail": path_refusal})
+                except Exception:
+                    pass
+                provider = getattr(self, "provider_name", None) or getattr(self, "_provider_name", "unknown")
+                return ActionResult(success=False, action=action_id, provider=provider,
+                                    tool_slug=str(tool_slug(self) if callable(tool_slug) else tool_slug),
+                                    target=target, error=path_refusal).to_dict()
             provider = getattr(self, "provider_name", None) or getattr(self, "_provider_name", "unknown")
             operation = audit_operation or action_id
             resolved_audit_tool = audit_tool(self) if callable(audit_tool) else audit_tool

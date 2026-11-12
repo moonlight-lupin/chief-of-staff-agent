@@ -42,7 +42,7 @@ def m365_config():
             "auth": "client_credentials",
             "user_principal": "cos@acme.com",
         },
-        "paths": {"project_root": "/tmp/test-m365-diagnostics"},
+        "paths": {"project_root": "/tmp/test-m365-diagnostics", "upload_roots": [__import__("tempfile").gettempdir()]},
     }
 
 

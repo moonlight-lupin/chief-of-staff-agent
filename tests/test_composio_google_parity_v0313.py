@@ -32,7 +32,7 @@ def _google_workspace(**extra):
     ws.update(extra)
     return {
         "integrations": {"workspace": ws},
-        "paths": {"project_root": "/tmp/test-google-parity"},
+        "paths": {"project_root": "/tmp/test-google-parity", "upload_roots": [__import__("tempfile").gettempdir()]},
     }
 
 

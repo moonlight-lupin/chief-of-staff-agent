@@ -7,6 +7,7 @@ event-driven; review_queue steps are re-observed via observe_and_advance.
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -280,13 +281,80 @@ def _command_matches(
     raw = step.get("command")
     if isinstance(raw, Mapping):
         pattern = str(raw.get("pattern") or "")
-    if not pattern or pattern not in command:
+    if not pattern or not command_runs_pattern(command, pattern):
         return False
     started = _parse_dt(run.get("started_at"))
     event_time = _aware(now)
     if started is not None and event_time < started:
         return False
     return True
+
+
+_NOT_RUNNING = frozenset({
+    "echo", "printf", "true", "false", ":", "cat", "tac", "less", "more", "head", "tail", "wc", "grep", "egrep",
+    "fgrep", "rg", "ag", "ack", "sed", "awk", "gawk", "vi", "vim", "nvim", "nano", "emacs", "code", "stat", "file",
+    "ls", "ll", "find", "fd", "locate", "which", "type", "whereis", "man", "git", "diff", "cmp", "md5sum",
+    "sha256sum", "xargs", "test", "[", "[[", "touch", "cp", "mv", "ln", "chmod", "chown", "readlink", "realpath",
+    "basename", "dirname", "tree", "du", "#",
+})
+_WRAPPERS = frozenset({"env", "nohup", "time", "nice", "ionice", "stdbuf", "command", "exec", "setsid"})
+_TIMED_WRAPPERS = frozenset({"timeout"})
+_INTERPRETERS = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?|bash|sh|zsh|node|ruby|perl|uv|pipx)$")
+_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "(", ")", ";;", "|&"})
+
+
+def _norm_path(token: str) -> str:
+    return token[2:] if token.startswith("./") else token
+
+
+def command_runs_pattern(command: str, pattern: str) -> bool:
+    """True only when a segment of ``command`` actually *runs* ``pattern``:
+    the pattern is the program itself, or the script an interpreter runs.
+    Printing, editing, searching or listing it (echo, sed, vim, grep, find,
+    git log, xargs echo...) does not count."""
+    import shlex
+
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        want = [_norm_path(t) for t in shlex.split(pattern, posix=True)]
+    except ValueError:
+        return False
+    if not want:
+        return False
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in _SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    for seg in segments:
+        seg = list(seg)
+        while seg:   # strip VAR=value assignments and transparent wrappers
+            head = Path(seg[0]).name
+            if "=" in seg[0] and not seg[0].startswith(("/", ".")):
+                seg = seg[1:]
+            elif head in _WRAPPERS:
+                seg = seg[1:]
+            elif head in _TIMED_WRAPPERS:
+                seg = seg[1:]
+                while seg and (seg[0].startswith("-") or re.fullmatch(r"\d+[smhd]?", seg[0])):
+                    seg = seg[1:]
+            else:
+                break
+        if not seg:
+            continue
+        program = _norm_path(seg[0])
+        if Path(program).name in _NOT_RUNNING:
+            continue    # printing, editing, searching or listing is not running
+        if _INTERPRETERS.match(Path(program).name) and any(a in {"-c", "-e"} for a in seg[1:]):
+            continue    # inline code (python -c "print('x')") never runs the file
+        argv = [_norm_path(a) for a in seg]
+        for i in range(len(argv) - len(want) + 1):
+            if argv[i:i + len(want)] == want:
+                return True
+    return False
 
 
 def _command_succeeded(result: Any, exit_code: Any) -> bool:

@@ -40,7 +40,7 @@ def composio_config():
                 },
             }
         },
-        "paths": {"project_root": "/tmp/test-workspace-actions"},
+        "paths": {"project_root": "/tmp/test-workspace-actions", "upload_roots": [__import__("tempfile").gettempdir()]},
     }
 
 
@@ -89,7 +89,8 @@ class TestGoogleProviderWriteActions:
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
         from providers.google_workspace import GoogleWorkspaceClient
         with patch("providers.google_workspace._find_google_api_script", return_value=Path("/fake")):
-            return GoogleWorkspaceClient({"google": {"delegate_email": "test@test.com", "account_alias": "test"}})
+            return GoogleWorkspaceClient({"google": {"delegate_email": "test@test.com", "account_alias": "test"},
+                                          "paths": {"project_root": "/tmp/test-workspace-actions"}})
 
     def test_gmail_create_draft_via_sa_rest(self, google_client):
         """gmail_create_draft uses SA REST when service_account_path is set."""
@@ -135,6 +136,6 @@ class TestGoogleProviderWriteActions:
 
     def test_drive_download(self, google_client):
         with patch.object(google_client, "_run", return_value=(0, "", "")):
-            result = google_client.drive_download("file_123", "/tmp/downloaded.pdf")
+            result = google_client.drive_download("file_123", "/tmp/test-workspace-actions/downloads/downloaded.pdf")
         assert result["success"] is True
-        assert result["data"]["path"] == "/tmp/downloaded.pdf"
+        assert result["data"]["path"] == "/tmp/test-workspace-actions/downloads/downloaded.pdf"

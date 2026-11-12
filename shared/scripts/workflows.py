@@ -85,8 +85,61 @@ class WorkflowNameConflict(WorkflowError):
     """Workflow name collides with a bundled or local skill directory."""
 
 
+# A workflow becomes a registered skill, i.e. standing instructions. Its text
+# may be agent-written from untrusted content, so it must never tell the agent
+# to approve, to set the break-glass switches, or to run an approve command
+# (P0.3, docs/SECURITY_MODEL.md). Approval is the user's step.
+_SELF_APPROVAL_RE = re.compile(
+    r"(?ix)("
+    r"(?:review_queue|send_email|delete_actions|webhook_events)(?:\.py)?\b[^\n]{0,60}?\b(?:approve|dismiss)\b"
+    r"|\bapprove\s+--all\b"
+    r"|chief[\s_-]*of[\s_-]*staff[\s_-]*(?:auto[\s_-]*approve|allow[\s_-]*destructive)"
+    r"|(?<![\w/])/[a-z0-9_-]{1,32}\s+(?:approve|dismiss)\b"
+    r")"
+)
+# Telling the *user* to approve is exactly what workflows should say.
+_USER_DIRECTED_RE = re.compile(
+    r"(?i)\b(?:ask|tell|remind|wait\s+for|have)\s+(?:the\s+)?(?:user|operator|owner|founder)\b"
+    r"|\b(?:user|operator|owner)\s+(?:to\s+)?(?:runs?|approves?|types?|uses?)\b"
+)
+
+
+def _normalise_text(text: str) -> str:
+    """NFKC, invisible/format characters removed, backticks and quotes dropped."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) not in {"Cf", "Cc", "Co", "Cn"} or ch == "\n")
+    return re.sub(r"[`'\"]", "", text)
+
+
+def _refuse_self_approval(text: Any, field: str) -> None:
+    if not isinstance(text, str):
+        return
+    clean = _normalise_text(text)
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n", clean):
+        if _SELF_APPROVAL_RE.search(sentence) and not _USER_DIRECTED_RE.search(sentence):
+            raise WorkflowValidationError(
+                f"{field}: workflow text must not approve, dismiss or enable break-glass; "
+                f"propose the action and ask the user to approve it"
+            )
+
+
+def _refuse_self_approval_everywhere(data: Any, field: str = "workflow") -> None:
+    """Every string that can end up in the generated skill is checked."""
+    if isinstance(data, str):
+        _refuse_self_approval(data, field)
+    elif isinstance(data, Mapping):
+        for key, value in data.items():
+            _refuse_self_approval_everywhere(value, f"{field}.{key}")
+    elif isinstance(data, (list, tuple)):
+        for i, value in enumerate(data):
+            _refuse_self_approval_everywhere(value, f"{field}[{i}]")
+
+
 def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
     """Validate ``data`` and return a normalized copy. Does not mutate input."""
+    _refuse_self_approval_everywhere(data)
     if not isinstance(data, Mapping):
         raise WorkflowValidationError("workflow: must be a mapping")
 
@@ -213,6 +266,8 @@ def _normalize_step(raw_step: Any, index: int, seen_ids: set[str]) -> dict[str, 
 
     step_name = _require_bounded_str(raw_step.get("name"), f"{prefix}.name", STEP_NAME_MAX)
     description = _require_non_empty_str(raw_step.get("description"), f"{prefix}.description")
+    _refuse_self_approval(description, f"{prefix}.description")
+    _refuse_self_approval(step_name, f"{prefix}.name")
 
     present_signals = [key for key in SIGNAL_KEYS if key in raw_step]
     if len(present_signals) != 1:

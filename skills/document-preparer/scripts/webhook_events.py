@@ -377,6 +377,8 @@ def cmd_execute(args: argparse.Namespace) -> int:
                 )
             elif action_type == "calendar.cancel":
                 result = client.calendar_cancel(event_id=payload.get("event_id", ""))
+            elif action_type in ("drive.upload", "drive.download") and _payload_refusal(cfg, action_type, payload):
+                result = {"success": False, "error": _payload_refusal(cfg, action_type, payload)}
             elif action_type == "drive.upload":
                 result = client.files_upload(
                     file_path=payload.get("file_path", payload.get("path", "")),
@@ -443,6 +445,12 @@ def cmd_execute(args: argparse.Namespace) -> int:
             os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
         else:
             os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
+
+
+def _payload_refusal(cfg, action_type, payload):
+    from payload_policy import check_payload
+
+    return check_payload(cfg, action_type, payload)
 
 
 def cmd_pending(args: argparse.Namespace) -> int:
