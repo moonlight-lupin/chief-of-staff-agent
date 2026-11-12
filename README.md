@@ -18,7 +18,7 @@ It watches, prioritises, prepares, and proposes. **You approve. It executes. Eve
 
 Chief of Staff is built to be agent-operated — every setup step is a CLI with machine-readable output, a readiness go/no-go, and self-diagnosis on failure. So the simplest install is to paste this to your agent (Hermes, OpenClaw, Claude Code, …):
 
-> Clone https://github.com/moonlight-lupin/chief-of-staff-agent.git into my plugins directory and install its requirements. Run `chief_of_staff.py demo` and show me the output. Then bootstrap it for **\<company\>**, jurisdiction **\<SG\>**, operator **\<me@company.com\>**, workspace provider **\<m365 | google_api | composio\>**, assistant name **\<Ada\>**, storage **\<local | git: owner/private-data-repo\>**. I'll give you the credentials when you ask — put them in `.env`. Verify with `connect_workspace.py --verify`, run `chief_of_staff.py readiness --summary`, and if anything fails, use `chief_of_staff.py logs diagnose` and fix it. Stop before anything that sends email or modifies my workspace.
+> Clone https://github.com/moonlight-lupin/chief-of-staff-agent.git into my plugins directory and install its requirements. Run `chief_of_staff.py demo` and show me the output. Then bootstrap it for **\<company\>**, jurisdiction **\<SG\>**, operator **\<me@company.com\>**, workspace provider **\<m365 | google_api | composio\>**, assistant name **\<Ada\>**, storage **\<local | git: owner/private-data-repo\>**. I'll give you the credentials when you ask — under Hermes, in the plugin's settings; otherwise in `.env`. Verify with `connect_workspace.py --verify`, run `chief_of_staff.py readiness --summary`, and if anything fails, use `chief_of_staff.py logs diagnose` and fix it. Stop before anything that sends email or modifies my workspace.
 
 Your agent handles the clone, config, verification, and troubleshooting; you supply credentials and approvals. Prefer to drive it yourself? Everything below works by hand too.
 
@@ -37,6 +37,24 @@ python shared/scripts/chief_of_staff.py demo
 ```
 
 You'll get a full sample-data morning brief — urgent email, today's meetings with join links, stale deals, overdue invoices, open tasks — the view your mornings start with once it's connected to your own workspace.
+
+**See the whole loop** — still no credentials, nothing leaves your machine:
+
+```bash
+python shared/scripts/chief_of_staff.py demo --flow
+```
+
+Seven steps on the sample data:
+
+1. the morning briefing;
+2. the agent proposes a follow-up email;
+3. the preview, showing what it will do, to whom, and how it is reversed;
+4. **your** signed approval, exactly as `/cos approve` does it;
+5. execution through the real guarded path, against a stand-in mailbox;
+6. the audit trail;
+7. the queue afterwards.
+
+It runs in a throwaway directory, so every run starts fresh. Add `--keep DIR` to inspect the state, and `demo --reset DIR` to remove it.
 
 The real thing looks like this every day:
 
@@ -62,7 +80,7 @@ The daily loop is deliberately **read-only** — it reports and recommends, it n
 
 **2. Your data is yours, in files you can read.** Deals, invoices, expenses, tasks, and your knowledge wiki live as plain YAML and Markdown on your own machine. Inspect them, version them, edit them in any editor, walk away anytime. No hosted database, no vendor lock-in.
 
-**3. Works with the workspace you already have.** Google Workspace (service account or managed auth via Composio) **and Microsoft 365** (Outlook, Calendar, OneDrive — via Microsoft Graph, or via Composio managed OAuth with no Entra admin) are first-class, switchable with one config line. If your AI agent has its own Gmail/M365 connectors, it can fetch data itself and feed the same pipeline — no API client needed.
+**3. Works with the workspace you already have.** Google Workspace (service account, or managed auth via Composio) and Microsoft 365 (Outlook, Calendar and OneDrive through Composio managed OAuth, with no Entra admin needed) have been run against live accounts. You switch between them with one config line. Native Microsoft Graph is code-complete but has not yet been run against a real tenant, and `capabilities` says so. It reports, for every action, whether it was proven live, only checked against the vendor's catalog, or covered by tests only. If your AI agent has its own Gmail/M365 connectors, it can fetch data itself and feed the same pipeline — no API client needed.
 
 **4. It tells you when — and why — it isn't working.** A generated readiness report gives a go/no-go verdict per capability (not a vague health check). Every run writes structured, secret-redacted logs, and `logs diagnose` turns failures into plain-English findings with the exact commands to fix them: *"Microsoft Graph rejected your credentials — the client secret may have expired. Run: …"*
 
@@ -126,9 +144,13 @@ python shared/scripts/bootstrap.py \
   --company "Acme Studio" --jurisdiction SG \
   --operator you@acme.com \
   --workspace-provider m365 \
-  --assistant-name "Ada"
+  --tenant-id <directory-tenant-id> --client-id <application-client-id> \
+  --user-principal you@acme.com \
+  --assistant-name "Ada" \
+  --storage local          # or: --storage git --data-repo you/private-cos-data
 
-# 2. Secrets go in .env (auto-loaded; never in config files)
+# 2. Secrets: under Hermes, in Settings → Plugins → Chief of Staff (masked).
+#    Standalone: in .env (auto-loaded; never in config files)
 echo 'M365_CLIENT_SECRET=...' >> .env
 
 # 3. Verify every capability independently, then get the go/no-go

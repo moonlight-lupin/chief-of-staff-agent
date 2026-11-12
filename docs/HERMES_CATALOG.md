@@ -13,7 +13,7 @@ are in [`NousResearch/hermes-agent` → `plugin-catalog/README.md`](https://gith
 | 2: exact SHA pin | Pin the release commit, not the tag. |
 | 3: no self-updating code | None. Updates arrive only through `hermes plugins update`. |
 | 6: declared capabilities match | `plugin.yaml` declares the six read-only `cos_*` tools and the five hooks `register()` registers. Skills come through `register_skill`; the slash commands `/<assistant name>` and `/cos` through `register_command`. Tested. |
-| 7: install scanner | Run `hermes plugins validate . --install-deps` at the commit you pin, and read every warning. |
+| 7: install scanner | Run `hermes plugins validate . --install-deps` at the commit you pin, and read every warning. Expect one `caution`: the repository has just over the scanner's 400-file soft limit (most are tests). It is a warning for the reviewer, not a failure. See "Validation status" below. |
 | 8: Desktop SDK | No Desktop half. |
 | 9: no core overrides | Only `register_skill`, `register_hook`, `register_session_env`, `register_tool` and `register_command`. Nothing is patched. |
 | 10: dependency policy | Each dependency has a floor and an upper bound, declared in both `pyproject.toml` and `plugin.yaml` → `python_dependencies`. Tested. |
@@ -21,7 +21,35 @@ are in [`NousResearch/hermes-agent` → `plugin-catalog/README.md`](https://gith
 | 12: approvals and unattended runs | Nothing routes around Hermes's approvals. The plugin's own review queue adds a further gate. No tool can approve. Approval is only `/<name> approve`, from the owner's own surfaces or listed chat approvers; anything else, including a chat command without a source, is refused. Without a terminal, every prompt refuses cleanly: guardrail confirmations, interactive onboarding, self-sign confirmation, and Microsoft 365 device-code sign-in. Tested. |
 | 13: disclosure | README → "What it touches", repeated in the entry PR (below). |
 | 14: truthful compatibility | `requires_hermes: ">=0.23.0"` in both `plugin.yaml` and the entry. Raise it only to a released version you have tested. |
-| 15–19 | Original work. No password-manager backend, no binaries, no infringing sources. |
+| 15, 16 | Original work, not a fork or a skin of a bundled plugin. |
+| 17: no unscannable payloads | No compiled binaries, native libraries, WebAssembly or committed bytecode: only readable source. Tested by file header, not by extension. Nothing is fetched at setup. |
+| 18: password managers | No `browser_vault` login backend. |
+| 19: infringing content | None. The paid data sources are licensed APIs used against approved budgets. |
+
+## Validation status
+
+Last checked on 2026-11-12, against `hermes-agent` at `72c880370f`, by
+reading `hermes_cli/plugin_validate.py` and `tools/plugin_guard.py`.
+`tests/test_hermes_catalog.py` mirrors these static checks:
+
+| Check | Result |
+|---|---|
+| Manifest fields (`name`, `version`, `description`) | Pass |
+| `requires_hermes` parses strictly | Pass (`>=0.23.0`) |
+| `config_schema` types | Pass: every field is `type: secret`, which Hermes accepts |
+| `requires_env` upper snake case | Pass (none declared) |
+| Python dependencies are PEP 508 with bounds | Pass |
+| Declared tools and hooks match `register()` | Pass (capability tests above) |
+| Rule 17: no binaries or bytecode, no file over 1 MB | Pass |
+| Install scanner file count | **Caution**: about 410 tracked files against a 400-file soft limit. A medium finding, so the verdict is `caution`, not `dangerous`. |
+| Install scanner content patterns | **Not run here.** Run `hermes plugins validate` at the release SHA before submitting. |
+
+Before submitting, run Hermes's own validator at the release commit, and
+paste its report into the entry PR:
+
+```bash
+hermes plugins validate /path/to/chief-of-staff-agent --install-deps
+```
 
 ## Setting secrets under Hermes
 
