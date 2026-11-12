@@ -506,12 +506,11 @@ class GoogleWorkspaceClient(WorkspaceClient):
         google_cfg = config.get("google", {}) if isinstance(config, Mapping) else {}
         self.delegate_email = str(google_cfg.get("delegate_email", ""))
         self.account_alias = str(google_cfg.get("account_alias", ""))
-        # If account_alias not set but service_account_path is, derive account name
-        if not self.account_alias:
-            sa_path = str(google_cfg.get("service_account_path", ""))
-            if sa_path and "phronesis" in sa_path.lower():
-                self.account_alias = "phronesis"
         self._script = _find_google_api_script()
+
+    def acting_identity(self, family: str) -> str | None:
+        """Domain-wide delegation impersonates delegate_email; that is who acts."""
+        return self.delegate_email.strip() or None
 
     def _build_cmd(self, *args: str) -> list[str]:
         """Build a google_api.py command with auth flags."""

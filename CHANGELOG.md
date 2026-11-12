@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Account binding: refuse the wrong account before the write
+
+- **Workspace actions are bound when they are created.** This covers mail,
+  calendar, files, contacts and Notion.
+  - The `binding` records the account the company declares and the
+    workspace provider.
+  - The binding is part of the approval fingerprint, for new actions only,
+    so existing approvals keep theirs.
+  - If either changes in company.yaml after approval, execution is refused as
+    `binding_changed` before anything runs.
+- **Python path.** Clients report the identity they act as when they can know
+  it without a network call: Google `delegate_email`, Microsoft 365
+  client-credentials `user_principal`. `send_email`, `delete_actions` and
+  `webhook_events` refuse a mismatch before the provider call.
+- **Agent path.** `claim --executor-account` is required when an account is
+  declared, and a mismatch is refused (and audited) before the action moves
+  to `executing`. `record-execution` compares against the approved binding,
+  not today's config.
+- **`doctor`** now warns when executions were recorded without a verified
+  account. Previously that passed.
+- **The registry** refuses two companies that act as the same account.
+- **Google.** The guessed `account_alias` heuristic (from the key file's name)
+  is removed. The alias comes only from config.
+- **Breaking for agents:** `claim` needs `--executor-account` wherever
+  `accounts:` is declared. CLAUDE.md, SETUP and the Notion skills are updated.
+- **Docs:** `docs/MULTI_COMPANY.md` gains "Account binding: what is enforced
+  before the write", including what cannot be verified.
+
+
 ### Signed approvals: only the user approves (Hermes)
 
 - **New `shared/scripts/approval_signing.py`.**

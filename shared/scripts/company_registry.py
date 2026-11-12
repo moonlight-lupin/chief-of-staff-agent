@@ -144,6 +144,7 @@ def load_registry(path: str | os.PathLike[str] | None = None) -> Registry | None
         raise RegistryError(f"{reg_path}: 'groups' must be a mapping")
 
     companies: dict[str, Company] = {}
+    claimed_accounts: dict[str, str] = {}   # account -> the company that declared it
     for slug, spec in raw_companies.items():
         slug = str(slug)
         if not isinstance(spec, Mapping) or not spec.get("config"):
@@ -153,7 +154,14 @@ def load_registry(path: str | os.PathLike[str] | None = None) -> Registry | None
         group = str(group) if group else None
         if group and group not in raw_groups:
             raise RegistryError(f"company '{slug}': group '{group}' is not declared under 'groups'")
-        _, root = _read_scope_config(cfg_path, f"company '{slug}'", slug)
+        company_cfg, root = _read_scope_config(cfg_path, f"company '{slug}'", slug)
+        for account in _declared_identities(company_cfg):
+            owner = claimed_accounts.setdefault(account.lower(), slug)
+            if owner != slug:
+                raise RegistryError(
+                    f"companies '{owner}' and '{slug}' both act as {account}: each company needs its own "
+                    f"accounts, or one company's approval could act in the other's mailbox"
+                )
         companies[slug] = Company(slug=slug, config_path=cfg_path, project_root=root, group=group)
 
     groups: dict[str, Group] = {}
@@ -473,6 +481,74 @@ def expected_account(config: Any, action_type: str) -> str | None:
         return None
     value = accounts.get(family) or (accounts.get("mail") if family in {"calendar", "drive"} else None)
     return str(value) if value else None
+
+
+def _declared_identities(cfg: Any) -> set[str]:
+    """Accounts a company config acts as: accounts:, google delegate, m365 mailbox."""
+    out: set[str] = set()
+    try:
+        accounts = cfg.get("accounts") or {}
+        out |= {str(v).strip() for v in accounts.values() if str(v or "").strip()}
+        delegate = str(((cfg.get("google") or {}).get("delegate_email")) or "").strip()
+        mailbox = str(((cfg.get("m365") or {}).get("user_principal")) or "").strip()
+        out |= {v for v in (delegate, mailbox) if v}
+    except AttributeError:
+        pass
+    return out
+
+
+def configured_provider(config: Any) -> str:
+    try:
+        workspace = ((config.get("integrations") or {}).get("workspace") or {})
+        return str(workspace.get("provider") or "google_api")
+    except AttributeError:
+        return "google_api"
+
+
+def action_binding(config: Any, action_type: str) -> dict[str, Any] | None:
+    """What a workspace action is bound to at creation: the declared account
+    for its family ("" when none is declared) and the workspace provider.
+    None for local actions (pipeline, bookkeeping...), which touch no account."""
+    family = _ACCOUNT_FAMILY.get(str(action_type).split(".", 1)[0])
+    if family is None:
+        return None
+    return {"account": expected_account(config, action_type) or "",
+            "provider": None if family == "notion" else configured_provider(config)}
+
+
+def binding_drift(bound: Mapping[str, Any], now: Mapping[str, Any] | None) -> str | None:
+    """None when the live config still matches the approved binding."""
+    now = now or {}
+    if str(bound.get("account") or "").strip().lower() != str(now.get("account") or "").strip().lower():
+        return f"account {bound.get('account') or '(none)'} -> {now.get('account') or '(none)'}"
+    if (bound.get("provider") or None) != (now.get("provider") or None):
+        return f"provider {bound.get('provider')} -> {now.get('provider')}"
+    return None
+
+
+def bound_account(config: Any, action: Mapping[str, Any]) -> str | None:
+    """The account the action was approved for (legacy rows: the live config)."""
+    binding = action.get("binding")
+    if isinstance(binding, Mapping):
+        return str(binding.get("account") or "") or None
+    return expected_account(config, str(action.get("type") or ""))
+
+
+def preflight_account(action: Mapping[str, Any], client: Any) -> str | None:
+    """Before a Python-path write: refuse when the client knowably acts as an
+    account other than the one approved. None = proceed (match, nothing
+    declared, or the client cannot know who it is: reported as unverified)."""
+    binding = action.get("binding")
+    expected = str((binding or {}).get("account") or "").strip() if isinstance(binding, Mapping) else ""
+    if not expected:
+        return None
+    family = _ACCOUNT_FAMILY.get(str(action.get("type") or "").split(".", 1)[0]) or "mail"
+    identity = getattr(client, "acting_identity", None)
+    actual = identity(family) if callable(identity) else None
+    if account_check(expected, actual) == "mismatch":
+        return (f"account_mismatch: approved for {expected}, but the client would act as {actual}. "
+                f"Nothing was sent; fix the provider config or propose the action again.")
+    return None
 
 
 def account_check(expected: str | None, actual: str | None) -> str:

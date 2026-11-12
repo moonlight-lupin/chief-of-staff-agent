@@ -51,7 +51,7 @@ for _path in (_SCRIPT_DIR, _DOC_PREPARER_SCRIPTS):
         sys.path.insert(0, str(_path))
 
 from action_risk import get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
-from company_registry import account_check, config_approvers, expected_account  # noqa: E402
+from company_registry import account_check, bound_account, config_approvers  # noqa: E402
 from workspace_audit import audit_workspace_action  # noqa: E402
 from config_loader import get_project_root, load_config  # noqa: E402
 from state_db import (  # noqa: E402
@@ -619,6 +619,32 @@ def cmd_claim(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Pre-flight (docs/MULTI_COMPANY.md): when the company declares an account
+    # for this action, the agent states the account it is about to act from,
+    # and a mismatch is refused BEFORE the action moves to executing.
+    declared = bound_account(config, action)
+    stated = str(getattr(args, "executor_account", "") or "").strip() or None
+    if declared and not stated:
+        print(
+            f"Refusing to claim {args.action_id}: this company declares {declared} for "
+            f"{action.get('type')}. Re-run with --executor-account <the account your connector is "
+            f"signed in to>; if it is not {declared}, stop and tell the user.",
+            file=sys.stderr,
+        )
+        return 1
+    if declared and account_check(declared, stated) == "mismatch":
+        audit_workspace_action(
+            config, str(action.get("provider") or ""), str(action.get("type") or ""), "claim",
+            target=str(action.get("target") or ""), status="account_mismatch",
+            extra={"action_id": args.action_id, "expected_account": declared, "executor_account": stated},
+        )
+        print(
+            f"Refusing to claim {args.action_id}: approved for {declared}, but you would act as "
+            f"{stated}. Do NOT perform the action; tell the user to switch the connector account.",
+            file=sys.stderr,
+        )
+        return 1
+
     claimed = mark_executing(config, args.action_id)
     if claimed is None:
         # mark_executing returns None for a lapsed approval, a concurrent
@@ -647,7 +673,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
         # Multi-company: the account this company expects the action to be
         # performed from. Use exactly this account, and pass it back with
         # record-execution --executor-account.
-        "expected_account": expected_account(config, str(claimed.get("type") or "")),
+        "expected_account": bound_account(config, claimed),
         "next_step": (
             "Perform exactly this action with your own connector tools, then close "
             f"the loop with: review_queue.py record-execution --action-id {args.action_id} "
@@ -724,7 +750,7 @@ def cmd_record_execution(args: argparse.Namespace) -> int:
         "executor": str(getattr(args, "executor", "") or "agent"),
         "audited": True,
     }
-    expected = expected_account(config, str(action.get("type") or ""))
+    expected = bound_account(config, action)   # what was approved, not today's config
     actual = str(getattr(args, "executor_account", "") or "").strip() or None
     check = account_check(expected, actual)
     result["executor_account"] = actual
@@ -926,6 +952,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_config_arg(claim_parser)
     claim_parser.add_argument("--action-id", required=True)
+    claim_parser.add_argument(
+        "--executor-account", default=None,
+        help="The account your connector is signed in to. Required when the company declares one; "
+             "a mismatch is refused before anything runs.",
+    )
 
     record_parser = sub.add_parser(
         "record-execution",

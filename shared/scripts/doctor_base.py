@@ -1454,8 +1454,9 @@ def _check_executor_accounts(fix: bool, data: dict[str, Any] | None, config_path
             f"(e.g. Sent mail) and correct it",
         )
     if unverified:
-        return CheckResult("executor_accounts", "pass",
-                           f"{len(unverified)} executed without --executor-account; account not verified")
+        return CheckResult("executor_accounts", "warn",
+                           f"executed without a verified account: {', '.join(unverified)} — record-execution "
+                           f"was run without --executor-account; check the provider that the right account acted")
     return CheckResult("executor_accounts", "pass", "every checked execution used the declared account")
 
 

@@ -734,7 +734,9 @@ python shared/scripts/review_queue.py approve --action-id <id> \
 
 # 2. Claim it — this is what validates the approval, so it must happen BEFORE
 #    the action, not after. Returns the type, target and payload to execute.
-python shared/scripts/review_queue.py claim --action-id <id>
+#    When the company declares an account, state the one your connector uses:
+#    a mismatch is refused here, before anything runs.
+python shared/scripts/review_queue.py claim --action-id <id> --executor-account <account>
 
 # 3. The agent performs exactly that action with its own tool.
 

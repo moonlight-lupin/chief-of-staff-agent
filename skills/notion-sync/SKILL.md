@@ -122,7 +122,8 @@ notion:
 
 5. **Execute.**
    - `notion.pull`: `review_queue.py execute --action-id <id>`.
-   - `notion.db.upsert` / `notion.page.archive`: `review_queue.py claim`, then
+   - `notion.db.upsert` / `notion.page.archive`: `review_queue.py claim
+     --executor-account <your Notion workspace>`, then
      do it with your Notion connector, then `record-execution --result-json
      '{"page_id": "…", "last_edited_time": "…"}' --executor-account <account>`.
      **Always include `page_id`.** Without it the row is not mirrored and the

@@ -50,6 +50,37 @@ registry (companies.yaml)
   still recorded as executed, because it has already happened, but it is
   audited as `account_mismatch` and `doctor` warns about it.
 
+## Account binding: what is enforced before the write
+
+Every workspace action (mail, calendar, files, contacts, Notion) is bound,
+when it is created, to two things:
+
+- the account its company declares for that family (`accounts:` in
+  company.yaml; calendar and drive fall back to `mail`);
+- the configured workspace provider.
+
+The binding is part of the approval fingerprint.
+
+| Check | When | Result |
+|---|---|---|
+| The account or provider changed in company.yaml after approval | Before execution, on every path | Refused as `binding_changed`; nothing runs |
+| Python path: the client knowably acts as another account | Before the provider call | Refused as `account_mismatch`; the action is marked failed |
+| Agent path: the agent states an account at `claim` | Before the action moves to `executing` | Missing (when one is declared) or mismatched: refused |
+| Agent path: the account reported at `record-execution` | After the side effect (it already happened) | Recorded; a mismatch or missing account is audited and `doctor` warns |
+| Two registered companies declare the same account | When the registry loads | Refused |
+
+**What the client can know.** Google `google_api` acts as `delegate_email`.
+Microsoft 365 with client credentials acts as `user_principal`. Microsoft 365
+device code, Composio and agent-native connectors act as whoever signed in,
+which the plugin cannot see. For those, the check is the stated account
+(agent path) and the audit. The plugin never presents that as proof.
+
+**Secrets are install-wide.** Under Hermes, a provider's key (for example
+`GOOGLE_SERVICE_ACCOUNT_JSON`, `M365_CLIENT_SECRET`, `COMPOSIO_MCP_KEY`) is
+one per install. Companies that need different Google service accounts or
+Composio users need separate installs or Hermes profiles until per-company
+secret names land.
+
 ## Spend envelopes (phase 4)
 
 An envelope is a pending action of type `data.spend_envelope`. Its payload is

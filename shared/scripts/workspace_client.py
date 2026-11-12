@@ -32,9 +32,17 @@ if str(_SCRIPT_DIR) not in sys.path:
 class WorkspaceClient(abc.ABC):
     """Abstract base for workspace providers (mail, calendar, files).
 
+    ``acting_identity(family)`` returns the account a write would act as,
+    when the client can know it without a network call, else None
+    (company_registry.preflight_account reports None as unverified).
+
     Providers implement the neutral methods below. The gmail_*/drive_* aliases
     at the bottom of the class are deprecated shims — do not override them.
     """
+
+    def acting_identity(self, family: str) -> str | None:  # noqa: ARG002 - providers override
+        return None
+
 
     # ── Mail (neutral) ─────────────────────────────────────────────────
 
