@@ -27,3 +27,10 @@ skills.local/
 # Multi-company registry and per-company configs (docs/MULTI_COMPANY.md)
 shared/config/companies.yaml
 shared/config/companies/
+
+# Runtime state written under project_root (never tracked here)
+.knowledge/
+.runs/
+.integrations/
+.audit/
+.last_briefing

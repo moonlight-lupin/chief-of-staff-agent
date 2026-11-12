@@ -79,7 +79,15 @@ jobs:
       - name: Audit dependencies (pip-audit)
         run: |
           python -m pip install 'pip-audit==2.10.1'
+          # What installs today (newest allowed, full tree)...
           pip-audit -r requirements.txt --progress-spinner off
+          # ...and the oldest versions the floors still allow: an existing
+          # environment that already meets the floors is never upgraded.
+          sed -nE 's/^([A-Za-z0-9_.-]+)>=([^,]+),.*/\1==\2/p' requirements.txt > "$RUNNER_TEMP/floors.txt"
+          cat "$RUNNER_TEMP/floors.txt"
+          pip-audit -r "$RUNNER_TEMP/floors.txt" --no-deps --disable-pip --progress-spinner off
+          # The floors must also be installable together.
+          python -m pip install --dry-run --ignore-installed -q -r "$RUNNER_TEMP/floors.txt"
       - name: Repository hygiene
         run: |
           python -m pip install -r requirements.txt pytest
