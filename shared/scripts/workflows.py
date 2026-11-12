@@ -90,22 +90,56 @@ class WorkflowNameConflict(WorkflowError):
 # to approve, to set the break-glass switches, or to run an approve command
 # (P0.3, docs/SECURITY_MODEL.md). Approval is the user's step.
 _SELF_APPROVAL_RE = re.compile(
-    r"(?i)(review_queue\.py\s+(?:approve|dismiss)|send_email\.py\s+approve|delete_actions\.py\s+approve"
-    r"|webhook_events\.py\s+approve|approve\s+--all|chief_of_staff_(?:auto_approve|allow_destructive)"
-    r"|/[a-z0-9_]{1,32}\s+(?:approve|dismiss)\b)"
+    r"(?ix)("
+    r"(?:review_queue|send_email|delete_actions|webhook_events)(?:\.py)?\b[^\n]{0,60}?\b(?:approve|dismiss)\b"
+    r"|\bapprove\s+--all\b"
+    r"|chief[\s_-]*of[\s_-]*staff[\s_-]*(?:auto[\s_-]*approve|allow[\s_-]*destructive)"
+    r"|(?<![\w/])/[a-z0-9_-]{1,32}\s+(?:approve|dismiss)\b"
+    r")"
+)
+# Telling the *user* to approve is exactly what workflows should say.
+_USER_DIRECTED_RE = re.compile(
+    r"(?i)\b(?:ask|tell|remind|wait\s+for|have)\s+(?:the\s+)?(?:user|operator|owner|founder)\b"
+    r"|\b(?:user|operator|owner)\s+(?:to\s+)?(?:runs?|approves?|types?|uses?)\b"
 )
 
 
+def _normalise_text(text: str) -> str:
+    """NFKC, invisible/format characters removed, backticks and quotes dropped."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) not in {"Cf", "Cc", "Co", "Cn"} or ch == "\n")
+    return re.sub(r"[`'\"]", "", text)
+
+
 def _refuse_self_approval(text: Any, field: str) -> None:
-    if isinstance(text, str) and _SELF_APPROVAL_RE.search(text):
-        raise WorkflowValidationError(
-            f"{field}: workflow text must not approve, dismiss or enable break-glass; "
-            f"propose the action and let the user approve it"
-        )
+    if not isinstance(text, str):
+        return
+    clean = _normalise_text(text)
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n", clean):
+        if _SELF_APPROVAL_RE.search(sentence) and not _USER_DIRECTED_RE.search(sentence):
+            raise WorkflowValidationError(
+                f"{field}: workflow text must not approve, dismiss or enable break-glass; "
+                f"propose the action and ask the user to approve it"
+            )
+
+
+def _refuse_self_approval_everywhere(data: Any, field: str = "workflow") -> None:
+    """Every string that can end up in the generated skill is checked."""
+    if isinstance(data, str):
+        _refuse_self_approval(data, field)
+    elif isinstance(data, Mapping):
+        for key, value in data.items():
+            _refuse_self_approval_everywhere(value, f"{field}.{key}")
+    elif isinstance(data, (list, tuple)):
+        for i, value in enumerate(data):
+            _refuse_self_approval_everywhere(value, f"{field}[{i}]")
 
 
 def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
     """Validate ``data`` and return a normalized copy. Does not mutate input."""
+    _refuse_self_approval_everywhere(data)
     if not isinstance(data, Mapping):
         raise WorkflowValidationError("workflow: must be a mapping")
 

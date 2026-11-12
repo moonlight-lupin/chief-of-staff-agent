@@ -697,14 +697,28 @@ def wiki_context_injection(context: dict = None, message: str = "", **kwargs) ->
 
 
 _WIKI_SNIPPET_MAX = 200
-_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f\u2028\u2029\u200b-\u200f\u202a-\u202e]")
 
 
 def _inert(text: str, limit: int) -> str:
-    """One line, no control or bidi characters, no comment/marker syntax."""
-    text = _CONTROL_RE.sub(" ", str(text or ""))
-    text = " ".join(text.split()).replace("<!--", "‹!--").replace("-->", "--›")
+    """One visible line: no control, format (bidi, zero-width, tag-block),
+    private-use or unassigned characters, and no comment/marker syntax."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", str(text or ""))
+    kept = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat in {"Cc", "Cf", "Co", "Cn", "Zl", "Zp"} or 0xE0000 <= ord(ch) <= 0xE007F:
+            kept.append(" ")
+        else:
+            kept.append(ch)
+    text = " ".join("".join(kept).split()).replace("<!--", "‹!--").replace("-->", "--›")
     return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _wiki_slug(item: dict) -> str:
+    stem = Path(str(item.get("path") or "")).stem
+    return re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-")[:24] or "note"
 
 
 def format_wiki_context(items: Any) -> Optional[str]:
@@ -717,16 +731,20 @@ def format_wiki_context(items: Any) -> Optional[str]:
     for item in items or []:
         if not isinstance(item, dict):
             continue
-        title = _inert(str(item.get("title") or "").strip() or Path(str(item.get("path") or "")).stem, 120)
-        page_type = _inert(str(item.get("type") or "").strip() or "page", 30)
+        page_type = _inert(str(item.get("type") or "").strip() or "page", 30).casefold()
         try:
             score_s = f"{float(item.get('score', 0)):.1f}"
         except (TypeError, ValueError):
             score_s = "0"
-        tags = {str(t).strip().lower() for t in (item.get("tags") or [])}
+        raw_tags = item.get("tags") or []
+        raw_tags = [raw_tags] if isinstance(raw_tags, str) else raw_tags
+        tags = {_inert(str(t), 40).casefold() for t in raw_tags if t is not None}
         if "event" in tags or page_type == "event":
-            lines.append(f"- [[{title}]] ({page_type}, {score_s}): from an external message; open the page to read it")
+            # Title and text come from an external message: point at it, don't quote it.
+            lines.append(f"- an external-message note matches ({page_type}, {score_s}): "
+                         f"open wiki note {_wiki_slug(item)} to read it")
             continue
+        title = _inert(str(item.get("title") or "").strip() or Path(str(item.get("path") or "")).stem, 120)
         snippet = _inert(item.get("snippet") or "", _WIKI_SNIPPET_MAX)
         lines.append(f"- [[{title}]] ({page_type}, {score_s}): {snippet}")
     if len(lines) == 1:

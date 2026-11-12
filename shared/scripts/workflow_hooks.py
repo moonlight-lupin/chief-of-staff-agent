@@ -7,6 +7,7 @@ event-driven; review_queue steps are re-observed via observe_and_advance.
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -289,20 +290,35 @@ def _command_matches(
     return True
 
 
-_NOT_RUNNING = frozenset({"echo", "printf", "true", "false", ":", "cat", "grep", "egrep", "rg", "test", "[",
-                          "ls", "less", "more", "head", "tail", "wc", "which", "type", "man", "#"})
-_SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
+_NOT_RUNNING = frozenset({
+    "echo", "printf", "true", "false", ":", "cat", "tac", "less", "more", "head", "tail", "wc", "grep", "egrep",
+    "fgrep", "rg", "ag", "ack", "sed", "awk", "gawk", "vi", "vim", "nvim", "nano", "emacs", "code", "stat", "file",
+    "ls", "ll", "find", "fd", "locate", "which", "type", "whereis", "man", "git", "diff", "cmp", "md5sum",
+    "sha256sum", "xargs", "test", "[", "[[", "touch", "cp", "mv", "ln", "chmod", "chown", "readlink", "realpath",
+    "basename", "dirname", "tree", "du", "#",
+})
+_WRAPPERS = frozenset({"env", "nohup", "time", "nice", "ionice", "stdbuf", "command", "exec", "setsid"})
+_TIMED_WRAPPERS = frozenset({"timeout"})
+_INTERPRETERS = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?|bash|sh|zsh|node|ruby|perl|uv|pipx)$")
+_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "(", ")", ";;", "|&"})
+
+
+def _norm_path(token: str) -> str:
+    return token[2:] if token.startswith("./") else token
 
 
 def command_runs_pattern(command: str, pattern: str) -> bool:
-    """True when some segment of ``command`` actually runs ``pattern``: its
-    tokens appear contiguously in a segment that is not just printing or
-    searching for them (``echo <pattern>`` must not advance a step)."""
+    """True only when a segment of ``command`` actually *runs* ``pattern``:
+    the pattern is the program itself, or the script an interpreter runs.
+    Printing, editing, searching or listing it (echo, sed, vim, grep, find,
+    git log, xargs echo...) does not count."""
     import shlex
 
     try:
-        tokens = shlex.split(command, posix=True)
-        want = shlex.split(pattern, posix=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        want = [_norm_path(t) for t in shlex.split(pattern, posix=True)]
     except ValueError:
         return False
     if not want:
@@ -314,12 +330,29 @@ def command_runs_pattern(command: str, pattern: str) -> bool:
         else:
             segments[-1].append(token)
     for seg in segments:
-        while seg and "=" in seg[0] and not seg[0].startswith(("/", ".")):
-            seg = seg[1:]   # leading VAR=value assignments
-        if not seg or Path(seg[0]).name in _NOT_RUNNING:
+        seg = list(seg)
+        while seg:   # strip VAR=value assignments and transparent wrappers
+            head = Path(seg[0]).name
+            if "=" in seg[0] and not seg[0].startswith(("/", ".")):
+                seg = seg[1:]
+            elif head in _WRAPPERS:
+                seg = seg[1:]
+            elif head in _TIMED_WRAPPERS:
+                seg = seg[1:]
+                while seg and (seg[0].startswith("-") or re.fullmatch(r"\d+[smhd]?", seg[0])):
+                    seg = seg[1:]
+            else:
+                break
+        if not seg:
             continue
-        for i in range(len(seg) - len(want) + 1):
-            if seg[i:i + len(want)] == want:
+        program = _norm_path(seg[0])
+        if Path(program).name in _NOT_RUNNING:
+            continue    # printing, editing, searching or listing is not running
+        if _INTERPRETERS.match(Path(program).name) and any(a in {"-c", "-e"} for a in seg[1:]):
+            continue    # inline code (python -c "print('x')") never runs the file
+        argv = [_norm_path(a) for a in seg]
+        for i in range(len(argv) - len(want) + 1):
+            if argv[i:i + len(want)] == want:
                 return True
     return False
 

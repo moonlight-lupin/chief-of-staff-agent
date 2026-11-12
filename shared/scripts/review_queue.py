@@ -619,6 +619,18 @@ def cmd_claim(args: argparse.Namespace) -> int:
         )
         return 1
 
+    from payload_policy import check_payload
+
+    path_refusal = check_payload(config, str(action.get("type") or ""), action.get("payload") or {})
+    if path_refusal:
+        audit_workspace_action(
+            config, str(action.get("provider") or ""), str(action.get("type") or ""), "claim",
+            target=str(action.get("target") or ""), status="blocked",
+            extra={"action_id": args.action_id, "reason": "payload_path_refused", "detail": path_refusal},
+        )
+        print(f"Refusing to claim {args.action_id}: {path_refusal}. Do NOT perform the action.", file=sys.stderr)
+        return 1
+
     # Pre-flight (docs/MULTI_COMPANY.md): when the company declares an account
     # for this action, the agent states the account it is about to act from,
     # and a mismatch is refused BEFORE the action moves to executing.

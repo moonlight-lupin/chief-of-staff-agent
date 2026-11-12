@@ -36,7 +36,7 @@ def mcp_config():
                 },
             }
         },
-        "paths": {"project_root": "/tmp/test-mcp-workspace"},
+        "paths": {"project_root": "/tmp/test-mcp-workspace", "upload_roots": [__import__("tempfile").gettempdir()]},
         "delivery": {"timezone": "Asia/Singapore"},
     }
 

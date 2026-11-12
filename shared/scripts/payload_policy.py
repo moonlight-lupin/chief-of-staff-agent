@@ -1,31 +1,42 @@
 """Where an approved action may read or write local files (P0.3).
 
-Drive actions carry local paths in their payload, and payloads can be shaped
-by untrusted content. So a path is confined, not just shown to the approver:
+Action payloads can be shaped by untrusted content, so the local paths they
+carry are confined, not just shown to the approver:
 
-* ``drive.download`` / ``files.download`` writes only inside the company's
-  project root (never over plugin code, another company's store, or a
-  dotfile);
-* ``drive.upload`` / ``files.upload`` reads only from the project root or
-  the configured ``paths.upload_roots``, and never a credential or the
-  plugin's own state (``.env``, keys, ``~/.ssh``, ``~/.hermes``, ``state.db``).
+* **Downloads** (``drive.download`` / ``files.download``) write a *new* file
+  inside the company's project root. They never overwrite an existing file,
+  and never write into the user's records (top-level ``*.yaml``/``*.yml``),
+  ``wiki/``, ``workflows/``, ``skills.local/``, a hidden path or the store.
+* **Uploads** (``drive.upload`` / ``files.upload``) and **attachments** on
+  send actions read only from the project root or ``paths.upload_roots``
+  (never ``/`` or the home folder itself), and never a credential, a key, the
+  configured service-account file, the plugin's state, a hidden file or a
+  hard-linked file.
 
-Checked when the action is created and again just before execution, after
-resolving symlinks.
+Every path key a payload carries is checked, not just the one the executor
+reads. Checked at proposal (``StateDB.create_action``), at ``claim``, and
+again inside every guarded upload/download, after resolving symlinks.
 """
 
 from __future__ import annotations
 
+import fnmatch
+import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 DOWNLOAD_TYPES = frozenset({"drive.download", "files.download"})
 UPLOAD_TYPES = frozenset({"drive.upload", "files.upload"})
+SEND_TYPES = frozenset({"gmail.send", "mail.send", "gmail.draft", "mail.draft"})
 
-_SECRET_NAMES = frozenset({".env", "state.db", "state.db-wal", "state.db-shm", "auth.json", "id_rsa",
-                           "id_ed25519", "credentials", "application_default_credentials.json"})
-_SECRET_DIRS = (".ssh", ".hermes", ".aws", ".gnupg", ".kube", ".config/gcloud", ".docker")
-_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+_DOWNLOAD_KEYS = ("output_path", "path", "destination", "dest", "local_path")
+_UPLOAD_KEYS = ("file_path", "path", "source", "local_path")
+
+_SECRET_PATTERNS = ("*secret*", "*credential*", "*token*.json", "*service*account*", "*.env", ".env*", "id_*",
+                    "state.*", "*.sqlite", "*.sqlite3", "*.db", "*.db-*", "*.pem", "*.key", "*.p12", "*.pfx",
+                    "*.keystore", "auth.json", "*.kdbx", "*.ovpn")
+_SECRET_DIRS = (".ssh", ".hermes", ".aws", ".gnupg", ".kube", ".config/gcloud", ".docker", ".azure")
+_PROTECTED_SUBTREES = ("wiki", "workflows", "skills.local")
 
 
 class PayloadRefused(ValueError):
@@ -59,13 +70,35 @@ def _project_root(config: Any) -> Path | None:
         return None
 
 
-def _is_secret(path: Path, root: Path | None = None) -> bool:
-    """A credential, the plugin's state, or a hidden file. Inside an allowed
-    root (which may itself live under ~/.hermes) only the path *below* the
-    root is judged, so the project folder is never mistaken for a secret."""
+def _upload_roots(config: Any) -> list[Path]:
+    roots = [r for r in [_project_root(config)] if r is not None]
+    try:
+        extra = (config.get("paths") or {}).get("upload_roots") or []
+    except AttributeError:
+        extra = []
+    home = Path.home().resolve()
+    for raw in extra if isinstance(extra, (list, tuple)) else []:
+        path = _resolve(raw)
+        # "/" or the home folder itself would make the confinement meaningless.
+        if path is not None and path != Path("/") and path != home and len(path.parts) > 1:
+            roots.append(path)
+    return roots
+
+
+def _configured_key_file(config: Any) -> Path | None:
+    try:
+        return _resolve(((config.get("google") or {}).get("service_account_path")))
+    except AttributeError:
+        return None
+
+
+def _secret_name(path: Path) -> bool:
     name = path.name.lower()
-    if name in _SECRET_NAMES or name.startswith(".env") or name.endswith(_SECRET_SUFFIXES):
-        return True
+    return any(fnmatch.fnmatch(name, pattern) for pattern in _SECRET_PATTERNS)
+
+
+def _secret_location(path: Path, root: Path | None) -> bool:
+    """Hidden below the allowed root, or (outside any root) a known secret dir."""
     if root is not None and _inside(path, root):
         return any(part.startswith(".") for part in path.relative_to(root).parts)
     text = path.as_posix()
@@ -73,37 +106,72 @@ def _is_secret(path: Path, root: Path | None = None) -> bool:
     return any(text == f"{home}/{d}" or text.startswith(f"{home}/{d}/") for d in _SECRET_DIRS)
 
 
+def _hard_linked(path: Path) -> bool:
+    try:
+        return path.is_file() and os.stat(path).st_nlink > 1
+    except OSError:
+        return False
+
+
+def _check_upload(config: Any, raw: Any) -> str | None:
+    path = _resolve(raw)
+    if path is None:
+        return None
+    roots = _upload_roots(config)
+    home_root = next((r for r in roots if _inside(path, r)), None)
+    key_file = _configured_key_file(config)
+    if _secret_name(path) or _secret_location(path, home_root) or (key_file is not None and path == key_file):
+        return f"file {raw!r} refused: it looks like a credential, a key or the plugin's own state"
+    if home_root is None:
+        return (f"file {raw!r} refused: files must come from the project root or paths.upload_roots "
+                f"({', '.join(str(r) for r in roots) or 'none configured'})")
+    if _hard_linked(path):
+        return f"file {raw!r} refused: it is hard-linked, so it may be another file in disguise"
+    return None
+
+
+def _check_download(config: Any, raw: Any) -> str | None:
+    path, root = _resolve(raw), _project_root(config)
+    if path is None:
+        return None
+    if root is None or not _inside(path, root) or path == root:
+        return f"download path {raw!r} is outside the project root; save inside {root}"
+    rel = path.relative_to(root)
+    if _secret_name(path) or _secret_location(path, root):
+        return f"download path {raw!r} would write a hidden, credential or state file"
+    if rel.parts and rel.parts[0] in _PROTECTED_SUBTREES:
+        return f"download path {raw!r} would write into {rel.parts[0]}/, which holds your notes or instructions"
+    if len(rel.parts) == 1 and path.suffix.lower() in {".yaml", ".yml", ".json", ".md"}:
+        return f"download path {raw!r} would replace one of your records; save into a subfolder"
+    if path.exists():
+        return f"download path {raw!r} already exists; a download never overwrites a file"
+    return None
+
+
+def _values(payload: Mapping[str, Any], keys: Iterable[str]) -> list[Any]:
+    return [payload.get(k) for k in keys if payload.get(k) not in (None, "")]
+
+
 def check_payload(config: Any, action_type: str, payload: Mapping[str, Any] | None) -> str | None:
-    """None when the payload's paths are allowed; otherwise why not."""
+    """None when every local path in the payload is allowed; otherwise why not."""
     payload = payload or {}
     if action_type in DOWNLOAD_TYPES:
-        raw = payload.get("output_path", payload.get("path"))
-        path, root = _resolve(raw), _project_root(config)
-        if path is None:
-            return None   # the provider refuses a missing path itself
-        if root is None or not _inside(path, root) or path == root:
-            return f"download path {raw!r} is outside the project root; save inside {root}"
-        if _is_secret(path, root):
-            return f"download path {raw!r} would overwrite a hidden or state file"
-        return None
-    if action_type in UPLOAD_TYPES:
-        raw = payload.get("file_path", payload.get("path"))
-        path = _resolve(raw)
-        if path is None:
-            return None
-        roots = [r for r in [_project_root(config)] if r is not None]
-        try:
-            extra = (config.get("paths") or {}).get("upload_roots") or []
-        except AttributeError:
-            extra = []
-        roots += [p for p in (_resolve(r) for r in extra) if p is not None]
-        home_root = next((r for r in roots if _inside(path, r)), None)
-        if _is_secret(path, home_root):
-            return f"upload of {raw!r} refused: it is a credential or the plugin's own state"
-        if home_root is None:
-            return (f"upload of {raw!r} refused: files must come from the project root or "
-                    f"paths.upload_roots ({', '.join(str(r) for r in roots) or 'none configured'})")
-        return None
+        for raw in _values(payload, _DOWNLOAD_KEYS):
+            reason = _check_download(config, raw)
+            if reason:
+                return reason
+    elif action_type in UPLOAD_TYPES:
+        for raw in _values(payload, _UPLOAD_KEYS):
+            reason = _check_upload(config, raw)
+            if reason:
+                return reason
+    if action_type in SEND_TYPES or payload.get("attachments"):
+        attachments = payload.get("attachments") or []
+        for item in attachments if isinstance(attachments, (list, tuple)) else [attachments]:
+            raw = (item.get("path") or item.get("file_path")) if isinstance(item, Mapping) else item
+            reason = _check_upload(config, raw) if raw else None
+            if reason:
+                return f"attachment: {reason}"
     return None
 
 

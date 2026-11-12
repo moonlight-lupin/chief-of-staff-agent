@@ -259,12 +259,27 @@ _RESERVED_KEYS = {"timestamp", "level", "run_id", "command", "component", "event
 
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+\S+")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
-# Also prefixed names (COMPOSIO_API_KEY=, M365_CLIENT_SECRET=, *_TOKEN=, *_SECRET=,
-# GOOGLE_SERVICE_ACCOUNT_JSON=): the plugin's own secrets are named that way.
-_KV_SECRET_RE = re.compile(
-    r"(?i)\b([A-Z0-9_]*?(?:client_secret|password|api_key|apikey|access_token|refresh_token|id_token"
-    r"|client_assertion|assertion|secret|token|private_key|service_account_json|mcp_key))=\S+"
-)
+# Secret-looking names, prefixed or not (COMPOSIO_API_KEY, M365_CLIENT_SECRET,
+# *_TOKEN, GOOGLE_SERVICE_ACCOUNT_JSON...). Paging/sync tokens and booleans are
+# diagnostics, not secrets, and are left alone (see _secret_kv).
+_SECRET_NAME = (r"[A-Za-z0-9_-]*?(?:client[_-]?secret|password|passwd|api[_-]?key|apikey|access[_-]?token"
+                r"|refresh[_-]?token|id[_-]?token|client[_-]?assertion|assertion|secret|token|private[_-]?key"
+                r"|service[_-]?account[_-]?json|mcp[_-]?key)")
+_KV_SECRET_RE = re.compile(rf"(?i)\b({_SECRET_NAME})(\s*[=:]\s*)([^\s&,;]+)")
+_JSON_PREFIXED_RE = re.compile(rf"(?i)(['\"]{_SECRET_NAME}['\"]\s*:\s*['\"])[^'\"]+(['\"])")
+_HEADER_SECRET_RE = re.compile(r"(?i)\b(authorization\s*:\s*(?:basic|bearer|token)\s+|x-[a-z-]*key\s*:\s*)\S+")
+_CLI_SECRET_RE = re.compile(rf"(?i)(--{_SECRET_NAME}[= ])\S+")
+_NOT_SECRET_NAMES = re.compile(r"(?i)(?:^|_)(?:page|sync|next|continuation|max|num)[_-]?tokens?$|^(?:has|is)_")
+_NOT_SECRET_VALUES = frozenset({"true", "false", "none", "null", "0", "1", "yes", "no", "[redacted]"})
+
+
+def _secret_kv(match: "re.Match[str]") -> str:
+    name, sep, value = match.group(1), match.group(2), match.group(3)
+    if _NOT_SECRET_NAMES.search(name) or value.strip("'\"").lower() in _NOT_SECRET_VALUES:
+        return match.group(0)
+    return f"{name}{sep}{REDACTED}"
+
+
 _JSON_SECRET_RE = re.compile(
     r"(?i)(['\"](?:access_token|refresh_token|id_token|client_secret|client_assertion|assertion|password|api_key)['\"]\s*:\s*['\"])[^'\"]+(['\"])",
 )
@@ -294,7 +309,10 @@ _AUTH_DETAIL_MARKERS = (
 def _scrub_string(value: str) -> str:
     scrubbed = _BEARER_RE.sub("Bearer " + REDACTED, value)
     scrubbed = _JWT_RE.sub(REDACTED, scrubbed)
-    scrubbed = _KV_SECRET_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", scrubbed)
+    scrubbed = _HEADER_SECRET_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", scrubbed)
+    scrubbed = _JSON_PREFIXED_RE.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", scrubbed)
+    scrubbed = _CLI_SECRET_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", scrubbed)
+    scrubbed = _KV_SECRET_RE.sub(_secret_kv, scrubbed)
     scrubbed = _JSON_SECRET_RE.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", scrubbed)
     scrubbed = _URL_SECRET_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", scrubbed)
     scrubbed = _GOOGLE_TOKEN_RE.sub(REDACTED, scrubbed)

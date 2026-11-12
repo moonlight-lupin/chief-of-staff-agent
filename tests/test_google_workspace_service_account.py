@@ -41,7 +41,7 @@ def make_config(account_alias="acme-advisory", delegate="alicia@acme-advisory.ex
             "account_alias": account_alias,
         },
         "integrations": {"workspace": {"provider": "google_api"}},
-        "paths": {"project_root": "/tmp/test-google"},
+        "paths": {"project_root": "/tmp/test-google", "upload_roots": [__import__("tempfile").gettempdir()]},
     }
 
 
@@ -265,7 +265,7 @@ class TestWriteGuardrails:
     def test_drive_download_proceeds_with_auto_approve(self, google_client):
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
         with patch.object(google_client, "_run", return_value=(0, "", "")):
-            result = google_client.drive_download("f1", "/tmp/out.pdf")
+            result = google_client.drive_download("f1", "/tmp/test-google/downloads/out.pdf")
         assert result["success"] is True
         assert result["action"] == "drive.download"
 
