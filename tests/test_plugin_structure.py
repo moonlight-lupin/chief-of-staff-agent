@@ -17,7 +17,7 @@ ALL_SKILLS = [
     "pipeline-manager", "bookkeeper", "deep-research",
     "entity-research", "travel-itinerary", "backup",
     "email-organisation", "self-sign", "esign-connector",
-    "news-monitoring", "workflow-architect",
+    "news-monitoring", "workflow-architect", "task-brief",
     "notion-sync", "notion-wiki",
     "prospecting", "seo-tracker", "competitor-watch",
 ]
