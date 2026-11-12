@@ -27,6 +27,8 @@
   context and the research log live in the wiki. `seo_tracker.py` records
   rankings and issue counts after each run to show what moved, and its
   built-in on-page checks give a quick health check.
+  Endpoint table re-checked against Monid (2026-11-12): DataForSEO has no
+  site-wide crawl, so audits sample URLs through `/onpage/instant-pages`.
 - `competitor-watch` skill and `shared/scripts/competitor_watch.py`: snapshot
   diffs showing new and removed pages, title, content and price changes.
   Only titles, hashes and the prices found are stored.

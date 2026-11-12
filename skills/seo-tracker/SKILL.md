@@ -1,7 +1,7 @@
 ---
 name: seo-tracker
 description: "Use for the company's search visibility: where to start, site audits, keyword research, search competitors, local/Maps SEO, backlinks and AI-search visibility, plus tracking rankings and issues over time. SEO data comes from DataForSEO through Monid, inside an approved spend budget."
-version: 0.3.0
+version: 0.3.1
 author: moonlight-lupin
 license: Apache-2.0
 metadata:
@@ -36,19 +36,37 @@ endpoint for a need, use another Monid endpoint that does the same job and
 say which one you used. If nothing fits, tell the user and leave that part
 out. Never fill a gap with guessed numbers.
 
-| Need | DataForSEO API family (discover query) |
-|---|---|
-| Keyword ideas from seeds | Labs: keyword ideas / suggestions / related keywords |
-| Search volume, CPC, difficulty | Keywords Data (Google Ads search volume); Labs keyword overview / difficulty |
-| What a domain or page already ranks for | Labs: ranked keywords |
-| Live results for a query | SERP: Google organic (live, advanced) |
-| Who competes in search | Labs: SERP competitors / competitors domain |
-| Domain size and traffic estimate | Labs: domain rank overview |
-| Backlinks | Backlinks: summary, referring domains |
-| Site crawl and issues; page speed | On-Page: task crawl, pages, summary; Lighthouse |
-| Find a business; profile; reviews | Business Data: Google My Business info, Google reviews |
-| Maps and local pack results | SERP: Google Maps / local finder (with location or coordinates) |
-| Mentions in AI answers | AI Optimization: LLM mentions / responses |
+Endpoints and prices below were checked on 2026-11-12 (all
+`provider: dataforseo`). They are a guide, not a contract: still `monid_discover`
+and `monid_inspect` before spending, because names and prices change. Prices
+are USD; "+ N/result" means a flat fee per call plus a per-row charge.
+
+| Need | Endpoint | Price |
+|---|---|---|
+| Keyword ideas from seeds | `/labs/keyword-ideas`, `/labs/related-keywords` | 0.012 + 0.00012/result |
+| Volume, CPC, difficulty, intent | `/labs/keyword-overview` (up to 700 kw); `/labs/bulk-keyword-difficulty` | 0.012 + 0.00012/result |
+| Google Ads volume and CPC (up to 1000 kw) | `/keywords/google-ads-search-volume` | 0.09/call |
+| What a domain ranks for | `/labs/ranked-keywords`, `/labs/keywords-for-site`, `/labs/relevant-pages` | 0.012 + 0.00012/result |
+| Live results for a query | `/serp/google-organic` | 0.002/call |
+| Who competes in search | `/labs/serp-competitors`, `/labs/competitors-domain`, `/labs/domain-intersection` | 0.012 + 0.00012/result |
+| Domain size and traffic estimate | `/labs/domain-rank-overview` | 0.012 + 0.00012/result |
+| Backlinks | `/backlinks/summary`, `/backlinks/referring-domains`, `/backlinks/backlinks`, `/backlinks/competitors` | 0.024 + 0.000036/result |
+| Single-page audit (60+ checks) | `/onpage/instant-pages` | 0.00015/page; JS, resources and rendering add cost |
+| Page speed | `/onpage/lighthouse` | 0.005/call |
+| Business profile; reviews | `/google-business/info`; `/google-business/reviews` | 0.0054; 0.0015 per call |
+| Maps and local pack | `/serp/google-maps` (location or coordinates) | 0.002/call |
+| AI answers and citations | `/ai/chatgpt-response`, `/ai/claude-response`, `/ai/perplexity-response`, `/ai/gemini-response` (+ model token cost); `/serp/google-ai-mode` | 0.0006 per call; 0.004 |
+| AI mention metrics | `/ai/mentions-target-metrics`, `/ai/mentions-top-pages` | 0.1 + 0.001/result |
+
+**There is no site-wide crawl endpoint** (no On-Page task crawl, pages or
+summary). Audit a site by choosing a sample of URLs from sitemap, ranked pages
+and key pages, then call `/onpage/instant-pages` once per URL. If the user
+wants a full crawl, say so and offer another Monid crawler (for example
+`firecrawl` `/crawl`, from 0.001/page) after `monid_inspect`; state which one
+you used.
+
+Location and language: use the free lookups (`/labs/locations`,
+`/serp/google-locations`, `/google-business/locations`) to get codes.
 
 If the user connects Google Search Console through their own connector, read
 it first. It is free and measured, whereas DataForSEO traffic figures are
@@ -112,7 +130,8 @@ Pick one and ask only for the next input you need:
 Then write the project page. This step needs no paid data.
 
 **Site audit.**
-1. *Orient:* start an On-Page crawl. While it runs, pull the domain
+1. *Orient:* pick a sample of URLs (sitemap, key pages, top ranked
+   pages) and audit each with `/onpage/instant-pages`. Alongside, pull the domain
    overview, backlinks summary and a ranked-keywords sample, then group the
    site's pages into families.
 2. *Investigate:* for each page family that could bring buyers, compare a top
