@@ -24,7 +24,6 @@ No command executes without explicit approval.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -194,7 +193,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if cfg is None:
         return 1
-    from state_db import get_pending_action, mark_executing, mark_executed, mark_failed
+    from state_db import get_pending_action
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -303,148 +302,103 @@ def cmd_execute(args: argparse.Namespace) -> int:
         return 0
 
     # ─── Workspace (Gmail/Calendar/Drive) actions ────────────────
-    # Pre-execution gate
-    executing = mark_executing(cfg, args.action_id)
-    if not executing:
+    # Claim → account pre-flight → capability → grant → call → record
+    # (shared/scripts/action_execution.py). The approval IS the confirmation.
+    from action_execution import NotAttempted, run_approved
+    from workspace_client import get_workspace_client
+
+    def dispatch(client, _action):
+        if action_type == "gmail.send":
+            return client.mail_send(
+                to=payload.get("to", ""),
+                subject=payload.get("subject", ""),
+                body=payload.get("body", ""),
+                cc=payload.get("cc"),
+            )
+        if action_type == "gmail.label":
+            return client.mail_tag(message_id=payload.get("message_id", ""), tag_id=payload.get("label_id", ""))
+        if action_type == "gmail.archive":
+            return client.mail_archive(message_id=payload.get("message_id", ""))
+        if action_type == "gmail.create_label":
+            return client.mail_create_tag(name=payload.get("label", ""))
+        if action_type == "gmail.trash":
+            return client.mail_trash(message_id=payload.get("message_id", ""))
+        if action_type == "calendar.create":
+            return client.calendar_create(
+                title=payload.get("summary", payload.get("title", "")),
+                start=payload.get("start", ""),
+                end=payload.get("end", ""),
+            )
+        if action_type == "calendar.update":
+            return client.calendar_update(
+                event_id=payload.get("event_id", ""),
+                summary=payload.get("summary"),
+                start=payload.get("start"),
+                end=payload.get("end"),
+            )
+        if action_type == "calendar.cancel":
+            return client.calendar_cancel(event_id=payload.get("event_id", ""))
+        if action_type in ("drive.upload", "drive.download"):
+            refusal = _payload_refusal(cfg, action_type, payload)
+            if refusal:
+                raise NotAttempted(refusal)
+        if action_type == "drive.upload":
+            return client.files_upload(
+                file_path=payload.get("file_path", payload.get("path", "")),
+                parent_id=payload.get("parent_id"),
+            )
+        if action_type == "drive.download":
+            return client.files_download(
+                file_id=payload.get("file_id", ""),
+                output_path=payload.get("output_path", payload.get("path", "")),
+            )
+        if action_type == "drive.trash":
+            return client.files_trash(file_id=payload.get("file_id", ""))
+        if action_type == "contacts.create":
+            return client.contacts_create(**{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)})
+        if action_type == "contacts.update":
+            return client.contacts_update(
+                person_id=payload.get("person_id") or action.get("target", ""),
+                **{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)},
+            )
+        if action_type == "contacts.delete":
+            return client.contacts_delete(person_id=payload.get("person_id") or action.get("target", ""))
+        raise NotAttempted(f"Unknown action type: {action_type}")
+
+    out = run_approved(cfg, action, get_workspace_client(cfg), dispatch, accept_non_dict=True)
+    if out.stage == "claim":
         print(f"Cannot execute (state={state}). Approval may have expired.", file=sys.stderr)
         return 1
-
-    from workspace_client import get_workspace_client
-    from workspace_capabilities import require_capability
-    client = get_workspace_client(cfg)
-    from company_registry import preflight
-    _account_error, _account_check = preflight(action, client, cfg)
-    if _account_error:
-        mark_failed(cfg, args.action_id, _account_error, attempted=False)
-        print(f"❌ {_account_error}", file=sys.stderr)
-        return 1
-
-    unsupported = require_capability(client, action_type, target=action.get("target", ""))
-    if unsupported:
-        mark_failed(cfg, args.action_id, unsupported["error"], attempted=False)
-        print(f"❌ {unsupported['error']}", file=sys.stderr)
-        return 1
-
-    # Establish approved execution context — the explicit approval IS the confirmation.
-    # Set env vars for guardrails, matching send_email.py and delete_actions.py behavior.
-    # Restore previous values after execution (safe for tests/workers/long-running processes).
-    from workspace_guardrails import execution_grant
-    try:
-        _cos_grant = execution_grant(cfg, args.action_id)
-        _cos_grant.__enter__()
-    except PermissionError as exc:
-        mark_failed(cfg, args.action_id, str(exc), attempted=False)
-        print(f"❌ {exc}", file=sys.stderr)
-        return 1
-    old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
-    old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
-
-    try:
-        os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-        os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
-
-        try:
-            if action_type == "gmail.send":
-                result = client.mail_send(
-                    to=payload.get("to", ""),
-                    subject=payload.get("subject", ""),
-                    body=payload.get("body", ""),
-                    cc=payload.get("cc"),
-                )
-            elif action_type == "gmail.label":
-                result = client.mail_tag(
-                    message_id=payload.get("message_id", ""),
-                    tag_id=payload.get("label_id", ""),
-                )
-            elif action_type == "gmail.archive":
-                result = client.mail_archive(message_id=payload.get("message_id", ""))
-            elif action_type == "gmail.create_label":
-                result = client.mail_create_tag(name=payload.get("label", ""))
-            elif action_type == "gmail.trash":
-                result = client.mail_trash(message_id=payload.get("message_id", ""))
-            elif action_type == "calendar.create":
-                result = client.calendar_create(
-                    title=payload.get("summary", payload.get("title", "")),
-                    start=payload.get("start", ""),
-                    end=payload.get("end", ""),
-                )
-            elif action_type == "calendar.update":
-                result = client.calendar_update(
-                    event_id=payload.get("event_id", ""),
-                    summary=payload.get("summary"),
-                    start=payload.get("start"),
-                    end=payload.get("end"),
-                )
-            elif action_type == "calendar.cancel":
-                result = client.calendar_cancel(event_id=payload.get("event_id", ""))
-            elif action_type in ("drive.upload", "drive.download") and _payload_refusal(cfg, action_type, payload):
-                result = {"success": False, "error": _payload_refusal(cfg, action_type, payload)}
-            elif action_type == "drive.upload":
-                result = client.files_upload(
-                    file_path=payload.get("file_path", payload.get("path", "")),
-                    parent_id=payload.get("parent_id"),
-                )
-            elif action_type == "drive.download":
-                result = client.files_download(
-                    file_id=payload.get("file_id", ""),
-                    output_path=payload.get("output_path", payload.get("path", "")),
-                )
-            elif action_type == "drive.trash":
-                result = client.files_trash(file_id=payload.get("file_id", ""))
-            elif action_type == "contacts.create":
-                result = client.contacts_create(**{
-                    k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)})
-            elif action_type == "contacts.update":
-                result = client.contacts_update(
-                    person_id=payload.get("person_id") or action.get("target", ""),
-                    **{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)},
-                )
-            elif action_type == "contacts.delete":
-                result = client.contacts_delete(
-                    person_id=payload.get("person_id") or action.get("target", ""))
-            else:
-                mark_failed(cfg, args.action_id, f"Unknown action type: {action_type}")
-                print(f"❌ Unknown action type: {action_type}", file=sys.stderr)
-                return 1
-        except Exception as exc:
-            mark_failed(cfg, args.action_id, str(exc))
-            if args.summary:
-                print(f"❌ Execution failed: {exc}")
-            else:
-                print_json({"success": False, "error": str(exc)})
-            return 1
-
-        # Check provider result BEFORE marking executed
-        success = result.get("success", False) if isinstance(result, dict) else True
-        if not success:
-            error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
-            mark_failed(cfg, args.action_id, error)
-            if args.summary:
-                print(f"❌ Provider returned error: {error}")
-            else:
-                print_json({"success": False, "error": error, "result": result})
-            return 1
-
-        mark_executed(cfg, args.action_id, {**(result if isinstance(result, dict) else {"raw": str(result)}),
-                                            "account_check": _account_check})
-
+    if out.stage == "call":
         if args.summary:
-            print(f"✅ Executed: {action_type} ({args.action_id})")
+            print(f"❌ Execution failed: {out.error}")
         else:
-            print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
-                         "result": result if isinstance(result, dict) else str(result)})
-        return 0
-
-    finally:
-        _cos_grant.__exit__(None, None, None)
-        if old_auto is None:
-            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
+            print_json({"success": False, "error": out.error})
+        return 1
+    if out.stage == "provider":
+        if args.summary:
+            print(f"❌ Provider returned error: {out.error}")
         else:
-            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = old_auto
-        if old_destructive is None:
-            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
+            print_json({"success": False, "error": out.error, "result": out.result})
+        return 1
+    if out.stage == "refused":
+        # Refused before any provider call (payload path, unknown type): the
+        # action stays approved. Same stdout shape as a provider error.
+        if args.summary:
+            print(f"❌ Refused before any provider call: {out.error}")
         else:
-            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
+            print_json({"success": False, "error": out.error, "attempted": False})
+        return 1
+    if not out.ok:
+        print(f"❌ {out.error}", file=sys.stderr)
+        return 1
+    result = out.result
+    if args.summary:
+        print(f"✅ Executed: {action_type} ({args.action_id})")
+    else:
+        print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
+                    "result": result if isinstance(result, dict) else str(result)})
+    return 0
 
 
 def _payload_refusal(cfg, action_type, payload):

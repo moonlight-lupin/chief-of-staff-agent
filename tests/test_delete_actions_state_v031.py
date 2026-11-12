@@ -163,7 +163,7 @@ class TestCapabilityRefused:
         loaded = get_pending_action(config, action["id"])
         # mark_failed returned it to 'approved' with the capability last_error
         assert loaded["state"] == "approved"
-        assert loaded["last_error"] == "calendar.cancel not supported by m365"
+        assert loaded["last_error"].startswith("calendar.cancel is not supported by provider m365")
         assert loaded.get("executed_at") is None
         assert loaded.get("result") is None
 
@@ -185,7 +185,7 @@ class TestCapabilityRefused:
         assert rc == 1
         loaded = get_pending_action(config, action["id"])
         assert loaded["state"] == "approved"
-        assert loaded["last_error"] == "calendar.cancel not supported by m365"
+        assert loaded["last_error"].startswith("calendar.cancel is not supported by provider m365")
 
 
 # ─── (d) Provider success=True (regression guard) ─────────────

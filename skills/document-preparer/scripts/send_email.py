@@ -21,7 +21,6 @@ execute then sets the destructive guardrail envs for that call only.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -186,16 +185,14 @@ def cmd_execute(args: argparse.Namespace) -> int:
     is: approved → executing → executed | failed. A failed send is final: it may
     have gone out, so check Sent mail and queue a new action to retry.
 
-    The explicit approve step IS the user confirmation. For the provider
-    guardrail we set both CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1 and
-    CHIEF_OF_STAFF_AUTO_APPROVE=1 for this call only (same dual-gate as
-    webhook_events execute).
+    The explicit approve step IS the user confirmation; the shared execution
+    path (action_execution.run_approved) opens the guardrail for this call only.
     """
     cfg = load_config(args.config)
     if cfg is None:
         return 1
 
-    from state_db import get_pending_action, mark_executing, mark_executed, mark_failed
+    from state_db import get_pending_action
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -211,67 +208,36 @@ def cmd_execute(args: argparse.Namespace) -> int:
               f"Execute it with review_queue.py execute.", file=sys.stderr)
         return 1
 
-    # Pre-execution eligibility check — prevents race with lapsed approval
-    executing = mark_executing(cfg, args.action_id)
-    if not executing:
-        print(f"Action {args.action_id} cannot be executed (approval may have lapsed). "
-              f"Re-approve with: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
-        return 1
+    # Claim → account pre-flight → capability → grant → send → record
+    # (shared/scripts/action_execution.py). The approval IS the confirmation.
+    from action_execution import run_approved
 
-    client = get_client(cfg)
-    from company_registry import preflight
-    _account_error, _account_check = preflight(action, client, cfg)
-    if _account_error:
-        mark_failed(cfg, args.action_id, _account_error, attempted=False)
-        print(f"❌ {_account_error}", file=sys.stderr)
-        return 1
     payload = action["payload"]
 
-    # Approval queue already recorded human consent — unlock the destructive gate
-    # for this call only, then restore prior env.
-    from workspace_guardrails import execution_grant
-    try:
-        _cos_grant = execution_grant(cfg, args.action_id)
-        _cos_grant.__enter__()
-    except PermissionError as exc:
-        mark_failed(cfg, args.action_id, str(exc), attempted=False)
-        print(f"❌ {exc}", file=sys.stderr)
-        return 1
-    prev_destr = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
-    prev_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
-    os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
-    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-
-    # Execute the send
-    try:
-        result = client.mail_send(
+    def send(client, _action):
+        return client.mail_send(
             to=payload["to"],
             subject=payload["subject"],
             body=payload["body"],
             cc=payload.get("cc") or None,
         )
-    except Exception as exc:
-        mark_failed(cfg, args.action_id, str(exc))
-        print(f"Send failed: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        _cos_grant.__exit__(None, None, None)
-        if prev_destr is None:
-            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
-        else:
-            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = prev_destr
-        if prev_auto is None:
-            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
-        else:
-            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = prev_auto
 
-    if not (isinstance(result, dict) and result.get("success")):
-        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
-        mark_failed(cfg, args.action_id, error)
-        print_result(result, args.summary, "Send failed")
+    out = run_approved(cfg, action, get_client(cfg), send)
+    if out.stage == "claim":
+        print(f"Action {args.action_id} cannot be executed (approval may have lapsed). "
+              f"Re-approve with: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
         return 1
-    mark_executed(cfg, args.action_id, {**result, "account_check": _account_check} if isinstance(result, dict) else result)
-    print_result(result, args.summary, f"Mail sent to {payload['to']}")
+    if out.stage == "call":
+        print(f"Send failed: {out.error}", file=sys.stderr)
+        return 1
+    if out.stage == "provider":
+        print_result(out.result if isinstance(out.result, dict) else {"success": False, "error": out.error},
+                     args.summary, "Send failed")
+        return 1
+    if not out.ok:
+        print(f"❌ {out.error}", file=sys.stderr)
+        return 1
+    print_result(out.result, args.summary, f"Mail sent to {payload['to']}")
     return 0
 
 
