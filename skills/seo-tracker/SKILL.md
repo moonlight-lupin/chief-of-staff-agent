@@ -1,7 +1,7 @@
 ---
 name: seo-tracker
 description: "Use for the company's search visibility: where to start, site audits, keyword research, search competitors, local/Maps SEO, backlinks and AI-search visibility, plus tracking rankings and issues over time. SEO data comes from DataForSEO through Monid, inside an approved spend budget."
-version: 0.3.1
+version: 0.3.2
 author: moonlight-lupin
 license: Apache-2.0
 metadata:
@@ -51,19 +51,30 @@ are USD; "+ N/result" means a flat fee per call plus a per-row charge.
 | Who competes in search | `/labs/serp-competitors`, `/labs/competitors-domain`, `/labs/domain-intersection` | 0.012 + 0.00012/result |
 | Domain size and traffic estimate | `/labs/domain-rank-overview` | 0.012 + 0.00012/result |
 | Backlinks | `/backlinks/summary`, `/backlinks/referring-domains`, `/backlinks/backlinks`, `/backlinks/competitors` | 0.024 + 0.000036/result |
-| Single-page audit (60+ checks) | `/onpage/instant-pages` | 0.00015/page; JS, resources and rendering add cost |
+| Site crawl (content, links, status per page) | `firecrawl` `/crawl` | 0.001/page; 0.004/page with LLM JSON extraction |
+| Deep check of one URL (60+ SEO checks) | `dataforseo` `/onpage/instant-pages` | 0.00015/page; JS, resources and rendering add cost |
 | Page speed | `/onpage/lighthouse` | 0.005/call |
 | Business profile; reviews | `/google-business/info`; `/google-business/reviews` | 0.0054; 0.0015 per call |
 | Maps and local pack | `/serp/google-maps` (location or coordinates) | 0.002/call |
 | AI answers and citations | `/ai/chatgpt-response`, `/ai/claude-response`, `/ai/perplexity-response`, `/ai/gemini-response` (+ model token cost); `/serp/google-ai-mode` | 0.0006 per call; 0.004 |
-| AI mention metrics | `/ai/mentions-target-metrics`, `/ai/mentions-top-pages` | 0.1 + 0.001/result |
+| AI search volume for keywords (up to 1000) | `/ai/keyword-search-volume` (from People Also Ask data; 12-month trend) | 0.01 + 0.0001/result |
+| Brand or domain mentions and citations in AI answers (up to 20 targets; ChatGPT or Google) | `/ai/mentions-target-metrics`, `/ai/mentions-top-pages` | 0.1 + 0.001/result |
 
-**There is no site-wide crawl endpoint** (no On-Page task crawl, pages or
-summary). Audit a site by choosing a sample of URLs from sitemap, ranked pages
-and key pages, then call `/onpage/instant-pages` once per URL. If the user
-wants a full crawl, say so and offer another Monid crawler (for example
-`firecrawl` `/crawl`, from 0.001/page) after `monid_inspect`; state which one
-you used.
+**Site crawl uses Firecrawl, not DataForSEO** (DataForSEO has no site-wide
+crawl on Monid). `firecrawl` `/crawl` takes a start `url` and returns clean
+content for each page found. It is one durable job that Monid polls for you
+and can stop mid-run (`monid_stop_run`). Inputs that matter: `limit` (default
+25, max 10,000), `includePaths` / `excludePaths`, `maxDiscoveryDepth`,
+`sitemap` (`skip`, `include`, `only`), `crawlEntireDomain`, `allowSubdomains`,
+`delay`, and `scrapeOptions` (`formats` such as `markdown` and `links`).
+Rules:
+- The whole `limit` must be affordable up front, so set it to the pages you
+  need and size the envelope as `limit` × 0.001. Every crawled page is billed,
+  even one that returns an error.
+- Leave `scrapeOptions.json` off for audits; it costs four times as much.
+- A crawl above about 100 pages is a big fan-out: confirm it first.
+- Firecrawl gives content and links but not SEO checks. Use
+  `/onpage/instant-pages` only for the few pages that need a deep check.
 
 Location and language: use the free lookups (`/labs/locations`,
 `/serp/google-locations`, `/google-business/locations`) to get codes.
@@ -130,8 +141,9 @@ Pick one and ask only for the next input you need:
 Then write the project page. This step needs no paid data.
 
 **Site audit.**
-1. *Orient:* pick a sample of URLs (sitemap, key pages, top ranked
-   pages) and audit each with `/onpage/instant-pages`. Alongside, pull the domain
+1. *Orient:* crawl the site with Firecrawl (`limit` agreed with the user,
+   sitemap included), then deep-check the key pages and a typical page from
+   each family with `/onpage/instant-pages`. Alongside, pull the domain
    overview, backlinks summary and a ranked-keywords sample, then group the
    site's pages into families.
 2. *Investigate:* for each page family that could bring buyers, compare a top
@@ -189,9 +201,20 @@ the site lacks. Any outreach follows the `prospecting` rules: one approved
 request.
 
 **AI visibility.** Draft the prompts a buyer would ask an AI assistant,
-confirm them with the user, then use the LLM mentions/responses endpoints to
-see whether the brand and its competitors are mentioned or cited. Report
-gaps, not certainties: AI answers vary from run to run.
+confirm them with the user, then pick the endpoint by question:
+- *Is the brand mentioned or cited, and how often?* `/ai/mentions-target-metrics`
+  (up to 20 brand or domain targets, ChatGPT or Google). It reads an existing
+  dataset, so it has a 0.10 flat fee. `/ai/mentions-top-pages` shows which
+  pages get cited.
+- *What does an assistant say to this exact prompt?* the `/ai/*-response`
+  endpoints, about 0.0006 per call plus token cost. Cheapest for a handful of
+  prompts.
+- *Which topics do people ask AI tools about?* `/ai/keyword-search-volume`.
+  It measures demand for keywords (People Also Ask based). It does **not**
+  say whether the brand appears, so use it to choose topics, not to score
+  visibility.
+
+Report gaps, not certainties: AI answers vary from run to run.
 
 ## Report
 
