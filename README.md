@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.8.1 (beta)
+> **Status:** v0.9.0 (beta)
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -150,6 +150,27 @@ Chief of Staff Readiness
 ```
 
 Full provider walkthroughs (Google service account, Composio, Microsoft 365, DocuSeal e-sign): [`docs/SETUP.md`](docs/SETUP.md).
+
+---
+
+## 💬 In Hermes: tools and your own slash command
+
+Under Hermes the plugin adds two kinds of commands. The agent gets tools to look; you get a slash command to decide.
+
+| Who | What | Can it change anything? |
+|---|---|---|
+| **The agent** | Tools: `cos_capabilities`, `cos_daily`, `cos_review_queue`, `cos_preview`, `cos_pipeline`, `cos_spend_status` | No. They are read-only, and none can approve, dismiss or execute. |
+| **You** | `/<assistant name>`, e.g. `/ada` if you named it Ada, plus `/cos` (always works) | Yes: `approve` and `dismiss` |
+
+```text
+/ada                        today's briefing
+/ada review                 what is waiting for your decision
+/ada preview <id>           what an action will do, to whom, and how it is reversed
+/ada approve <id> [reason]  approve it
+/ada dismiss <id> <reason>  dismiss it
+```
+
+Approving works from your own CLI, TUI or Desktop session. From a chat app (Telegram, Discord…), only people listed in `approvals.chat_approvers` can approve, so nobody else in a shared chat can approve anything. Execution stays where it was: an approved action is claimed and run, then audited.
 
 ---
 

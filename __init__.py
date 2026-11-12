@@ -178,3 +178,9 @@ def register(ctx):
         import plugin_secrets  # shared/scripts is on sys.path once hooks is imported
 
         register_session_env(list(plugin_secrets.SECRETS), plugin_secrets.session_env)
+
+    # Hermes-native surface: read-only cos_* tools for the agent, and the
+    # /<assistant name> + /cos slash command where the user decides.
+    import hermes_surface  # noqa: E402  (shared/scripts on sys.path via hooks)
+
+    hermes_surface.register(ctx)

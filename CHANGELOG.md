@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.9.0 (beta) — Hermes tools and your own slash command
+
+The agent gets tools to look; you get a slash command to decide. The split
+makes the plugin's invariant structural: no tool can approve.
+
+- **Six read-only tools** (`register_tool`, toolset `chief-of-staff`):
+  `cos_capabilities`, `cos_daily`, `cos_review_queue`, `cos_preview`,
+  `cos_pipeline` and `cos_spend_status`. Each runs the plugin's existing
+  script as a child process, with secrets read through Hermes, and returns
+  JSON. Unlike plugin skills, which load only when named, tools are always
+  visible to the agent. They are declared in `plugin.yaml` →
+  `provides_tools`.
+- **A slash command named after your assistant**: `/<assistant.name>`
+  (e.g. `/ada`), plus `/cos`, which always works. Subcommands: `briefing`
+  (the default), `review`, `preview <id>`, `approve <id> [reason]`,
+  `dismiss <id> <reason>` and `help`.
+  - Names are lower case, spaces and symbols become `_`, and they are at most
+    32 characters. A default or unusable name registers `/cos` only.
+  - Hermes drops a name that clashes with a built-in command; `/cos` still
+    works then.
+- **Who may approve.** `approve` and `dismiss` run only from the owner's own
+  surfaces (`cli`, `tui`, `desktop`, `local`), recorded under `user.name`, or
+  for chat users listed in `approvals.chat_approvers`
+  (`"telegram:<user id>": "<name>"`). Everyone else is refused: an unlisted
+  user, a listed user on another platform, a chat command without a source,
+  or an unknown platform. Action ids that look like flags are rejected.
+- Execution is unchanged: approved actions still go through claim →
+  record-execution, or `execute`.
+- New `shared/scripts/hermes_surface.py` and `tests/test_hermes_surface.py`.
+  Handlers never raise: tools return JSON, the slash command returns text.
+- CLAUDE.md tells agents to prefer the tools, and to ask the user to approve
+  with the slash command rather than ever approving themselves.
+
 ## v0.8.1 (beta) — Hermes plugin-catalog readiness
 
 Makes the plugin admissible to the Hermes plugin catalog. Every rule that can

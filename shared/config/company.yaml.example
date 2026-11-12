@@ -39,6 +39,17 @@ user:
 assistant:
   name: "Chief of Staff"
 
+# Under Hermes, the assistant's name is also its slash command: "Ada" -> /ada
+# (lower case; spaces and symbols become _; at most 32 characters). /cos always
+# works too. Restart Hermes after renaming.
+
+# Who may approve from a chat app with /<name> approve. Your own CLI, TUI and
+# Desktop sessions can always approve. Anyone else in a chat is refused unless
+# listed here as "<platform>:<user id>": "<name recorded on the approval>".
+# approvals:
+#   chat_approvers:
+#     "telegram:123456789": "Alicia Tan"
+
 # Google Workspace integration.
 # Actual Google auth is performed by the external google-workspace skill via google_api.py.
 # Chief-of-Staff calls google_api.py through GoogleWorkspaceClient with --account and --as flags.

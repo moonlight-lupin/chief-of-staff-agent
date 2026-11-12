@@ -1,5 +1,5 @@
 name: chief-of-staff
-version: 0.8.1
+version: 0.9.0
 author: moonlight-lupin
 license: Apache-2.0
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, bookkeeping, documents and signing, calendar, knowledge base, research, travel, prospecting, SEO and AI-search visibility, competitor watch, spend budgets, multiple companies, and Notion sync — every consequential action approved before it runs."
@@ -10,8 +10,9 @@ requires_skills: []
 requires_hermes: ">=0.23.0"
 homepage: https://github.com/moonlight-lupin/chief-of-staff-agent
 tags: [chief-of-staff, sme, operations, crm, bookkeeping, approvals, prospecting, seo]
-# Rule 6: what register() registers. Skills only, plus these hooks; no tools.
-provides_tools: []
+# Rule 6: what register() registers: skills, these read-only tools (none can
+# approve or execute) and these hooks. Slash commands: /<assistant name> and /cos.
+provides_tools: [cos_capabilities, cos_daily, cos_review_queue, cos_preview, cos_pipeline, cos_spend_status]
 provides_hooks: [on_session_start, pre_llm_call, post_llm_call, pre_tool_call, post_tool_call]
 # Every key is optional (one per workspace provider), so none gates loading.
 requires_env: []
