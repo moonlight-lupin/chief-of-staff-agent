@@ -224,27 +224,38 @@ def _paid_envelope(config: Any, source: Mapping[str, Any]) -> str | None:
 
     provider = str(source.get("provider") or "").strip().lower()
     paid = {str(k).lower() for k, v in spend._spend_config(config).items() if hasattr(v, "get")}
-    if provider not in paid:
+    # "monid-dataforseo", "monid:serp" … are the same paid provider.
+    billed = next((p for p in sorted(paid) if provider == p or provider.startswith((f"{p}-", f"{p}_",
+                                                                                     f"{p}:", f"{p}/"))), None)
+    if billed is None:
         return None
     run_id = str(source.get("run_id") or "").strip()
+    endpoint = str(source.get("endpoint") or "").strip()
     reservations = (spend._load_ledger(config).get("reservations") or {}).values()
     envelopes = sorted({str(r.get("envelope_id")) for r in reservations
-                        if r.get("status") == "recorded" and r.get("provider") == provider
-                        and str(r.get("run_id") or "") == run_id})
+                        if r.get("status") == "recorded" and r.get("call_status", "success") == "success"
+                        and r.get("provider") == billed and str(r.get("run_id") or "") == run_id
+                        and str(r.get("endpoint") or "") == endpoint})
     if not envelopes:
         raise ProspectError(
-            f"{provider} is a paid source (spend.{provider}), but run {run_id!r} has no recorded spend. "
-            f"Reserve before the call and record it with --run-id {run_id} (spend.py), then ingest.")
+            f"{billed} is a paid source (spend.{billed}), but run {run_id!r} on endpoint {endpoint!r} has no "
+            f"recorded, successful spend. Reserve before the call and record it with --run-id {run_id} "
+            f"(spend.py), then ingest.")
     claimed = str(source.get("envelope_id") or "").strip()
     if claimed and claimed not in envelopes:
         raise ProspectError(f"envelope_id {claimed!r} is not the envelope that recorded run {run_id!r}")
-    env_id = claimed or envelopes[0]
-    env = get_pending_action(config, env_id) or {}
-    if (env.get("type") != spend.ENVELOPE_TYPE or (env.get("payload") or {}).get("provider") != provider
-            or (env.get("company_id") or None) != _config_company_id(config)
-            or env.get("state") not in {"approved", "executed"}):
-        raise ProspectError(f"envelope {env_id!r} is not an approved {provider} spend envelope of this company")
-    return env_id
+    company = _config_company_id(config)
+    for env_id in [claimed] if claimed else envelopes:
+        env = get_pending_action(config, env_id) or {}
+        # A recorded reservation proves the envelope was approved when the call
+        # was made (reserve refuses anything else); it may have expired or been
+        # closed since. Never-approved states cannot have reservations.
+        if (env.get("type") == spend.ENVELOPE_TYPE
+                and (env.get("payload") or {}).get("provider") == billed
+                and (env.get("company_id") or None) == company
+                and env.get("state") not in {"requested", "dismissed"}):
+            return env_id
+    raise ProspectError(f"no approved {billed} spend envelope of this company recorded run {run_id!r}")
 
 
 def ingest(config: Any, leads: Iterable[Mapping[str, Any]], source: Mapping[str, Any], purpose: str) -> dict[str, Any]:

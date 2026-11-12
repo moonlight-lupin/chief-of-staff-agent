@@ -71,9 +71,14 @@ def _spend_lines(sp: Mapping[str, Any], md: bool = False) -> list[str]:
     for e in sp.get("envelopes") or []:
         lines.append(f"{bullet} Budget '{e['topic']}': {e['spent']} spent, {e['remaining']} {e['currency']} "
                      f"remaining of {e['cap']} (until {str(e.get('expires_at') or '')[:10]})")
+    for provider, over in (sp.get("over_monthly_caps") or {}).items():
+        lines.append(f"{bullet} OVER MONTHLY CAP: {provider} {over.get('month', '')} recorded {over['spent']} {ccy} "
+                     f"against a cap of {over['cap']}; new reservations are refused")
     stale = sp.get("stale_reservations") or []
     if stale:
-        lines.append(f"{bullet} {len(stale)} reservation(s) never recorded: run spend.py record or release")
+        lines.append(f"{bullet} {len(stale)} reservation(s) never recorded: run spend.py stale")
+    if sp.get("note"):
+        lines.append(f"{bullet} {sp['note']}")
     lines.append("")
     return lines
 

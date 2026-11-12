@@ -19,6 +19,23 @@
   `envelope_id` is refused, and the envelope id is filled in from the ledger.
 - **Budgets are labelled a local estimate** in `status`, the briefing,
   `capabilities` and `docs/MULTI_COMPANY.md`.
+- **Hardening from an adversarial review:**
+  - **The daily briefing** renders the monthly overrun and the local-estimate
+    note.
+  - **Paid provenance:**
+    - It needs a *successful* recorded call on the same endpoint.
+    - Provider aliases (`monid-dataforseo`, `monid:serp`) are still paid.
+    - An envelope that has since expired or been closed still proves a past
+      paid run.
+  - **The currency check** covers every envelope of the provider that was not
+    dismissed.
+  - **An overrun booked to last month** stays visible, and an overrun of both
+    caps is audited as both.
+  - **`spend.py stale`** survives malformed timestamps.
+  - **Accepted:**
+    - One recorded run may back several ingests, as paged results need.
+    - Two `propose` calls racing with different currencies are not
+      serialised. A human approves each envelope.
 
 ### Live-integration verification is evidence, not a comment
 

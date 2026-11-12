@@ -177,7 +177,7 @@ def propose(config: Any, provider: str, purpose: str, topic: str, cap: Any, curr
         p = env.get("payload") or {}
         other = str(p.get("currency") or "").upper()
         if (p.get("provider") == provider and other and other != currency
-                and env.get("state") in OPEN_ENVELOPE_STATES | {"executed"}):
+                and env.get("state") != "dismissed"):
             raise SpendError(f"currency {currency} differs from {other} on {provider} envelope {env['id']}: "
                              f"one provider's budgets must share a currency (set spend.currency)")
     monthly = _monthly_cap(config, provider)
@@ -316,7 +316,8 @@ def record(config: Any, reservation_id: str, actual: Any, status: str = "success
     _mutate_ledger(config, settle)
     _audit(config, out["provider"], "spend.record", out["envelope_id"],
            "over_cap" if out["over_cap"] else "over_monthly_cap" if out["over_monthly_cap"] else "success",
-           {"reservation_id": reservation_id, "actual": _num(amount), "run_id": run_id, "call_status": status})
+           {"reservation_id": reservation_id, "actual": _num(amount), "run_id": run_id, "call_status": status,
+            "over_monthly_cap": out["over_monthly_cap"]})
     return {"reservation_id": reservation_id, "actual": _num(amount), **out}
 
 
@@ -384,11 +385,20 @@ def month_to_date(config: Any) -> dict[str, Any]:
     return {p: _num(_month_total(ledger, p, month)) for p in sorted(x for x in providers if x)}
 
 
+def _created(r: Mapping[str, Any]) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(r.get("created_at") or ""))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def stale_reservations(config: Any, hours: int = STALE_RESERVATION_HOURS) -> list[str]:
+    """Open reservations older than ``hours``; an unreadable timestamp counts as stale."""
     cutoff = _now() - timedelta(hours=hours)
     return sorted(
         rid for rid, r in (_load_ledger(config).get("reservations") or {}).items()
-        if r.get("status") == "open" and datetime.fromisoformat(r["created_at"]) < cutoff
+        if r.get("status") == "open" and ((created := _created(r)) is None or created < cutoff)
     )
 
 
@@ -403,11 +413,12 @@ def stale_details(config: Any, hours: int = STALE_RESERVATION_HOURS) -> list[dic
     out = []
     for rid in stale_reservations(config, hours):
         r = reservations[rid]
-        age = (now - datetime.fromisoformat(r["created_at"])).total_seconds() / 3600
+        created = _created(r)
+        age = (now - created).total_seconds() / 3600 if created else None
         out.append({
             "reservation_id": rid, "envelope_id": r.get("envelope_id"), "provider": r.get("provider"),
             "topic": r.get("topic"), "endpoint": r.get("endpoint"), "estimate": r.get("estimate"),
-            "created_at": r.get("created_at"), "age_hours": round(age, 1),
+            "created_at": r.get("created_at"), "age_hours": round(age, 1) if age is not None else None,
             "if_the_call_ran": f"spend.py record --reservation {rid} --actual <cost from the provider>",
             "if_it_did_not": f"spend.py release --reservation {rid}",
         })
@@ -415,12 +426,26 @@ def stale_details(config: Any, hours: int = STALE_RESERVATION_HOURS) -> list[dic
 
 
 def month_over_caps(config: Any) -> dict[str, dict[str, Any]]:
-    """Providers whose month-to-date total is over their monthly cap."""
-    over = {}
-    for provider, total in month_to_date(config).items():
+    """Providers over their monthly cap this month or last month.
+
+    Last month is included because a call reserved on the 31st and recorded on
+    the 1st is booked to the month it was reserved in.
+    """
+    ledger = _load_ledger(config)
+    now = _now()
+    this_month = now.strftime("%Y-%m")
+    last_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    providers = {r.get("provider") for r in (ledger.get("reservations") or {}).values()}
+    over: dict[str, dict[str, Any]] = {}
+    for provider in sorted(p for p in providers if p):
         cap = _monthly_cap(config, provider)
-        if cap is not None and _dec(total) > cap:
-            over[provider] = {"spent": total, "cap": _num(cap)}
+        if cap is None:
+            continue
+        for month in (this_month, last_month):
+            total = _month_total(ledger, provider, month)
+            if total > cap:
+                over[provider] = {"month": month, "spent": _num(total), "cap": _num(cap)}
+                break
     return over
 
 
