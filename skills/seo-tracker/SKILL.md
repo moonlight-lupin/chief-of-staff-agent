@@ -1,0 +1,254 @@
+---
+name: seo-tracker
+description: "Use for the company's search visibility: where to start, site audits, keyword research, search competitors, local/Maps SEO, backlinks and AI-search visibility, plus tracking rankings and issues over time. SEO data comes from DataForSEO through Monid, inside an approved spend budget."
+version: 0.3.2
+author: moonlight-lupin
+license: Apache-2.0
+metadata:
+  hermes:
+    tags: [chief-of-staff, seo, website, marketing, dataforseo, monid]
+    related_skills: [competitor-watch, prospecting, note-taker, notion-wiki, deep-research]
+---
+
+# SEO Tracker
+
+## Overview
+
+These workflows are adapted from OpenSEO's skills ([every-app/open-seo], MIT;
+see NOTICE). This skill uses OpenSEO's approach only; it does not need the
+OpenSEO app or its MCP server. **SEO data comes from DataForSEO through
+Monid.** Every paid call goes through a spend envelope. Findings and the
+research log live in the wiki, and rankings and issue counts are tracked over
+time with `seo_tracker.py`.
+
+The skill reads, recommends and drafts. Website, listing and Google Business
+Profile changes are the user's to make. Never edit them.
+
+[every-app/open-seo]: https://github.com/every-app/open-seo
+
+## Data: DataForSEO through Monid
+
+Find endpoints with `monid_discover` (for example "DataForSEO SERP Google
+organic"). Before any spend, check each endpoint's input and price with
+`monid_inspect`. Both are free. Endpoint names change, so discover them each
+time rather than reusing a remembered name. If Monid has no DataForSEO
+endpoint for a need, use another Monid endpoint that does the same job and
+say which one you used. If nothing fits, tell the user and leave that part
+out. Never fill a gap with guessed numbers.
+
+Endpoints and prices below were checked on 2026-11-12 (all
+`provider: dataforseo`). They are a guide, not a contract: still `monid_discover`
+and `monid_inspect` before spending, because names and prices change. Prices
+are USD; "+ N/result" means a flat fee per call plus a per-row charge.
+
+| Need | Endpoint | Price |
+|---|---|---|
+| Keyword ideas from seeds | `/labs/keyword-ideas`, `/labs/related-keywords` | 0.012 + 0.00012/result |
+| Volume, CPC, difficulty, intent | `/labs/keyword-overview` (up to 700 kw); `/labs/bulk-keyword-difficulty` | 0.012 + 0.00012/result |
+| Google Ads volume and CPC (up to 1000 kw) | `/keywords/google-ads-search-volume` | 0.09/call |
+| What a domain ranks for | `/labs/ranked-keywords`, `/labs/keywords-for-site`, `/labs/relevant-pages` | 0.012 + 0.00012/result |
+| Live results for a query | `/serp/google-organic` | 0.002/call |
+| Who competes in search | `/labs/serp-competitors`, `/labs/competitors-domain`, `/labs/domain-intersection` | 0.012 + 0.00012/result |
+| Domain size and traffic estimate | `/labs/domain-rank-overview` | 0.012 + 0.00012/result |
+| Backlinks | `/backlinks/summary`, `/backlinks/referring-domains`, `/backlinks/backlinks`, `/backlinks/competitors` | 0.024 + 0.000036/result |
+| Site crawl (content, links, status per page) | `firecrawl` `/crawl` | 0.001/page; 0.004/page with LLM JSON extraction |
+| Deep check of one URL (60+ SEO checks) | `dataforseo` `/onpage/instant-pages` | 0.00015/page; JS, resources and rendering add cost |
+| Page speed | `/onpage/lighthouse` | 0.005/call |
+| Business profile; reviews | `/google-business/info`; `/google-business/reviews` | 0.0054; 0.0015 per call |
+| Maps and local pack | `/serp/google-maps` (location or coordinates) | 0.002/call |
+| AI answers and citations | `/ai/chatgpt-response`, `/ai/claude-response`, `/ai/perplexity-response`, `/ai/gemini-response` (+ model token cost); `/serp/google-ai-mode` | 0.0006 per call; 0.004 |
+| AI search volume for keywords (up to 1000) | `/ai/keyword-search-volume` (from People Also Ask data; 12-month trend) | 0.01 + 0.0001/result |
+| Brand or domain mentions and citations in AI answers (up to 20 targets; ChatGPT or Google) | `/ai/mentions-target-metrics`, `/ai/mentions-top-pages` | 0.1 + 0.001/result |
+
+**Site crawl uses Firecrawl, not DataForSEO** (DataForSEO has no site-wide
+crawl on Monid). `firecrawl` `/crawl` takes a start `url` and returns clean
+content for each page found. It is one durable job that Monid polls for you
+and can stop mid-run (`monid_stop_run`). Inputs that matter: `limit` (default
+25, max 10,000), `includePaths` / `excludePaths`, `maxDiscoveryDepth`,
+`sitemap` (`skip`, `include`, `only`), `crawlEntireDomain`, `allowSubdomains`,
+`delay`, and `scrapeOptions` (`formats` such as `markdown` and `links`).
+Rules:
+- The whole `limit` must be affordable up front, so set it to the pages you
+  need and size the envelope as `limit` × 0.001. Every crawled page is billed,
+  even one that returns an error.
+- Leave `scrapeOptions.json` off for audits; it costs four times as much.
+- A crawl above about 100 pages is a big fan-out: confirm it first.
+- Firecrawl gives content and links but not SEO checks. Use
+  `/onpage/instant-pages` only for the few pages that need a deep check.
+
+Location and language: use the free lookups (`/labs/locations`,
+`/serp/google-locations`, `/google-business/locations`) to get codes.
+
+If the user connects Google Search Console through their own connector, read
+it first. It is free and measured, whereas DataForSEO traffic figures are
+estimates.
+
+**Location defaults to the company's market** (`company.jurisdiction`, e.g.
+Singapore, in English), not the US. Say which location and language you
+used.
+
+## Budget rules
+
+- **Reuse first.** If the research log for this site has a result under 30
+  days old, reuse it and say so.
+- **Get an envelope.** One approved envelope per piece of work (provider
+  `monid`, topic such as `seo-audit-acme-2026-11`). Size it from the
+  `monid_inspect` prices multiplied by the planned number of calls. If none
+  exists, `spend.py propose`, then stop for approval.
+- **Reserve and record.** `spend.py reserve` before every `monid_run`, and
+  `spend.py record` with the actual cost afterwards. A refusal means stop and
+  tell the user.
+- **Confirm big fan-outs** before running them: a Maps rank grid (a 5×5 grid
+  is 25 searches), many keywords × many locations, or a full crawl of a large
+  site.
+- **Respect the budget** and state in the report what it ruled out.
+
+## Project context and research log
+
+Keep one wiki page per site (`seo/<domain>.md`, via `note-taker`). It holds:
+- a business overview and goal;
+- the target market and location;
+- business competitors and SEO competitors, kept apart;
+- key pages and saved target keywords;
+- a dated research log, one line per run, e.g.
+  `2026-11-12 Site audit: acme.example. Verdict: <conclusion>`.
+
+Read the page before any workflow and update it after. If the page is
+missing, run **Project setup** first.
+
+## Choosing the workflow
+
+Pick one and ask only for the next input you need:
+
+1. No project page → **Project setup**.
+2. "What should we fix?" / general health → **Site audit**.
+3. Seed topics, "what should we write about" → **Keyword research**.
+4. "Who are we up against?" → **Competitive landscape**. One named rival →
+   the same workflow, narrowed to that domain.
+5. Maps, "near me", a physical location → **Local SEO**.
+6. Links and mentions → **Backlinks**.
+7. ChatGPT / AI Overviews → **AI visibility**.
+
+## Workflows
+
+**Project setup.** Ask for or confirm:
+- what the business sells;
+- its goal (leads, sales, bookings);
+- the market and location;
+- three to five business competitors;
+- key pages.
+
+Then write the project page. This step needs no paid data.
+
+**Site audit.**
+1. *Orient:* crawl the site with Firecrawl (`limit` agreed with the user,
+   sitemap included), then deep-check the key pages and a typical page from
+   each family with `/onpage/instant-pages`. Alongside, pull the domain
+   overview, backlinks summary and a ranked-keywords sample, then group the
+   site's pages into families.
+2. *Investigate:* for each page family that could bring buyers, compare a top
+   page and a typical page with what leading results offer for the same
+   query. Check status, canonicals, indexing and internal links.
+3. *Shortlist* 5–10 candidates from at least three kinds of opportunity, each
+   with its evidence, effort and uncertainty.
+4. *Choose* one to three recommendations. Fixes for demonstrated problems
+   come first; access, indexing or measurable traffic losses outrank
+   everything else. Every other candidate goes in "What else we checked".
+5. *Size the benefit* by naming how it would help (a new ranking, a better
+   position, or more clicks). Label scenarios as hypothetical. Never invent
+   conversion rates or revenue.
+6. *Review:* challenge the draft yourself before writing it.
+
+**Keyword research.**
+1. Run 1–5 seeds through keyword ideas, about 150 results each.
+2. Score them with volume, CPC and difficulty, plus ranked keywords if a
+   domain is in scope.
+3. Remove irrelevant, duplicate, brand-only and off-intent terms.
+4. Check live results for ambiguous or high-potential terms.
+5. Rank by business fit, intent fit and reasonable difficulty, not by volume
+   alone.
+6. Present a shortlist and a longer table. Save target keywords to the
+   project page only after the user confirms.
+
+**Competitive landscape.**
+1. Use the saved competitors, or infer a shortlist and confirm it.
+2. Build 5–10 mixed-intent queries, adding locations for local markets.
+3. Check demand and recurring domains, then inspect live results.
+4. Group recurring domains by type: product, publisher, marketplace,
+   community or documentation.
+5. Profile the top 3–5 and pull their ranked keywords.
+6. Report patterns, gaps and local-pack signals.
+
+Keep SEO competitors separate from business competitors, and don't treat
+publishers as product competitors. A small query set is directional; say so.
+
+**Local SEO.**
+1. Find the business and record its place ID or CID. Always match listings
+   by ID, never by name.
+2. Pull local results for the main keyword and note the top 3–5.
+3. Compare categories, reviews, hours, photos and claim status, and check
+   that the website link goes to the right location page.
+4. Pull reviews for the business and its strongest rival.
+5. Run a Maps rank grid only after confirming its cost.
+
+Category and claim problems outrank posting cadence. For chains, take a
+snapshot of every location and look deeply at up to five.
+
+**Backlinks.** Read the backlinks summary and referring domains for the site
+and its top competitors, and list linking domains the competitors have that
+the site lacks. Any outreach follows the `prospecting` rules: one approved
+`mail.send` per recipient, an opt-out line, and `prospects.py opt-out` on
+request.
+
+**AI visibility.** Draft the prompts a buyer would ask an AI assistant,
+confirm them with the user, then pick the endpoint by question:
+- *Is the brand mentioned or cited, and how often?* `/ai/mentions-target-metrics`
+  (up to 20 brand or domain targets, ChatGPT or Google). It reads an existing
+  dataset, so it has a 0.10 flat fee. `/ai/mentions-top-pages` shows which
+  pages get cited.
+- *What does an assistant say to this exact prompt?* the `/ai/*-response`
+  endpoints, about 0.0006 per call plus token cost. Cheapest for a handful of
+  prompts.
+- *Which topics do people ask AI tools about?* `/ai/keyword-search-volume`.
+  It measures demand for keywords (People Also Ask based). It does **not**
+  say whether the brand appears, so use it to choose topics, not to score
+  visibility.
+
+Report gaps, not certainties: AI answers vary from run to run.
+
+## Report
+
+Write it in Markdown, lead with the conclusion, and save it to the wiki (or
+Notion via `notion-wiki`) only when the user wants it kept. Use these
+sections:
+1. **Your next SEO move**: one sentence.
+2. **Recommendations**: one to three, each with evidence, effort and the
+   expected mechanism.
+3. **What else we checked**: a table.
+4. **How this report was made**: the endpoints used, location and language,
+   the date, the cost from the spend ledger, and caveats. Traffic and volume
+   figures are estimates, and missing values are written as `unknown`.
+
+## Tracking
+
+After an audit or ranking check, normalise what you read into the tracker's
+input and record it:
+- `pages` from the On-Page items: `url`, `status`, `title`,
+  `meta_description`, `h1` (a list), `canonical`, `word_count`,
+  `images_missing_alt`, `load_ms`, `noindex`. Leave out what you don't have.
+- `serp` from the organic results for the target keywords, as `{"keyword",
+  "results": [{"position", "url"}]}`.
+
+```bash
+.venv/bin/python skills/seo-tracker/scripts/seo_tracker.py analyze --input crawl.json --record --markdown
+```
+
+`--record` keeps rankings and issue counts only, no page content. The next
+run shows what moved, for the weekly review. The tracker's built-in checks
+also serve as a quick health check when no paid crawl is wanted:
+
+| Severity | Checks |
+|---|---|
+| High | HTTP errors, noindex, missing title |
+| Medium | Slow (over 3 s), duplicate titles, missing meta description, H1 count not 1, title not 30–60 characters, under 300 words |
+| Low | Meta description over 160 characters, missing canonical, images without alt text |

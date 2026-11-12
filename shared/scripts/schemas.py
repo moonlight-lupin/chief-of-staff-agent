@@ -23,7 +23,10 @@ per-record required fields listed below)::
       "source": "agent",                          # str, optional (e.g. "gmail"|"outlook"|"agent")
       "messages": [ <message>, ... ],             # optional, defaults to []
       "events":   [ <event>, ... ],               # optional, defaults to []
-      "files":    [ <file>, ... ]                 # optional, defaults to []
+      "files":    [ <file>, ... ],                # optional, defaults to []
+      "notion":   { "pages": [ <notion_page> ],   # optional; kept only when present
+                    "comments": [ <notion_comment> ],
+                    "databases": { "pipeline"|"todos": [ <notion_row> ] } }
     }
 
 Record shapes (required fields, then optional fields):
@@ -43,6 +46,20 @@ Record shapes (required fields, then optional fields):
     required: id (str), name (str)
     optional: mime_type (str), modified (ISO 8601 str), link (str),
               parents (list[str], default []), source (str)
+
+  notion_page:
+    required: id (str), title (str), last_edited_time (ISO 8601 str)
+    optional: last_edited_by (str), url (str), parent (str), text (str,
+              a short plain-text excerpt used for matching, never rendered),
+              mentions_operator (bool)
+
+  notion_comment:
+    required: id (str), page_id (str), author (str), created_time (ISO 8601 str)
+    optional: page_title (str), mentions_operator (bool), text (str, never rendered)
+
+  notion_row (same shape notion-sync reads):
+    required: page_id (str)
+    optional: last_edited_time (ISO 8601 str), properties (mapping of plain values)
 
 Validate an envelope with ``validate_workspace_payload(payload)`` (raises
 ``SchemaError`` on any violation) and get a defaults-filled copy with
@@ -273,6 +290,66 @@ def validate_file(file_rec: Mapping[str, Any]) -> None:
     _validate_optional_str_list(file_rec, "parents", "file")
 
 
+def validate_notion_page(page: Mapping[str, Any]) -> None:
+    """Validate an agent-fetched Notion page record."""
+
+    page = _require_mapping(page, "notion_page")
+    for field in ("id", "title"):
+        _require_non_empty_string(page, field, "notion_page")
+    _require_iso8601(page, "last_edited_time", "notion_page")
+    _validate_optional_bool(page, "mentions_operator", "notion_page")
+
+
+def validate_notion_comment(comment: Mapping[str, Any]) -> None:
+    """Validate an agent-fetched Notion comment record (text is optional and never rendered)."""
+
+    comment = _require_mapping(comment, "notion_comment")
+    for field in ("id", "page_id", "author"):
+        _require_non_empty_string(comment, field, "notion_comment")
+    _require_iso8601(comment, "created_time", "notion_comment")
+    _validate_optional_bool(comment, "mentions_operator", "notion_comment")
+
+
+def validate_notion_row(row: Mapping[str, Any]) -> None:
+    """Validate a Notion database row in the notion-sync envelope shape."""
+
+    row = _require_mapping(row, "notion_row")
+    _require_non_empty_string(row, "page_id", "notion_row")
+    _require_iso8601(row, "last_edited_time", "notion_row", required=False)
+    if not isinstance(row.get("properties") or {}, Mapping):
+        raise SchemaError("notion_row.properties: must be a mapping")
+
+
+def validate_notion_block(block: Mapping[str, Any]) -> None:
+    """Validate the optional ``notion`` block of a workspace envelope."""
+
+    block = _require_mapping(block, "notion")
+    for key, validator in (("pages", validate_notion_page), ("comments", validate_notion_comment)):
+        records = block.get(key)
+        if records is None:
+            continue
+        if not isinstance(records, list):
+            raise SchemaError(f"notion.{key}: must be a list")
+        for idx, record in enumerate(records):
+            try:
+                validator(record)
+            except SchemaError as exc:
+                raise SchemaError(f"notion.{key}[{idx}].{exc}") from exc
+    databases = block.get("databases")
+    if databases is None:
+        return
+    if not isinstance(databases, Mapping):
+        raise SchemaError("notion.databases: must map a domain to a list of rows")
+    for domain, rows in databases.items():
+        if not isinstance(rows, list):
+            raise SchemaError(f"notion.databases.{domain}: must be a list")
+        for idx, row in enumerate(rows):
+            try:
+                validate_notion_row(row)
+            except SchemaError as exc:
+                raise SchemaError(f"notion.databases.{domain}[{idx}].{exc}") from exc
+
+
 _WORKSPACE_RECORD_VALIDATORS = {
     "messages": validate_message,
     "events": validate_event,
@@ -303,6 +380,8 @@ def validate_workspace_payload(payload: Mapping[str, Any]) -> None:
                 validator(record)
             except SchemaError as exc:
                 raise SchemaError(f"{key}[{idx}].{exc}") from exc
+    if payload.get("notion") is not None:
+        validate_notion_block(payload["notion"])
 
 
 def normalize_workspace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -333,6 +412,15 @@ def normalize_workspace_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         rec = dict(file_rec)
         rec.setdefault("parents", [])
         cleaned["files"].append(rec)
+    notion = payload.get("notion")
+    if notion is not None:
+        # Only present when the agent supplied it, so envelopes without Notion
+        # normalise exactly as before.
+        cleaned["notion"] = {
+            "pages": [dict(p) for p in notion.get("pages") or []],
+            "comments": [dict(c) for c in notion.get("comments") or []],
+            "databases": {str(k): [dict(r) for r in v] for k, v in (notion.get("databases") or {}).items()},
+        }
     return cleaned
 
 

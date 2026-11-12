@@ -37,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.7.12"
+VERSION = "0.8.0"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1650,6 +1650,31 @@ _DEMO_CONFIG = {
 }
 
 
+def cmd_group_summary(args: argparse.Namespace) -> int:
+    """Read-only group roll-up across member companies' shared domains."""
+    from company_registry import RegistryError, ShareDenied, group_summary
+
+    config = load_config(getattr(args, "config", None))
+    if config is None:
+        return 1
+    try:
+        report = group_summary(config)
+    except (ShareDenied, RegistryError) as exc:
+        print(f"group-summary refused: {exc}", file=sys.stderr)
+        return 1
+    if not getattr(args, "summary", False):
+        print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+        return 0
+    print(f"Group {report['name']} ({report['group']}) — shared: {', '.join(report['shared_domains']) or 'nothing'}")
+    for slug, domains in report["members"].items():
+        print(f"  {slug}")
+        for domain, value in domains.items():
+            if isinstance(value, dict):
+                value = ", ".join(f"{k}={v}" for k, v in value.items())
+            print(f"    {domain:<10} {value}")
+    return 0
+
+
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Print the capability report (JSON by default)."""
     config = load_config(getattr(args, "config", None))
@@ -1660,6 +1685,12 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
     # JSON is the default; --summary opts into the human-readable table.
     if getattr(args, "summary", False):
         print("Chief of Staff Capabilities")
+        company = report.get("company")
+        if company:
+            group = company.get("group") or "standalone"
+            print(f"  Company                   {company['id']} (group: {group}; "
+                  f"{company['registered_companies']} registered)")
+            print(f"    ! {report['company_note']}")
         print(f"  Provider                  {report['provider']}")
         print(f"  Live-verified             {'YES' if report['provider_verified'] else 'NO'}")
         if report["provider_verification_note"]:
@@ -2252,6 +2283,15 @@ def build_parser() -> argparse.ArgumentParser:
     c_out.add_argument("--summary", action="store_true", help="Human-readable table")
     capabilities.set_defaults(func=cmd_capabilities)
 
+    group_summary = sub.add_parser(
+        "group-summary",
+        help="Read-only roll-up of a group's shared data (run with --group <slug>)",
+    )
+    gs_out = group_summary.add_mutually_exclusive_group()
+    gs_out.add_argument("--json", action="store_true", help="Structured JSON (default)")
+    gs_out.add_argument("--summary", action="store_true", help="Human-readable table")
+    group_summary.set_defaults(func=cmd_group_summary)
+
     demo = sub.add_parser(
         "demo",
         help="Render the daily briefing from bundled sample data (no credentials/config)",
@@ -2336,7 +2376,14 @@ def _run_had_warnings() -> bool:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    from company_registry import RegistryError, apply_company_flag
+
+    try:
+        argv = apply_company_flag(list(argv) if argv is not None else sys.argv[1:])
+    except RegistryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    args = parser.parse_args(argv)
 
     command = getattr(args, "command", None)
 

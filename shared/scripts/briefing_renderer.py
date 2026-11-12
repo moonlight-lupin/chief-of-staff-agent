@@ -14,7 +14,7 @@ from __future__ import annotations
 import html as _html
 import json
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from briefing_attribution import BRIEFING_ARCHIVE_SECTIONS as _ARCHIVE_SECTIONS
 
@@ -23,6 +23,59 @@ _ARCHIVE_IDS = frozenset(_ARCHIVE_SECTIONS)
 
 def _risk_icon(risk: str) -> str:
     return {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(risk, "⚪")
+
+
+def _notion_lines(notion: Mapping[str, Any], md: bool = False) -> list[str]:
+    """Notion input summary (read-only). Titles and authors only — never text."""
+    if not notion:
+        return []
+    bullet = "-" if md else "  -"
+    lines = ["## Notion\n" if md else "Notion:"]
+    if notion.get("error"):
+        lines.append(f"{bullet} Notion input could not be read: {notion['error']}")
+    for m in notion.get("mentions") or []:
+        lines.append(f"{bullet} {m['author']} mentioned you on '{m['page_title']}'")
+    for t in notion.get("notion_only_tasks") or []:
+        state = "OVERDUE" if t.get("overdue") else "due"
+        lines.append(f"{bullet} Task in Notion only, {state} {t['due']}: {t['title']}")
+    for domain, s in (notion.get("sync") or {}).items():
+        parts = [f"{s['notion_edits_to_review']} Notion edit(s) to review",
+                 f"{s['to_push']} to push", f"{len(s['conflicts'])} conflict(s)"]
+        if s.get("already_queued"):
+            parts.append(f"{s['already_queued']} already queued")
+        lines.append(f"{bullet} Sync {domain}: " + ", ".join(parts))
+    pages = notion.get("recent_pages") or []
+    if pages:
+        lines.append(f"{bullet} Recently edited ({len(pages)}):")
+        for p in pages:
+            who = f" by {p['last_edited_by']}" if p.get("last_edited_by") else ""
+            lines.append(f"{'  ' if md else '    '}- {p['title']}{who} ({p.get('last_edited_time', '')})")
+    for note in notion.get("notes") or []:
+        lines.append(f"{bullet} Note: {note}")
+    if len(lines) == 1:
+        lines.append(f"{bullet} No Notion activity in this window.")
+    lines.append("")
+    return lines
+
+
+def _spend_lines(sp: Mapping[str, Any], md: bool = False) -> list[str]:
+    """Spend envelopes and month-to-date spend (read-only)."""
+    if not sp:
+        return []
+    bullet = "-" if md else "  -"
+    lines = ["## Spend\n" if md else "Spend:"]
+    ccy = sp.get("currency") or ""
+    for provider, total in (sp.get("month_to_date") or {}).items():
+        cap = (sp.get("monthly_caps") or {}).get(provider)
+        lines.append(f"{bullet} {provider} this month: {total} {ccy}" + (f" of {cap} cap" if cap is not None else ""))
+    for e in sp.get("envelopes") or []:
+        lines.append(f"{bullet} Budget '{e['topic']}': {e['spent']} spent, {e['remaining']} {e['currency']} "
+                     f"remaining of {e['cap']} (until {str(e.get('expires_at') or '')[:10]})")
+    stale = sp.get("stale_reservations") or []
+    if stale:
+        lines.append(f"{bullet} {len(stale)} reservation(s) never recorded: run spend.py record or release")
+    lines.append("")
+    return lines
 
 
 def render_text(briefing: dict[str, Any]) -> str:
@@ -221,6 +274,9 @@ def render_text(briefing: dict[str, Any]) -> str:
         lines.append("  (No invoices written by this briefing.)")
         lines.append("")
     _append_loader_source_text(lines, bk.get("sources"))
+
+    lines.extend(_notion_lines(sections.get("notion") or {}))
+    lines.extend(_spend_lines(sections.get("spend") or {}))
 
     # Pipeline / CRM
     pl = sections.get("pipeline", {})
@@ -427,6 +483,13 @@ def render_markdown_sections(briefing: dict[str, Any]) -> list[tuple[str, str]]:
             maintained.append(f"- Memory records: {knowledge['total_records']} total")
         maintained.append("")
         blocks.append((None, maintained))
+
+    notion_md = _notion_lines(sections.get("notion") or {}, md=True)
+    if notion_md:
+        blocks.append((None, notion_md))
+    spend_md = _spend_lines(sections.get("spend") or {}, md=True)
+    if spend_md:
+        blocks.append((None, spend_md))
 
     divergence: list[str] = []
     _append_loader_source_text(divergence, _daily_bookkeeper_sources(sections))
@@ -975,6 +1038,16 @@ def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
                 stale, [("client_name", "Client"), ("stage", "Stage"), ("stale_days", "Days idle")])))
         else:
             sections_html.append(_html_section("Pipeline", '<p class="muted">No stale deals.</p>'))
+
+    notion = sections.get("notion") or {}
+    if notion:
+        items = "".join(f"<li>{_esc(line.lstrip(' -'))}</li>" for line in _notion_lines(notion)[1:] if line.strip())
+        sections_html.append(_html_section("Notion", f"<ul>{items}</ul>", open_by_default=True))
+
+    sp = sections.get("spend") or {}
+    if sp:
+        items = "".join(f"<li>{_esc(line.lstrip(' -'))}</li>" for line in _spend_lines(sp)[1:] if line.strip())
+        sections_html.append(_html_section("Spend", f"<ul>{items}</ul>"))
 
     sh = sections.get("system_health", {})
     if sh and sh.get("warnings"):

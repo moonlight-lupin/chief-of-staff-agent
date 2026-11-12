@@ -238,6 +238,27 @@ def cmd_execute(args: argparse.Namespace) -> int:
             print_json(result if isinstance(result, dict) else {"raw": str(result)})
         return 0
 
+    # ─── Notion: pulls apply locally; writes to Notion are agent-path only ──
+    if action_type in {"notion.pull", "notion.link", "notion.resolve"}:
+        from notion_mirror import execute_local
+        result = execute_local(cfg, args.action_id)
+        if not result.get("success"):
+            print(f"❌ Notion {action_type.split('.')[-1]} error: {result.get('error')}", file=sys.stderr)
+            return 1
+        if args.summary:
+            print(f"✅ Executed: {action_type} ({args.action_id})")
+        else:
+            print_json(result)
+        return 0
+    if action_type.startswith("notion."):
+        print(
+            f"❌ {action_type} is performed by the agent with its own Notion connector, not by the "
+            f"Python client. Run: review_queue.py claim --action-id {args.action_id}, perform it, then "
+            f"record-execution.",
+            file=sys.stderr,
+        )
+        return 1
+
     # ─── Internal: pipeline CRM actions ──────────────────────────
     if action_type and action_type.startswith("pipeline."):
         from pipeline_actions import execute_pipeline_action

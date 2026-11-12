@@ -1,5 +1,216 @@
 # Changelog
 
+## v0.8.0 (beta) — Multi-company phases 1 and 2, Notion mirror, prospecting v2
+
+### Prospecting v2: signals, written verdicts, replies
+
+- `prospecting` skill 0.2.0 reworks the workflow into an 11-step funnel where
+  spending rises with confidence. It runs brief, size and sample, budget,
+  accounts first, signals, written verdict, contacts for tier A and B only,
+  propose, one-signal drafts, replies, then learn. New references:
+  `references/signals.md` (vocabulary, weights, recency, hook rules) and
+  `references/messaging.md` (first-email anatomy, follow-ups, reply playbook).
+- `shared/scripts/prospecting.py` and `prospects.py` gain these commands:
+  - `observe` stores buying signals with evidence URL, event date, confidence
+    and attribution. Industry-wide news is refused as a company signal.
+  - `assess` takes a written fit verdict and derives the tier (A/B/C), the
+    anchor signal, a why-now line and a `do_not_pursue` flag (strong trigger,
+    weak fit). Strength is type weight × recency decay. Signals under 0.7
+    confidence or over 90 days old are unusable.
+  - `add-contact` adds a second contact at the same account.
+  - `reply` records the reply category. Reply text is never stored, and
+    opt-out wording overrides the category given. Any real reply pauses the
+    whole account.
+  - `touch` and `stats` give reply rates by opener signal and by tier.
+- Behaviour changes:
+  - `propose` now requires a `fit` verdict.
+  - A missing ICP field now counts as "not assessed" rather than a failed
+    check.
+  - `list` ranks by tier and shows the why-now line.
+- The concepts draw on three public outbound projects (explorium-ai/gtm-skills,
+  ethanplusai/sellbird, eracle/OpenOutreach). They are credited in NOTICE.
+  Ideas only: no code or text was copied.
+
+### Prospecting, SEO audit, competitor watch (phase 4b)
+
+- `prospecting` skill and `shared/scripts/prospecting.py`. Ingests leads the
+  agent fetched, each with full provenance (provider, endpoint, run,
+  fetched-at, purpose).
+  - PDPA minimisation: business contact fields only; others are dropped and
+    reported by name; personal mailbox addresses are dropped.
+  - Leads already in the pipeline, already listed, or opted out are skipped.
+  - Opt-outs are kept as hashes in a suppression list that outlives purges.
+  - Phone and SMS contact are blocked until the number is cleared against the
+    DNC registry.
+  - Chosen prospects become queued `pipeline.deal.add` actions.
+  - Retention purge is a dry run unless confirmed.
+  - The skill is registered only when `spend:` names a provider.
+- `seo-tracker` skill and `shared/scripts/seo_audit.py`. The workflows are
+  adapted from OpenSEO's skills (every-app/open-seo, MIT, credited in
+  NOTICE): choosing a workflow, project setup, site audit, keyword research,
+  competitive landscape, local SEO, backlinks, AI visibility, and the report
+  structure. The OpenSEO app and MCP server are not used. SEO data comes from
+  DataForSEO through Monid: endpoints are found with `monid_discover`,
+  priced with `monid_inspect`, and every paid call goes through a spend
+  envelope. The default location is the company's own market. Project
+  context and the research log live in the wiki. `seo_tracker.py` records
+  rankings and issue counts after each run to show what moved, and its
+  built-in on-page checks give a quick health check.
+  Endpoint table re-checked against Monid (2026-11-12): DataForSEO has no
+  site-wide crawl. Site audits now crawl with Firecrawl `/crawl` (0.001/page,
+  limit sized into the envelope) and use `/onpage/instant-pages` only for
+  per-URL deep checks. The AI visibility section now says when to use
+  `/ai/mentions-*` (brand mentions, 0.10 flat), `/ai/*-response` (single
+  prompts) and `/ai/keyword-search-volume` (topic demand only).
+- `competitor-watch` skill and `shared/scripts/competitor_watch.py`: snapshot
+  diffs showing new and removed pages, title, content and price changes.
+  Only titles, hashes and the prices found are stored.
+- Paid fetching for all three goes through spend envelopes. Their
+  instructions name Monid's discover, inspect, run and dispute flow.
+
+### Spend envelopes (phase 4a)
+
+**Adds `data.spend_envelope` (high risk) and a spend ledger.**
+
+- New `shared/scripts/spend.py`. A human approves an envelope once:
+  provider, purpose, topic, cap, currency, expiry, and optionally which
+  endpoints it allows. Before each paid call the agent reserves the estimated
+  cost (`spend.py reserve`). A call on the same topic within the cap is
+  approved by the envelope and audited with `envelope:<id>` as the approver.
+  The call is refused with a reason code (and exit code 3) for a different
+  topic, an endpoint not on the list, going over the cap or the company
+  monthly cap (`spend.<provider>.monthly_cap`), an envelope that has expired
+  or changed after approval, or an envelope from another company.
+- Reservations are atomic, so concurrent calls cannot overshoot the cap. The
+  actual cost is recorded after the call. An overrun is recorded as it
+  happened and exhausts the envelope. Unrecorded reservations are flagged by
+  `doctor` (`spend_reservations`).
+- The daily briefing gains a **Spend** section (month to date against the
+  cap, remaining budget per envelope). Approved envelopes no longer appear as
+  pending approvals. `capabilities` reports spend, and `preview` explains an
+  envelope before it is approved.
+
+### Onboarding an existing Notion database
+
+**Adds `notion.db.add_property` (high risk, agent path) and `notion.link` /
+`notion.resolve` (medium risk, local).**
+
+- `notion.columns.<domain>` maps plugin columns to an existing database's own
+  names. `null` marks a column the database doesn't have.
+- `notion_sync.py check`: compares the database's properties with what sync
+  needs and suggests a column mapping. `plan_sync` now refuses to run until
+  the latest check passes, and again after the mapping changes.
+- `check --add <column>` queues adding a missing column, the `CoS ID` column
+  included. It runs only after approval, and the check is cleared afterwards.
+- Sync refuses an existing database whose rows are not linked yet, instead
+  of duplicating them. `notion_sync.py link` matches rows by name, with
+  contact email or due date as tie-breakers. Ambiguous matches are reported,
+  not guessed. Links are applied after approval.
+- `notion_sync.py resolve --keep store|notion` settles a conflict. The
+  copying itself is still a separate approved sync action.
+- The briefing and meeting-prep Notion inputs honour the column map.
+
+### Notion as an input to existing skills
+
+- The workspace envelope (`--input`) accepts an optional `notion` block: pages,
+  comments, and rows of the mapped databases. It is validated in `schemas.py`
+  and kept only when present, so envelopes without Notion normalise exactly
+  as before.
+- New `shared/scripts/notion_inputs.py` (read-only). It produces recently
+  edited pages, mentions of the operator, Notion-only tasks due or overdue,
+  and sync status per mirrored database (edits waiting for review, conflicts,
+  changes not yet queued). Page and comment text is used only for matching
+  and is never returned.
+- Daily briefing: a new **Notion** section in text, Markdown and HTML.
+  Mentions, Notion-only tasks and sync conflicts appear under Needs
+  Attention, and pending sync work appears as a suggested `notion-sync` run.
+  The summary gains `notion_items`.
+- Weekly review: `workspace_collect.py all --input` adds a `notion` key for
+  the week.
+- Meeting prep: `gather --input` adds `notion_context`: pages and rows that
+  match attendees by email, by company domain, or by the client name of their
+  pipeline deal.
+
+### Notion mirror (phase 3)
+
+**Adds agent-path action types and a new local action, `notion.pull`.**
+
+- New `shared/scripts/notion_mirror.py`. The plugin store stays the source of
+  truth and Notion is a mirror. Each record is compared three ways against
+  the hash stored at the last sync. A store change is queued as
+  `notion.db.upsert`. A Notion edit is queued as `notion.pull` and applied
+  only after approval. An edit on both sides is a conflict and produces no
+  action. A record removed from the store is queued as `notion.page.archive`.
+  A new Notion row is queued as a `notion.pull` create. Planning is
+  read-only, and queueing never duplicates an open action.
+- Notion edits can change only allowlisted fields (pipeline: stage, value,
+  contact; todos: title, status, priority, due). Other edits are reported as
+  ignored. Values the store would reject are refused at planning. A pull is
+  refused if the store record changed after planning.
+- New skills `notion-sync` and `notion-wiki` (wiki Markdown → Notion pages,
+  republished as an update only when the file changed). Both are registered
+  only when `notion:` is configured.
+- Risk levels: `notion.db.upsert` low, `notion.page.create`/`update` and
+  `notion.pull` medium, `notion.page.archive` high. `preview` explains the
+  effect and how to reverse each one.
+- `notion.*` writes are refused on the Python `execute` path; they go through
+  claim → record-execution. `record-execution` updates the mirror and warns
+  when `page_id` is missing. After approval, agent-path actions now point to
+  `claim` instead of `execute`.
+- `capabilities` reports a `notion` section. `claim` returns the declared
+  Notion account as `expected_account`.
+
+
+### Phase 2 — group scope, sharing, roll-up, connector accounts
+
+**Touches the approval transition and record-execution.**
+
+- Group scope: `--group <slug>` / `CHIEF_OF_STAFF_GROUP` selects the group's
+  own config and store. Its actions are bound to `group:<slug>`. Selecting a
+  company and a group at the same time is refused.
+- `approvals.approvers`: when a config lists approvers, approval by anyone
+  else is refused and audited as `approver_not_authorised`. Group configs
+  must list approvers. Configs without a list are unchanged.
+- Registry `share:` gives per-domain, read-only sharing within a group.
+  `company_registry.read_shared` opens the owner's store read-only and audits
+  every attempt. Writable or unknown share entries are rejected, and group
+  stores must not overlap company stores.
+- New `chief_of_staff.py --group <slug> group-summary`: a read-only roll-up of
+  pipeline, todos, invoices and expenses for domains the group shares.
+- `accounts:` in company.yaml. `claim` returns `expected_account`, and
+  `record-execution --executor-account` is checked against it (`match`,
+  `mismatch`, `unverified`, or `not_declared` in the result). A mismatch is
+  audited, and `doctor` gains the `executor_accounts` and `company_registry`
+  checks. `doctor` now follows the registry's company selection.
+- CLAUDE.md gains a "Multiple companies" section for agents.
+
+### Phase 1
+
+Lets one install serve several companies, each with its own isolated store.
+Design and decisions: [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md).
+**This change touches the pending-action state machine and the approval
+fingerprint.**
+
+### Changes
+
+- New `shared/scripts/company_registry.py`. The optional registry
+  (`shared/config/companies.yaml` or `CHIEF_OF_STAFF_REGISTRY`) lists
+  companies and groups. Loading it refuses a company whose `project_root` is
+  the same as, or nested inside, another company's, and refuses a declared
+  `company.id` that does not match the registry slug.
+- You select the active company with `--company <slug>` on
+  `chief_of_staff.py` / `review_queue.py`, or with `CHIEF_OF_STAFF_COMPANY`.
+  If several companies are registered and none is selected, `load_config`
+  refuses to run instead of guessing.
+- Pending actions now record `company_id` (a new column, migrated in place).
+  The ID is part of the approval fingerprint when set, so single-company
+  fingerprints are unchanged. A claim made from a different company is blocked
+  and audited as `company_mismatch`.
+- `capabilities` reports the active company and group, and states that the
+  agent provider cannot stop a connector acting from another company's
+  account.
+- Without a registry, behaviour is unchanged.
+
 ## v0.7.12 — Research skills 1.13.0 sync + task-brief skill
 
 deep-research 1.12.0 → **1.13.0** and entity-research 1.1.0 → **1.2.0**

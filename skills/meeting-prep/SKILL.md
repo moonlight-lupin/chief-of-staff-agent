@@ -41,6 +41,7 @@ Do **not** use this skill for scheduling or modifying meetings; use `calendar-ma
 | Bookkeeper | Invoice/payment status for client | Read `{project_root}/invoices.yaml` |
 | To-Do List | Action items tagged with contact/company/deal | Read `{project_root}/todos.yaml` |
 | Entity Research | Quick entity scan if no prior knowledge exists | Load `entity-research` only when local sources are empty or insufficient |
+| Notion (optional) | Pages and mirrored rows about the attendees or their company | `notion` block in the `gather --input` envelope; see Notion Input |
 
 Configuration comes from `shared/config/company.yaml`; use `paths.project_root`, `paths.wiki_path`, `google.delegate_email`, `google.account` or `google.service_account_path`, and `delivery.timezone`.
 
@@ -64,6 +65,22 @@ newer_than:90d (from:{attendee_email} OR to:{attendee_email})
 ```
 
 Do not fetch or expose full message bodies unless snippets are insufficient to identify an open item.
+
+## Notion Input (optional)
+
+If a Notion connector is available, search Notion for the attendees' names,
+email addresses and company names. Add matching pages (with a short `text`
+excerpt for matching) and the rows of the mapped `pipeline` / `todos`
+databases to the `gather --input` envelope as a `notion` block. `gather`
+returns `notion_context`: pages and rows tied to the attendees by email, by
+company domain (generic mail providers and your own domain excluded), or by
+the client name of a pipeline deal whose contact is attending. Use those
+titles as background sources in the brief.
+
+Leave the block out entirely when Notion is not connected; the output is then
+unchanged. Record shapes are in `shared/scripts/schemas.py` (`notion_page`,
+`notion_comment`, `notion_row`). `text` fields are used only for matching and
+are never rendered. Never paste page or comment text into chat or the output.
 
 ## Workflow
 

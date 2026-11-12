@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.7.12
+> **Status:** v0.8.0 (beta)
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -83,9 +83,38 @@ The daily loop is deliberately **read-only** — it reports and recommends, it n
 | **Knowledge** | Structured memory + a linked Markdown wiki, with autonomous low-risk curation |
 | **Workflows** | Capture a repeating business process as declarative YAML (guided interview), then let the orchestrator run it: cron-fired or manual starts, per-step completion signals, approval gates through the review queue, and live run status via `workflows list`/`runs`/`advance` |
 | **Research** | Cited deep research and entity due-diligence dossiers |
+| **Prospecting** | Finds companies that fit and have a reason to buy now (hiring, funding, leadership change), writes a fit verdict per account, drafts outreach for approval, handles replies |
+| **SEO & AI search** | Site audits, keyword research, search competitors, local/Maps, backlinks, and whether AI assistants mention you, with rankings tracked run over run |
+| **Market watch** | Competitor site changes (new pages, copy and price changes) and scheduled news monitoring |
+| **Spend control** | Pre-approved budgets for paid data calls, reserved before every call, capped per month, shown in the briefing |
+| **Several companies** | One install, several companies with isolated data, plus read-only group roll-ups for holding structures |
+| **Notion** | Mirrors pipeline and tasks to Notion with approval on every pull-back, and publishes wiki notes as Notion pages |
 | **Reliability** | Readiness verdicts, self-diagnosis, redacted support bundles, backups, audit logs |
 
-Twenty-one skills across command centre, planning, meetings and email, documents, commercial operations, knowledge, workflows, travel, and resilience — twenty register on a default install, with `esign-connector` appearing once DocuSeal is configured. Start with five (briefing, review queue, pipeline, bookkeeper, notes) and grow from there.
+Twenty-six skills across command centre, planning, meetings and email, documents, commercial operations, growth, knowledge, workflows, travel, and resilience. Twenty-two register on a default install. The others appear once configured: `esign-connector` with DocuSeal, `notion-sync` and `notion-wiki` with a `notion:` section, and `prospecting` with a `spend:` budget. Start with five (briefing, review queue, pipeline, bookkeeper, notes) and grow from there.
+
+---
+
+## 📈 Skills that grow the business
+
+Running the business is half the job; finding the next customer is the other half. These skills apply the same rule as everything else: they research and propose, you approve, nothing is sent or bought behind your back. Paid data (via Monid's endpoints, e.g. DataForSEO, Firecrawl, company and contact search) is priced for free first and drawn only from a budget you approved.
+
+| Skill | Ask it to… | What you get |
+|---|---|---|
+| **`prospecting`** | *"Find 20 SG fintechs that are hiring in finance and worth a call"* | A ranked list: each account has a tier (A/B/C), a one-line *why now* from a dated, sourced signal, and a written fit verdict you can disagree with. Contact data is bought only for A/B accounts. Outreach drafts carry one true observation and a free offer; each send is approved separately. Opt-outs are permanent, and a reply from anyone at a company stops follow-ups to everyone there. `stats` shows which signals actually get replies. |
+| **`seo-tracker`** | *"Audit our site"*, *"What keywords should we target?"*, *"Do ChatGPT and Google's AI mention us?"* | A site crawl with page-level fixes, keyword and competitor gaps, local/Maps checks, backlinks, AI-visibility findings, and what moved since the last run. |
+| **`competitor-watch`** | *"Watch these three competitors"* | A diff each run: new or removed pages, changed titles and copy, and price changes on pricing pages. |
+| **`news-monitoring`** | *"Send me a weekly digest on payments regulation in SEA"* | A scheduled, sourced headline digest on the topics you care about. |
+| **`entity-research`** | *"Background check on Acme before Tuesday's meeting"* | A due-diligence dossier: ownership, leadership, adverse media, sanctions, with every fact sourced. |
+| **`deep-research`** | *"Research the market for X in depth"* | A cited report built in rounds, with quotes anchored to their sources. |
+| **`pipeline-manager`** + **`meeting-prep`** | *"Prep me for the call with PayFast"* | Approved prospects become pipeline deals; meeting prep pulls the deal, past threads, notes and research into one brief. |
+
+```bash
+# Propose a budget once; the agent reserves against it before every paid call
+.venv/bin/python shared/scripts/spend.py propose --provider monid \
+  --purpose "Find SG fintech CFOs for Q4" --topic sg-fintech-cfos --cap 20 --currency USD
+.venv/bin/python skills/prospecting/scripts/prospects.py list   # ranked by tier, no contact details
+```
 
 ---
 
@@ -207,6 +236,7 @@ Failed readiness rows print the exact diagnose command. No stack-trace archaeolo
 | [`docs/REVIEW_QUEUE.md`](docs/REVIEW_QUEUE.md) | Review, approve, execute, audit |
 | [`docs/BETA_DAILY_LOOP.md`](docs/BETA_DAILY_LOOP.md) | The daily operating loop |
 | [`docs/PIPELINE_MANAGER.md`](docs/PIPELINE_MANAGER.md) | CRM operations |
+| [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md) | Several companies on one install: registry, isolation, group roll-up |
 | [`docs/BOOKKEEPER_INGESTION.md`](docs/BOOKKEEPER_INGESTION.md) | Invoice ingestion |
 | [`docs/MEMORY_WIKI_HARDENING.md`](docs/MEMORY_WIKI_HARDENING.md) | Knowledge lint, backup, rollback |
 
@@ -214,7 +244,7 @@ Failed readiness rows print the exact diagnose command. No stack-trace archaeolo
 
 ## ⚠️ Honest limitations
 
-Internal beta. One company and operator per instance. CLI- and agent-driven (no web UI). A lightweight CRM and operational bookkeeper — not replacements for Salesforce or Xero. Graph webhooks and >4 MB OneDrive uploads are deliberately deferred (polling works fine at this scale). It produces operational assistance and drafts — not legal, tax, accounting, or compliance advice.
+Beta. One operator per instance; several companies are supported, each with its own isolated data. CLI- and agent-driven (no web UI). Prospecting and SEO need a paid data provider and an approved budget, and outreach is drafted for approval, never sent in bulk. A lightweight CRM and operational bookkeeper — not replacements for Salesforce or Xero. Graph webhooks and >4 MB OneDrive uploads are deliberately deferred (polling works fine at this scale). It produces operational assistance and drafts — not legal, tax, accounting, or compliance advice.
 
 ---
 

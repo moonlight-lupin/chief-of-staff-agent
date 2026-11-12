@@ -51,6 +51,8 @@ for _path in (_SCRIPT_DIR, _DOC_PREPARER_SCRIPTS):
         sys.path.insert(0, str(_path))
 
 from action_risk import get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
+from company_registry import account_check, config_approvers, expected_account  # noqa: E402
+from workspace_audit import audit_workspace_action  # noqa: E402
 from config_loader import get_project_root, load_config  # noqa: E402
 from state_db import (  # noqa: E402
     approve_pending_action,
@@ -261,6 +263,36 @@ def _expected_effect(action_type: str, target: str, payload: Mapping[str, Any]) 
                 f"{payload.get('person_id') or target}.")
     if action_type == "contacts.delete":
         return f"Permanently delete contact {payload.get('person_id') or target} (no trash step)."
+    if action_type == "notion.db.upsert":
+        verb = "Update" if payload.get("page_id") else "Create"
+        return (f"{verb} the Notion {payload.get('domain')} row for {payload.get('record_id')} "
+                f"(database {payload.get('database_id')}) with the plugin's current values.")
+    if action_type == "notion.page.archive":
+        return f"Archive Notion page {payload.get('page_id')} (record {payload.get('record_id')} was removed)."
+    if action_type in {"notion.page.create", "notion.page.update"}:
+        verb = "Create" if action_type == "notion.page.create" else "Replace the content of"
+        return f"{verb} Notion page {payload.get('title')!r} from wiki/{payload.get('source_path')}."
+    if action_type == "data.spend_envelope":
+        allowed = f" (endpoints: {', '.join(payload['endpoints'])})" if payload.get("endpoints") else ""
+        return (f"Pre-approve up to {payload.get('cap')} {payload.get('currency')} of {payload.get('provider')} "
+                f"calls for: {payload.get('purpose')} (topic '{payload.get('topic')}'){allowed}, until "
+                f"{str(payload.get('expires_at') or '')[:10]}. Each call is logged with its cost; going over "
+                f"the cap or onto another topic comes back to you.")
+    if action_type == "notion.db.add_property":
+        return (f"Add a {payload.get('type')} column '{payload.get('property')}' to Notion database "
+                f"{payload.get('database_id')} ({payload.get('domain')}). Existing rows are not changed.")
+    if action_type == "notion.link":
+        return (f"Record {len(payload.get('matches') or [])} match(es) between existing Notion "
+                f"{payload.get('domain')} rows and plugin records. No data changes; later syncs use the links.")
+    if action_type == "notion.resolve":
+        side = "plugin's values to Notion" if payload.get("keep") == "store" else "Notion's values into the plugin"
+        return (f"Settle the conflict on {payload.get('record_id')}: the next sync proposes copying the "
+                f"{side} (still needs approval).")
+    if action_type == "notion.pull":
+        fields = ", ".join(sorted((payload.get("changes") or {}).keys()))
+        if payload.get("op") == "create":
+            return f"Add a new {payload.get('domain')} record from Notion page {payload.get('page_id')} ({fields})."
+        return f"Change {fields} on {payload.get('record_id')} in the plugin store to match Notion."
     return f"Run {action_type or 'unknown action'} against target {target or '(none)'} with the stored payload."
 
 
@@ -281,6 +313,15 @@ def _reversal_hint(action_type: str) -> str:
         "contacts.create": "Delete the created contact.",
         "contacts.update": "No prior values are recorded — re-enter the old values by hand if you have them.",
         "contacts.delete": "Permanent — no undo. Recreate the contact by hand from your own records.",
+        "notion.db.upsert": "Restore the prior version from the Notion page history.",
+        "notion.page.create": "Delete (archive) the created Notion page.",
+        "notion.page.update": "Restore the prior version from the Notion page history.",
+        "notion.page.archive": "Restore the page from Notion trash while retention allows.",
+        "notion.pull": "Edit the record back in the plugin; the store audit log holds the prior values.",
+        "notion.db.add_property": "Delete the column in Notion (its values are lost with it).",
+        "data.spend_envelope": "Close it with spend.py close; money already spent is not refunded.",
+        "notion.link": "Links only affect later syncs; re-link after removing them from the mirror.",
+        "notion.resolve": "Nothing is copied until the follow-up sync action is approved; dismiss that instead.",
     }
     return hints.get(action_type, "Review provider audit logs and undo manually if supported.")
 
@@ -290,6 +331,14 @@ def _load_config_or_exit(config_path: str | None) -> Any | None:
     if config is None:
         return None
     return config
+
+
+def _next_step(action_id: str, action: Mapping[str, Any] | None) -> str:
+    """What to run after approval: agent-path actions are claimed, not executed."""
+    if str((action or {}).get("provider") or "") == "agent":
+        return (f"claim with: {_command('claim', action_id)}, perform it with your connector, "
+                f"then record-execution")
+    return f"execute with: {_command('execute', action_id)}"
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -427,6 +476,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
         approved: list[str] = []
         failed: list[str] = []
+        by_id = {str(a.get("id") or ""): a for a in candidates}
         for action in candidates:
             action_id = str(action.get("id") or "")
             result = _approve_one(config, action_id, args.approver, args.reason)
@@ -436,7 +486,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
                 failed.append(action_id)
         print(f"✅ Bulk approved {len(approved)} low-risk {args.action_type} action(s)")
         for action_id in approved:
-            print(f"   {action_id} — execute with: {_command('execute', action_id)}")
+            print(f"   {action_id} — {_next_step(action_id, by_id.get(action_id))}")
         if failed:
             print(f"⚠️  Failed to approve {len(failed)} action(s): {', '.join(failed)}", file=sys.stderr)
             return 1
@@ -460,7 +510,15 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return 1
     result = approve_pending_action(config, args.action_id, approver=args.approver, reason=args.reason)
     if not result:
-        print(f"Approval failed for {args.action_id} (state={before.get('state')})", file=sys.stderr)
+        approvers = config_approvers(config)
+        if approvers and str(args.approver or "").strip() not in approvers:
+            print(
+                f"Not approved: '{args.approver or ''}' is not a listed approver for this scope "
+                f"(approvals.approvers: {', '.join(approvers)}).",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Approval failed for {args.action_id} (state={before.get('state')})", file=sys.stderr)
         return 1
     action_type = str(result.get("type") or result.get("action_type") or "")
     print(f"✅ Approved: {action_type} ({args.action_id})")
@@ -468,7 +526,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         print(f"   Approver: {args.approver}")
     if args.reason:
         print(f"   Reason: {args.reason}")
-    print(f"   Execute with: {_command('execute', args.action_id)}")
+    print(f"   {_next_step(args.action_id, result)}")
     return 0
 
 
@@ -586,6 +644,10 @@ def cmd_claim(args: argparse.Namespace) -> int:
         "approver": claimed.get("approver") or "",
         "approved_at": claimed.get("approved_at") or "",
         "claimed_at": claimed.get("executing_at") or "",
+        # Multi-company: the account this company expects the action to be
+        # performed from. Use exactly this account, and pass it back with
+        # record-execution --executor-account.
+        "expected_account": expected_account(config, str(claimed.get("type") or "")),
         "next_step": (
             "Perform exactly this action with your own connector tools, then close "
             f"the loop with: review_queue.py record-execution --action-id {args.action_id} "
@@ -662,11 +724,33 @@ def cmd_record_execution(args: argparse.Namespace) -> int:
         "executor": str(getattr(args, "executor", "") or "agent"),
         "audited": True,
     }
+    expected = expected_account(config, str(action.get("type") or ""))
+    actual = str(getattr(args, "executor_account", "") or "").strip() or None
+    check = account_check(expected, actual)
+    result["executor_account"] = actual
+    result["account_check"] = check
+    if check == "mismatch":
+        # The action has already happened, so it is recorded as executed —
+        # but the wrong account acted, which must be visible, not silent.
+        audit_workspace_action(
+            config, str(action.get("provider") or ""), str(action.get("type") or ""), "record-execution",
+            target=str(action.get("target") or ""), status="account_mismatch",
+            extra={"action_id": args.action_id, "expected_account": expected, "executor_account": actual},
+        )
+        print(
+            f"WARNING: {args.action_id} was performed from {actual}, but this company expects "
+            f"{expected}. Recorded as executed; check the provider and correct it if needed.",
+            file=sys.stderr,
+        )
 
     executed = mark_executed(config, args.action_id, result)
     if executed is None:
         print(f"Could not record execution for {args.action_id}", file=sys.stderr)
         return 1
+    if str(action.get("type") or "").startswith("notion."):
+        from notion_mirror import on_executed
+
+        on_executed(config, action, data)
 
     print(json.dumps({
         "action_id": args.action_id,
@@ -865,6 +949,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--executor", default=None,
         help="Who executed it (e.g. 'claude-cowork'); recorded in the audit trail",
     )
+    record_parser.add_argument(
+        "--executor-account", default=None,
+        help="The connector account that performed the action (e.g. the sending mailbox); "
+             "checked against the company's declared accounts",
+    )
 
     summary_parser = sub.add_parser("summary", help="Show grouped queue counts and recommended next step")
     _add_common_config_arg(summary_parser)
@@ -877,6 +966,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    from company_registry import RegistryError, apply_company_flag
+
+    try:
+        argv = apply_company_flag(argv if argv is not None else sys.argv[1:])
+    except RegistryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     parser = build_parser()
     args = parser.parse_args(argv)
     if hasattr(args, "sub_config"):

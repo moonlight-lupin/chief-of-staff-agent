@@ -36,6 +36,48 @@ _M365_VERIFICATION_NOTE = (
 )
 
 
+_COMPANY_NOTE = (
+    "Multi-company mode: this process acts for one company only, and actions are "
+    "bound to it. Under the 'agent' provider the plugin cannot stop a connector "
+    "acting from another company's account: confirm the connector account matches "
+    "this company before executing. See docs/MULTI_COMPANY.md."
+)
+
+
+def _spend_section(config: Any) -> dict[str, Any]:
+    try:
+        from spend import _spend_config, month_to_date, status
+
+        raw = _spend_config(config)
+        return {
+            "currency": raw.get("currency"),
+            "monthly_caps": {k: v.get("monthly_cap") for k, v in raw.items() if hasattr(v, "get")},
+            "active_envelopes": [e for e in status(config) if e["state"] == "approved"],
+            "month_to_date": month_to_date(config),
+            "rule": ("Paid calls need an approved spend envelope: reserve before each call "
+                     "(spend.py reserve), record after. Refusals go back to the user."),
+        }
+    except Exception:
+        return {}
+
+
+def _notion_section(config: Any) -> dict[str, Any]:
+    try:
+        from notion_mirror import notion_settings
+
+        settings = notion_settings(config)
+    except Exception:
+        settings = {"databases": {}, "wiki_parent_page": None}
+    configured = bool(settings["databases"] or settings["wiki_parent_page"])
+    return {
+        "configured": configured,
+        "domains": sorted(settings["databases"]),
+        "wiki": bool(settings["wiki_parent_page"]),
+        "execution": ("agent connector: plan with notion-sync, approve, claim, record-execution; "
+                      "Notion edits return as notion.pull actions for approval") if configured else "",
+    }
+
+
 def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     """Describe this installation's operating envelope in one JSON object.
 
@@ -126,8 +168,18 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         state_note = f"State persists on local disk under {project_root or '<project_root>'}."
 
     verified = provider in _LIVE_VERIFIED_PROVIDERS
+    try:
+        from company_registry import company_context
+
+        company = company_context(config)
+    except Exception:
+        company = None
     return {
         "version": version,
+        "company": company,
+        "notion": _notion_section(config),
+        "spend": _spend_section(config),
+        "company_note": _COMPANY_NOTE if company else "",
         "provider": provider,
         "provider_verified": verified,
         "provider_verification_note": "" if verified else _M365_VERIFICATION_NOTE,

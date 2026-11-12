@@ -100,11 +100,43 @@ def _get_registered_skills() -> list[str]:
     ]))
 
 
+_NOTION_SKILLS = frozenset({"notion-sync", "notion-wiki"})
+
+
 def _filter_configured_skills(skills: list[str]) -> list[str]:
-    """Do not expose external e-sign workflows until DocuSeal is configured."""
-    if "esign-connector" not in skills or _esign_url_configured():
-        return list(skills)
-    return [skill for skill in skills if skill != "esign-connector"]
+    """Do not expose externally-backed workflows until they are configured."""
+    hidden: set[str] = set()
+    if "esign-connector" in skills and not _esign_url_configured():
+        hidden.add("esign-connector")
+    if _NOTION_SKILLS & set(skills) and not _notion_configured():
+        hidden |= _NOTION_SKILLS
+    if "prospecting" in skills and not _spend_provider_configured():
+        hidden.add("prospecting")
+    return [skill for skill in skills if skill not in hidden]
+
+
+def _spend_provider_configured() -> bool:
+    raw_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
+    config_path = Path(raw_path).expanduser() if raw_path else PLUGIN_ROOT / "shared" / "config" / "company.yaml"
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        return False
+    spend = data.get("spend") if isinstance(data, dict) else None
+    return isinstance(spend, dict) and any(isinstance(v, dict) for v in spend.values())
+
+
+def _notion_configured() -> bool:
+    raw_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
+    config_path = Path(raw_path).expanduser() if raw_path else PLUGIN_ROOT / "shared" / "config" / "company.yaml"
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        return False
+    notion = data.get("notion") if isinstance(data, dict) else None
+    return isinstance(notion, dict) and bool(notion.get("databases") or notion.get("wiki_parent_page"))
 
 
 def _esign_url_configured() -> bool:

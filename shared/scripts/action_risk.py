@@ -17,6 +17,11 @@ HIGH_RISK_TYPES: set[str] = {
     "bookkeeper.invoice.mark_paid",
     "bookkeeper.invoice.delete",
     "pipeline.deal.delete",
+    "notion.page.archive",
+    # Changes the structure of the operator's database.
+    "notion.db.add_property",
+    # Pre-authorises paid calls up to its cap: approve one at a time.
+    "data.spend_envelope",
 }
 
 MEDIUM_RISK_TYPES: set[str] = {
@@ -31,6 +36,11 @@ MEDIUM_RISK_TYPES: set[str] = {
     "bookkeeper.invoice.update",
     "pipeline.deal.add",
     "pipeline.deal.move_stage",
+    "notion.page.create",
+    "notion.page.update",
+    "notion.pull",
+    "notion.link",
+    "notion.resolve",
 }
 
 LOW_RISK_TYPES: set[str] = {
@@ -42,6 +52,9 @@ LOW_RISK_TYPES: set[str] = {
     "drive.download",
     "pipeline.deal.add_note",
     "pipeline.deal.link_document",
+    # Mirrors the operator's own records into their own Notion; Notion keeps
+    # page history, and the planner never overwrites a Notion-side edit.
+    "notion.db.upsert",
 }
 
 ACTION_RISK_MAP: dict[str, str] = {

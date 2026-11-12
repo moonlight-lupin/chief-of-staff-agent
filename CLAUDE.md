@@ -56,7 +56,7 @@ remediation command.
 | `.env` (plugin root) | Secrets only. Auto-loaded; shell env wins. **Never echo, never commit, never paste into chat.** |
 | `paths.project_root` | The user's data: `pipeline.yaml`, `invoices.yaml`, `expenses.yaml`, `todos.yaml`, `wiki/`. Plain YAML and Markdown. |
 | `shared/scripts/` | Shared machinery — guardrails, state, providers, audit. |
-| `skills/<name>/` | The nineteen skills, each with `SKILL.md` and its own `scripts/`. |
+| `skills/<name>/` | The skills, each with `SKILL.md` and its own `scripts/`. Notion skills appear only when `notion:` is configured. |
 
 ## Scheduled / headless runs
 
@@ -81,6 +81,8 @@ JSON; show the user the summary.
 
 ```bash
 chief_of_staff.py capabilities     # operating envelope (start here)
+chief_of_staff.py --group <g> group-summary   # read-only group roll-up
+spend.py status                    # budgets, spend, remaining
 chief_of_staff.py daily            # the daily loop — read-only
 chief_of_staff.py doctor           # health check
 chief_of_staff.py readiness        # go/no-go per capability
@@ -155,6 +157,35 @@ again. Never abandon a claim silently.
 An approval covers exactly what was approved. If an action's type, target or
 payload changes after approval, `claim` and `execute` refuse it — queue and
 approve a new one.
+
+## Multiple companies
+
+If `capabilities` shows a `Company` line, this install serves several
+companies ([`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md)). The process acts
+for exactly one scope: `--company <slug>` or `--group <slug>`.
+
+- **Never switch scope to get past a refusal.** An action belongs to the
+  company or group it was created in. A claim from any other scope is refused
+  as `company_mismatch`, and that is correct.
+- **Act from the declared account.** `claim` returns `expected_account`.
+  Perform the action from that connector account, and pass it back with
+  `record-execution --executor-account <account>`. If your connector is
+  signed in to a different account, stop and tell the user. Do not perform
+  the action.
+- **Sister-company data is read-only**, and only for domains the group
+  shares. Never write one company's records into another company's store.
+- Only the approvers listed for a group may approve group actions. Never
+  put a listed approver's name on an approval they did not give.
+
+## Paid data calls
+
+Paid endpoints (e.g. Monid runs) are spent only against an **approved spend
+envelope** ([`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md)). Run
+`spend.py reserve` **before** every paid call and `spend.py record` after. If
+`reserve` refuses (exit 3), do not make the call: tell the user why, and
+propose a new envelope only if they want to continue. Never reuse a topic for
+a different purpose to stay inside a budget. Free discovery and price checks
+need no envelope.
 
 ## Hosted cloud sessions
 

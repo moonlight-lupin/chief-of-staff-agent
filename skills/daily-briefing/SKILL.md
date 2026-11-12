@@ -90,6 +90,29 @@ List events from local midnight today through tomorrow 23:59:59 in `delivery.tim
 
 Normalize each event into: local start/end, title, attendees, organizer, location, conference/join link, and event ID. Include meeting join links prominently. Skip declined events and low-signal all-day holds unless they affect availability.
 
+## Notion Input (optional)
+
+If a Notion connector is available, add a `notion` block to the `--input`
+envelope:
+
+- `pages`: pages edited in the last 24 hours (`id`, `title`,
+  `last_edited_time`, `last_edited_by`, `url`). Set `mentions_operator: true`
+  on pages that @-mention the operator.
+- `comments`: comments from the last 24 hours (`id`, `page_id`,
+  `page_title`, `author`, `created_time`, `mentions_operator`).
+- `databases`: the rows of each database mapped under `notion.databases`
+  (`pipeline`, `todos`), in the same shape `notion-sync` reads.
+
+The briefing then adds a **Notion** section. It shows mentions and
+Notion-only tasks that are due or overdue under Needs Attention, sync
+conflicts, and a suggested `notion-sync` run when Notion edits are waiting for
+review. Summarising is read-only: it queues nothing.
+
+Leave the block out entirely when Notion is not connected; the output is then
+unchanged. Record shapes are in `shared/scripts/schemas.py` (`notion_page`,
+`notion_comment`, `notion_row`). `text` fields are used only for matching and
+are never rendered. Never paste page or comment text into chat or the output.
+
 ## Aggregation Workflow
 
 1. **Load central config.** Use `shared/scripts/config_loader.py` if available, otherwise read `shared/config/company.yaml` directly. Completion criterion: `company`, `google`, `paths.project_root`, and `delivery` are known.
