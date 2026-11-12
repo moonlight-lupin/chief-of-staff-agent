@@ -356,7 +356,7 @@ def test_failure_is_final_when_enforced(cfg, signer):                           
 
 
 def test_failure_still_retries_when_not_enrolled(cfg):
-    action = _new(cfg)
+    action = state_db.create_pending_action(cfg, "gmail.archive", "google_api", "m1", {"message_id": "m1"})
     state_db.approve_pending_action(cfg, action["id"], approver="op", reason="ok")
     state_db.mark_executing(cfg, action["id"])
     state_db.mark_failed(cfg, action["id"], "provider 500")

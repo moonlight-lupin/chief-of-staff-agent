@@ -255,7 +255,9 @@ class TestFailedExecutionRetry:
         final = get_pending_action(config, action_id)
         assert final["state"] == "executed"
 
-    def test_retry_after_exception(self, temp_project):
+    def test_failed_send_is_final_not_retried(self, temp_project):
+        """A send that raised may still have gone out: it fails for good, and a
+        second execute is refused rather than sending a possible duplicate."""
         config, project = temp_project
 
         from state_db import create_pending_action, approve_pending_action, get_pending_action
@@ -265,12 +267,11 @@ class TestFailedExecutionRetry:
             provider="google_api",
             target="x@y.com",
             payload={"to": "x@y.com", "subject": "test", "body": "test"},
-            summary="Test retry after exception",
+            summary="Test failure after exception",
         )
         approve_pending_action(config, action["id"], approver="MH", reason="test")
         action_id = action["id"]
 
-        # First attempt: throws exception
         mock_err = MagicMock()
         mock_err.provider_name = "google_api"
         mock_err.supports.side_effect = lambda a: True
@@ -284,10 +285,9 @@ class TestFailedExecutionRetry:
 
         assert rc == 1
         err_state = get_pending_action(config, action_id)
-        assert err_state["state"] == "approved"
+        assert err_state["state"] == "failed"
         assert "network timeout" in err_state.get("last_error", "")
 
-        # Retry succeeds
         mock_ok = MagicMock()
         mock_ok.provider_name = "google_api"
         mock_ok.supports.side_effect = lambda a: True
@@ -298,8 +298,9 @@ class TestFailedExecutionRetry:
              patch("workspace_capabilities.require_capability", return_value=None):
             rc = webhook_events.main(["--summary", "execute", "--action-id", action_id])
 
-        assert rc == 0
-        assert get_pending_action(config, action_id)["state"] == "executed"
+        assert rc != 0
+        mock_ok.mail_send.assert_not_called()
+        assert get_pending_action(config, action_id)["state"] == "failed"
 
 
 # ─── Doctor --summary ───────────────────────────────────────

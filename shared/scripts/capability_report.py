@@ -21,20 +21,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 import state_sync  # noqa: E402
 import workspace_guardrails  # noqa: E402
 
-# Providers whose write paths have been exercised against a live account.
-# Native m365 is code-complete but has never run against a real Entra tenant,
-# and saying so out loud is cheaper than someone discovering it in production.
-_LIVE_VERIFIED_PROVIDERS = frozenset({
-    "google_api", "composio", "composio_google", "composio_microsoft", "agent",
-})
-
-_M365_VERIFICATION_NOTE = (
-    "Native Microsoft 365 Graph is code-complete but has never been live-verified "
-    "against a real Entra tenant. Capability flags for it are conservative and "
-    "reads should be treated as unproven until a canary run passes. See the M365 "
-    "section of docs/PRODUCTION_ROADMAP.md."
-)
-
+import verification_matrix  # noqa: E402
 
 _COMPANY_NOTE = (
     "Multi-company mode: this process acts for one company only, and actions are "
@@ -167,7 +154,14 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     else:
         state_note = f"State persists on local disk under {project_root or '<project_root>'}."
 
-    verified = provider in _LIVE_VERIFIED_PROVIDERS
+    try:
+        from doctor_base import _capability_provider_for_workspace
+
+        matrix_provider = _capability_provider_for_workspace(workspace)
+    except Exception:  # pragma: no cover - doctor_base unavailable
+        matrix_provider = provider
+    verification = verification_matrix.provider_summary(matrix_provider, supported=supported)
+    verified = verification["provider_verified"]
     try:
         from company_registry import company_context
 
@@ -182,7 +176,8 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         "company_note": _COMPANY_NOTE if company else "",
         "provider": provider,
         "provider_verified": verified,
-        "provider_verification_note": "" if verified else _M365_VERIFICATION_NOTE,
+        "provider_verification_note": "" if verified else verification["note"],
+        "verification": verification,
         "supported": sorted(supported),
         "unsupported": sorted(unsupported),
         "unsupported_reasons": unsupported_reasons,

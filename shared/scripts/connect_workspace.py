@@ -786,9 +786,22 @@ def cmd_capabilities(config: dict[str, Any], provider_override: str | None = Non
     return 0
 
 
+def _plugin_version() -> str:
+    """The plugin version from plugin.yaml (evidence files record it)."""
+    import re as _re
+
+    try:
+        text = (Path(__file__).resolve().parents[2] / "plugin.yaml").read_text(encoding="utf-8")
+        match = _re.search(r"^version:\s*['\"]?([^'\"\s]+)", text, _re.M)
+        return match.group(1) if match else "unknown"
+    except OSError:
+        return "unknown"
+
+
 def cmd_verify(config: dict[str, Any], include_writes: bool = False,
                include_calendar_writes: bool = False,
-               json_output: bool = False) -> int:
+               json_output: bool = False,
+               record_evidence: bool = False) -> int:
     """Run per-capability verification of the configured workspace provider.
 
     Read-only by default; ``include_writes`` adds the opt-in, non-destructive
@@ -818,6 +831,16 @@ def cmd_verify(config: dict[str, Any], include_writes: bool = False,
         return 1
 
     print(format_report(report, fmt="json" if json_output else "human"))
+    if record_evidence:
+        try:
+            import verification_matrix
+
+            path = verification_matrix.record_evidence(config, report, version=_plugin_version())
+            print(f"Evidence recorded: {path}")
+            print("  Promotion candidates (a maintainer adds them to verification_matrix.EVIDENCE):")
+            print(f"  verification_matrix.py --candidates {path}")
+        except Exception as exc:  # noqa: BLE001 — never fail the verify run on bookkeeping
+            print(f"⚠️  Could not record evidence: {exc}", file=sys.stderr)
 
     if not report.get("read_ready"):
         return 1
@@ -845,6 +868,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "(destructive delete of the artefact only; restored after the probe)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the machine-readable JSON report (with --verify/--verify-writes)")
+    parser.add_argument("--record-evidence", action="store_true",
+                        help="With --verify*: save the check statuses to "
+                             "<project_root>/verify/evidence/ for the verification matrix")
     parser.add_argument("--provider", choices=["google_api", "composio", "m365"],
                         help="Verify or set up a specific provider")
     parser.add_argument("--connect-m365", action="store_true",
@@ -890,6 +916,7 @@ def _main() -> int:
             include_writes=args.verify_writes,
             include_calendar_writes=args.verify_calendar_writes,
             json_output=args.json,
+            record_evidence=args.record_evidence,
         )
 
     if args.status:

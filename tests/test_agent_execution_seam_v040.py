@@ -153,7 +153,8 @@ class TestRecordExecution:
         # The audit must be able to distinguish agent-executed from client-executed.
         assert action["result"]["executed_externally"] is True
 
-    def test_records_failure_and_rearms_for_retry(self, temp_project):
+    def test_records_failure_of_a_send_as_final(self, temp_project):
+        """A send that failed may still have gone out: never re-armed for a retry."""
         action_id = _approved_action(temp_project)
         _run(temp_project, ["claim", "--action-id", action_id])
         code, _, _ = _run(temp_project, [
@@ -162,8 +163,7 @@ class TestRecordExecution:
         ])
         assert code == 0
         action = get_pending_action(temp_project, action_id)
-        # Under the retry cap a failure returns to approved so it can be retried.
-        assert action["state"] == "approved"
+        assert action["state"] == "failed"
         assert action["retry_count"] == 1
         assert "503" in action["last_error"]
 

@@ -369,7 +369,7 @@ class TestExecutionFailurePaths:
 
         from state_db import get_pending_action
         action = get_pending_action(config, action_id)
-        assert action["state"] == "approved"  # failed → approved for retry
+        assert action["state"] == "failed"  # a send may have gone out: final, never re-armed
 
     def test_unsupported_capability(self, with_secret):
         """Unsupported action → mark_failed with error string."""

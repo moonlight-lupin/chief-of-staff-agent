@@ -139,14 +139,26 @@ to True only after a live run actually restores a file.
 
 ### Handling Failed Actions
 
-When a provider call fails (exception or error), the action transitions:
-`executing → approved` (back to approved for retry).
+When a provider call fails (exception or error), what happens depends on
+whether the action can safely run twice:
+
+- **Sends and creates** (`gmail.send`, drafts, `calendar.create`, uploads,
+  `contacts.create`, `notion.page.create`): `executing → failed`, final. The
+  call may have succeeded before the error, so check the provider (e.g. Sent
+  mail) and queue a new action only if it really did not happen.
+- **Idempotent actions** (archive, trash, label, move, update):
+  `executing → approved` for a manual retry, up to three attempts.
+- **Refused before any provider call** (account mismatch, unsupported
+  capability): back to `approved`, since nothing ran.
 
 ```bash
-# Check if any actions failed (look for last_error and retry_count)
+# Failed sends and creates
+python send_email.py list --state failed
+
+# Idempotent actions waiting for a retry (look for last_error and retry_count)
 python send_email.py list --state approved
 
-# Retry by executing again
+# Retry an idempotent action by executing again
 python send_email.py execute --action-id <id>
 
 # Or cancel if the issue is permanent

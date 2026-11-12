@@ -215,7 +215,7 @@ class TestRetryCapAndNeedsVerification:
         config, project = temp_project
 
         action = create_pending_action(
-            config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"}
+            config, "gmail.archive", "google_api", "m1", {"message_id": "m1"}
         )
         approve_pending_action(config, action["id"])
 

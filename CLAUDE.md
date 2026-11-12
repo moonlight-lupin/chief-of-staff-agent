@@ -155,6 +155,10 @@ If the action fails, close the loop honestly:
 review_queue.py record-execution --action-id <id> --status failure --error "..."
 ```
 
+A failed send, draft, calendar create, upload or contact create is final: it
+may already have happened, so it never returns to `approved`. Check the
+provider (e.g. Sent mail), then queue a new action if it really did not run.
+
 An action left in `executing` is a stuck action; `doctor` reports it, and
 `doctor --fix` closes it out as `failed` — never back to `approved`, because it
 may already have run. Check the provider (e.g. Sent mail) before queueing it

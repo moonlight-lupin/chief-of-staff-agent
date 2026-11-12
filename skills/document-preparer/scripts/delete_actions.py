@@ -289,19 +289,20 @@ def cmd_execute(args: argparse.Namespace) -> int:
     from company_registry import preflight
     _account_error, _account_check = preflight(action, client, cfg)
     if _account_error:
-        mark_failed(cfg, args.action_id, _account_error)
+        mark_failed(cfg, args.action_id, _account_error, attempted=False)
         print(f"❌ {_account_error}", file=sys.stderr)
         return 1
 
     # Capability gate — refuse an approved action the provider cannot support
     # (e.g. m365 calendar.cancel, whose capability is False) BEFORE invoking any
     # provider method. Mirrors webhook_events.cmd_execute exactly: the action is
-    # already in 'executing' state (mark_executing above), so mark_failed
-    # transitions it back to 'approved' with last_error recorded for retry.
+    # already in 'executing' state (mark_executing above); nothing was
+    # attempted, so mark_failed(attempted=False) lets it go back to 'approved'.
     from workspace_capabilities import require_capability
     unsupported = require_capability(client, action_type, target=action.get("target", ""))
     if unsupported:
-        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}")
+        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}",
+                    attempted=False)
         print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
         return 1
 
@@ -314,7 +315,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         _cos_grant = execution_grant(cfg, args.action_id)
         _cos_grant.__enter__()
     except PermissionError as exc:
-        mark_failed(cfg, args.action_id, str(exc))
+        mark_failed(cfg, args.action_id, str(exc), attempted=False)
         print(f"❌ {exc}", file=sys.stderr)
         return 1
     old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")

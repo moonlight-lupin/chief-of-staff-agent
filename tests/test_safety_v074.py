@@ -105,7 +105,8 @@ class TestApprovalBinding:
         assert mark_executing(config, action["id"]) is None
 
     def test_retry_after_failure_keeps_the_approval(self, config):
-        action_id = _approved(config)
+        action_id = _approved(config, action_type="gmail.archive", target="m1",
+                              payload={"message_id": "m1"})
         assert mark_executing(config, action_id)
         state_db.mark_failed(config, action_id, "transient 503")
         assert get_pending_action(config, action_id)["state"] == "approved"

@@ -115,11 +115,11 @@ class TestExecutionStateMachine:
     def test_mark_failed_back_to_approved(self, temp_project):
         from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, get_pending_action
         config, project = temp_project
-        action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
+        action = create_pending_action(config, "gmail.archive", "google_api", "m1", {"message_id": "m1"})
         approve_pending_action(config, action["id"])
         mark_executing(config, action["id"])
         failed = mark_failed(config, action["id"], "API timeout")
-        assert failed["state"] == "approved"  # back to approved for retry
+        assert failed["state"] == "approved"  # idempotent: back to approved for a manual retry
         assert failed["last_error"] == "API timeout"
         assert failed["retry_count"] == 1
 
@@ -127,7 +127,7 @@ class TestExecutionStateMachine:
         """After mark_failed, can mark_executing again and then mark_executed."""
         from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed, mark_executed, get_pending_action
         config, project = temp_project
-        action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
+        action = create_pending_action(config, "gmail.archive", "google_api", "m1", {"message_id": "m1"})
         approve_pending_action(config, action["id"])
         mark_executing(config, action["id"])
         mark_failed(config, action["id"], "timeout")
@@ -137,6 +137,17 @@ class TestExecutionStateMachine:
         loaded = get_pending_action(config, action["id"])
         assert loaded["state"] == "executed"
         assert loaded["retry_count"] == 1
+
+    def test_failed_send_is_final(self, temp_project):
+        """A send that timed out may have gone out: it never returns to approved."""
+        from state_db import create_pending_action, approve_pending_action, mark_executing, mark_failed
+        config, project = temp_project
+        action = create_pending_action(config, "gmail.send", "google_api", "a@b.com", {"to": "a@b.com"})
+        approve_pending_action(config, action["id"])
+        mark_executing(config, action["id"])
+        failed = mark_failed(config, action["id"], "API timeout")
+        assert failed["state"] == "failed"
+        assert mark_executing(config, action["id"]) is None
 
 
 # ─── Pre-Execution Expiry Check (Race Fix) ────────────────────
