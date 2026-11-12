@@ -268,3 +268,132 @@ def test_doctor_warns_when_executions_were_unverified(cfg, capsys):
                         "--status", "success"])
     result = doctor_base._check_executor_accounts(False, dict(cfg), Path(cfg.source_path))
     assert result.status == "warn" and action_id in result.detail
+
+
+# ------------------------------------------- adversarial review regressions
+
+
+@pytest.fixture
+def plain(tmp_path):
+    """No accounts: block, the default for single-company installs."""
+    base = _config(tmp_path)
+    path = Path(base.source_path)
+    path.write_text(path.read_text().replace("accounts:\n  notion: acme-workspace\n", "")
+                    + '\ngoogle:\n  delegate_email: "ops@acme.example"\n')
+    return config_loader.load_config(path)
+
+
+def test_delegate_change_without_accounts_block_is_drift(plain):          # finding 1
+    action = state_db.create_pending_action(plain, "gmail.send", "google_api", "t", {"a": 1})
+    assert action["binding"]["identity"] == "ops@acme.example"
+    state_db.approve_pending_action(plain, action["id"], approver="op", reason="ok")
+    drifted = _reload(plain, lambda t: t.replace("ops@acme.example", "ceo@beta.example"))
+    assert state_db.mark_executing(drifted, action["id"]) is None
+
+
+def test_m365_mailbox_change_is_drift(tmp_path):                           # finding 1
+    base = _config(tmp_path)
+    path = Path(base.source_path)
+    path.write_text(path.read_text() + "\nintegrations:\n  workspace:\n    provider: m365\n"
+                    "m365:\n  auth: client_credentials\n  user_principal: ops@acme.example\n")
+    cfg = config_loader.load_config(path)
+    action = state_db.create_pending_action(cfg, "mail.send", "m365", "t", {"a": 1})
+    state_db.approve_pending_action(cfg, action["id"], approver="op", reason="ok")
+    drifted = _reload(cfg, lambda t: t.replace("user_principal: ops@acme.example", "user_principal: ceo@beta.example"))
+    assert state_db.mark_executing(drifted, action["id"]) is None
+
+
+def test_composio_routing_change_is_drift(tmp_path):                       # finding 2
+    base = _config(tmp_path)
+    path = Path(base.source_path)
+    path.write_text(path.read_text() + "\nintegrations:\n  workspace:\n    provider: composio\n"
+                    "    user_id: acme-user\n    account_aliases:\n      gmail: acme-gmail\n")
+    cfg = config_loader.load_config(path)
+    action = state_db.create_pending_action(cfg, "gmail.send", "composio", "t", {"a": 1})
+    state_db.approve_pending_action(cfg, action["id"], approver="op", reason="ok")
+    drifted = _reload(cfg, lambda t: t.replace("acme-gmail", "beta-gmail"))
+    assert state_db.mark_executing(drifted, action["id"]) is None
+
+
+def test_preflight_uses_the_bound_identity_when_nothing_is_declared(plain):  # finding 1
+    action = state_db.create_pending_action(plain, "gmail.send", "google_api", "t", {"a": 1})
+    assert reg.preflight_account(action, FakeClient("ceo@beta.example"), plain) is not None
+    assert reg.preflight_account(action, FakeClient("ops@acme.example"), plain) is None
+
+
+def test_preflight_covers_legacy_rows_with_the_live_config(cfg):           # finding 5
+    legacy = {"id": "x", "type": "gmail.send", "binding": None}
+    assert reg.preflight_account(legacy, FakeClient("ceo@beta.example"), cfg) is not None
+
+
+def _registry(tmp_path, companies: dict[str, str], group: str | None = None):
+    lines = ["companies:"]
+    for slug, extra in companies.items():
+        d = tmp_path / slug
+        d.mkdir()
+        (d / "company.yaml").write_text(
+            f"company:\n  id: {slug}\n  name: {slug}\npaths:\n  project_root: {d / 'data'}\n{extra}")
+        lines.append(f"  {slug}:\n    config: {d / 'company.yaml'}" + ("\n    group: g" if group else ""))
+    if group is not None:
+        g = tmp_path / "g"
+        g.mkdir()
+        (g / "company.yaml").write_text(
+            f"company:\n  id: 'group:g'\n  name: g\npaths:\n  project_root: {g / 'data'}\n"
+            f"approvals:\n  approvers: [boss]\n{group}")
+        lines.append(f"groups:\n  g:\n    config: {g / 'company.yaml'}")
+    path = tmp_path / "companies.yaml"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_registry_refuses_a_group_acting_in_a_members_mailbox(tmp_path):  # finding 3
+    path = _registry(tmp_path, {"acme": "accounts:\n  mail: ops@acme.example\n"},
+                     group="accounts:\n  mail: ops@acme.example\n")
+    with pytest.raises(reg.RegistryError, match="ops@acme.example"):
+        reg.load_registry(path)
+
+
+def test_registry_allows_a_shared_calendar_or_notion_workspace(tmp_path):  # finding 4
+    path = _registry(tmp_path, {
+        "acme": "accounts:\n  mail: ops@acme.example\n  calendar: founder@me.example\n  notion: shared-ws\n",
+        "beta": "accounts:\n  mail: ops@beta.example\n  calendar: founder@me.example\n  notion: shared-ws\n",
+    })
+    assert reg.load_registry(path) is not None
+
+
+def test_local_notion_actions_are_not_bound(cfg):                          # finding 7
+    for action_type in ("notion.pull", "notion.link", "notion.resolve"):
+        action = state_db.create_pending_action(cfg, action_type, "local", "t", {"a": 1})
+        assert action.get("binding") is None
+
+
+def test_claim_refused_for_a_missing_account_is_audited(cfg, capsys):      # finding 7
+    action_id = _approved(cfg)
+    _claim(cfg, action_id)
+    assert "account_missing" in _audit(cfg)
+
+
+def test_python_path_records_its_account_check(cfg, monkeypatch):          # finding 6
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "send_email_t2", PLUGIN_ROOT / "skills/document-preparer/scripts/send_email.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    action = state_db.create_pending_action(cfg, "gmail.send", "google_api", "x@example.com",
+                                            {"to": "x@example.com", "subject": "s", "body": "b"})
+    state_db.approve_pending_action(cfg, action["id"], approver="op", reason="ok")
+    client = FakeClient(None)                                     # cannot know who it is
+    client.mail_send = lambda **kw: {"success": True, "message_id": "m1"}
+    monkeypatch.setattr(mod, "get_client", lambda _c: client, raising=False)
+    monkeypatch.setattr(mod, "load_config", lambda *_a, **_k: cfg, raising=False)
+    mod.cmd_execute(types.SimpleNamespace(action_id=action["id"], config=str(cfg.source_path),
+                                          summary=False, json=False))
+    row = state_db.get_pending_action(cfg, action["id"])
+    assert row["state"] == "executed" and row["result"]["account_check"] == "unverified"
+
+
+def test_a_non_string_identity_counts_as_unknown(plain):
+    action = state_db.create_pending_action(plain, "gmail.send", "google_api", "t", {"a": 1})
+    error, check = reg.preflight(action, FakeClient(object()), plain)
+    assert error is None and check == "unverified"

@@ -191,6 +191,13 @@ def load_registry(path: str | os.PathLike[str] | None = None) -> Registry | None
         if spec.get("config"):
             cfg_path = _resolve_config(spec["config"], reg_path, label)
             cfg, root = _read_scope_config(cfg_path, label, f"{GROUP_SCOPE_PREFIX}{slug}")
+            for account in _declared_identities(cfg):
+                owner = claimed_accounts.setdefault(account.lower(), f"group:{slug}")
+                if owner != f"group:{slug}":
+                    raise RegistryError(
+                        f"{label} and '{owner}' both act as {account}: a group's approval must never "
+                        f"act in a member company's mailbox"
+                    )
             if not config_approvers(cfg):
                 raise RegistryError(
                     f"{label}: a group config must list approvals.approvers; group writes need named approvers"
@@ -484,17 +491,50 @@ def expected_account(config: Any, action_type: str) -> str | None:
 
 
 def _declared_identities(cfg: Any) -> set[str]:
-    """Accounts a company config acts as: accounts:, google delegate, m365 mailbox."""
+    """Send-as identities a scope config acts as, which must be exclusive:
+    accounts.mail, the Google delegate, the M365 mailbox. A shared calendar
+    or Notion workspace is allowed."""
     out: set[str] = set()
     try:
         accounts = cfg.get("accounts") or {}
-        out |= {str(v).strip() for v in accounts.values() if str(v or "").strip()}
+        mail = str(accounts.get("mail") or "").strip() if hasattr(accounts, "get") else ""
+        if mail:
+            out.add(mail)
         delegate = str(((cfg.get("google") or {}).get("delegate_email")) or "").strip()
         mailbox = str(((cfg.get("m365") or {}).get("user_principal")) or "").strip()
         out |= {v for v in (delegate, mailbox) if v}
     except AttributeError:
         pass
     return out
+
+
+# Notion actions that only touch the local store (no Notion write).
+LOCAL_ONLY_TYPES = frozenset({"notion.pull", "notion.link", "notion.resolve"})
+
+
+def configured_identity(config: Any, provider: str | None) -> str:
+    """Who the configured client acts as, from config alone: the Google
+    delegate, the M365 client-credentials mailbox, or (Composio) a digest of
+    the routing that selects the connected account. "" when not configured."""
+    try:
+        if provider == "google_api":
+            return str(((config.get("google") or {}).get("delegate_email")) or "").strip()
+        if provider == "m365":
+            m365 = config.get("m365") or {}
+            if str(m365.get("auth") or "client_credentials") == "device_code":
+                return "device_code"
+            return str(m365.get("user_principal") or "").strip()
+        if provider and provider.startswith("composio"):
+            import hashlib
+            import json
+
+            workspace = ((config.get("integrations") or {}).get("workspace") or {})
+            routing = {"user_id": workspace.get("user_id"), "aliases": workspace.get("account_aliases"),
+                       "key_env": (workspace.get("mcp") or {}).get("key_env") if isinstance(workspace.get("mcp"), Mapping) else None}
+            return "composio:" + hashlib.sha256(json.dumps(routing, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    except AttributeError:
+        return ""
+    return ""
 
 
 def configured_provider(config: Any) -> str:
@@ -509,11 +549,14 @@ def action_binding(config: Any, action_type: str) -> dict[str, Any] | None:
     """What a workspace action is bound to at creation: the declared account
     for its family ("" when none is declared) and the workspace provider.
     None for local actions (pipeline, bookkeeping...), which touch no account."""
+    if str(action_type) in LOCAL_ONLY_TYPES:
+        return None
     family = _ACCOUNT_FAMILY.get(str(action_type).split(".", 1)[0])
     if family is None:
         return None
-    return {"account": expected_account(config, action_type) or "",
-            "provider": None if family == "notion" else configured_provider(config)}
+    provider = None if family == "notion" else configured_provider(config)
+    return {"account": expected_account(config, action_type) or "", "provider": provider,
+            "identity": configured_identity(config, provider) if provider else ""}
 
 
 def binding_drift(bound: Mapping[str, Any], now: Mapping[str, Any] | None) -> str | None:
@@ -523,6 +566,8 @@ def binding_drift(bound: Mapping[str, Any], now: Mapping[str, Any] | None) -> st
         return f"account {bound.get('account') or '(none)'} -> {now.get('account') or '(none)'}"
     if (bound.get("provider") or None) != (now.get("provider") or None):
         return f"provider {bound.get('provider')} -> {now.get('provider')}"
+    if str(bound.get("identity") or "").strip().lower() != str(now.get("identity") or "").strip().lower():
+        return "the configured identity (delegate, mailbox or connector routing) changed"
     return None
 
 
@@ -534,21 +579,42 @@ def bound_account(config: Any, action: Mapping[str, Any]) -> str | None:
     return expected_account(config, str(action.get("type") or ""))
 
 
-def preflight_account(action: Mapping[str, Any], client: Any) -> str | None:
-    """Before a Python-path write: refuse when the client knowably acts as an
-    account other than the one approved. None = proceed (match, nothing
-    declared, or the client cannot know who it is: reported as unverified)."""
+def _expected_identity(action: Mapping[str, Any], config: Any = None) -> str:
+    """The account a Python-path write must act as: the declared account, else
+    the configured identity it was approved under (an email-like one only)."""
     binding = action.get("binding")
-    expected = str((binding or {}).get("account") or "").strip() if isinstance(binding, Mapping) else ""
-    if not expected:
-        return None
+    if not isinstance(binding, Mapping):   # legacy row: the live config is the best we know
+        binding = action_binding(config, str(action.get("type") or "")) if config is not None else None
+    if not isinstance(binding, Mapping):
+        return ""
+    declared = str(binding.get("account") or "").strip()
+    if declared:
+        return declared
+    identity = str(binding.get("identity") or "").strip()
+    return identity if "@" in identity else ""
+
+
+def preflight(action: Mapping[str, Any], client: Any, config: Any = None) -> tuple[str | None, str]:
+    """(refusal or None, account_check) before a Python-path write.
+
+    Refuses when the client knowably acts as an account other than the one
+    approved. ``account_check`` (match | unverified | not_declared) goes into
+    the executed result so doctor sees unverifiable executions too."""
+    expected = _expected_identity(action, config)
     family = _ACCOUNT_FAMILY.get(str(action.get("type") or "").split(".", 1)[0]) or "mail"
     identity = getattr(client, "acting_identity", None)
     actual = identity(family) if callable(identity) else None
-    if account_check(expected, actual) == "mismatch":
+    if not isinstance(actual, str) or not actual.strip():
+        actual = None   # anything but a real identity string is "cannot know"
+    check = account_check(expected or None, actual)
+    if check == "mismatch":
         return (f"account_mismatch: approved for {expected}, but the client would act as {actual}. "
-                f"Nothing was sent; fix the provider config or propose the action again.")
-    return None
+                f"Nothing was sent; fix the provider config or propose the action again."), check
+    return None, check
+
+
+def preflight_account(action: Mapping[str, Any], client: Any, config: Any = None) -> str | None:
+    return preflight(action, client, config)[0]
 
 
 def account_check(expected: str | None, actual: str | None) -> str:

@@ -286,8 +286,8 @@ def cmd_execute(args: argparse.Namespace) -> int:
     meta = SOFT_DELETE_ACTIONS[action_type]
     method_name = meta["provider_method"]
     client = get_client(cfg)
-    from company_registry import preflight_account
-    _account_error = preflight_account(action, client)
+    from company_registry import preflight
+    _account_error, _account_check = preflight(action, client, cfg)
     if _account_error:
         mark_failed(cfg, args.action_id, _account_error)
         print(f"❌ {_account_error}", file=sys.stderr)
@@ -360,7 +360,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print_result(result, args.summary, f"{meta['label']}: {action['target']}")
         return 1
 
-    mark_executed(cfg, args.action_id, result)
+    mark_executed(cfg, args.action_id, {**result, "account_check": _account_check} if isinstance(result, dict) else result)
     print_result(result, args.summary, f"{meta['label']}: {action['target']}")
     return 0
 

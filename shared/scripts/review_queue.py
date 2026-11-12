@@ -625,6 +625,11 @@ def cmd_claim(args: argparse.Namespace) -> int:
     declared = bound_account(config, action)
     stated = str(getattr(args, "executor_account", "") or "").strip() or None
     if declared and not stated:
+        audit_workspace_action(
+            config, str(action.get("provider") or ""), str(action.get("type") or ""), "claim",
+            target=str(action.get("target") or ""), status="blocked",
+            extra={"action_id": args.action_id, "reason": "account_missing", "expected_account": declared},
+        )
         print(
             f"Refusing to claim {args.action_id}: this company declares {declared} for "
             f"{action.get('type')}. Re-run with --executor-account <the account your connector is "

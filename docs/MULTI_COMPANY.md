@@ -57,7 +57,11 @@ when it is created, to two things:
 
 - the account its company declares for that family (`accounts:` in
   company.yaml; calendar and drive fall back to `mail`);
-- the configured workspace provider.
+- the configured workspace provider;
+- the identity the configured client acts as: the Google `delegate_email`,
+  the Microsoft 365 client-credentials `user_principal`, or a digest of the
+  Composio routing (`user_id`, `account_aliases`). This holds even with no
+  `accounts:` block, which is the default.
 
 The binding is part of the approval fingerprint.
 
@@ -67,7 +71,8 @@ The binding is part of the approval fingerprint.
 | Python path: the client knowably acts as another account | Before the provider call | Refused as `account_mismatch`; the action is marked failed |
 | Agent path: the agent states an account at `claim` | Before the action moves to `executing` | Missing (when one is declared) or mismatched: refused |
 | Agent path: the account reported at `record-execution` | After the side effect (it already happened) | Recorded; a mismatch or missing account is audited and `doctor` warns |
-| Two registered companies declare the same account | When the registry loads | Refused |
+| Python path: the client cannot know who it is (M365 device code, Composio) | At execution | Runs, recorded as `unverified`; `doctor` warns |
+| Two registered scopes (companies or groups) send as the same account (`accounts.mail`, the Google delegate, the M365 mailbox) | When the registry loads | Refused. A shared calendar or Notion workspace is allowed |
 
 **What the client can know.** Google `google_api` acts as `delegate_email`.
 Microsoft 365 with client credentials acts as `user_principal`. Microsoft 365
