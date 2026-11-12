@@ -57,7 +57,7 @@ An envelope is a pending action of type `data.spend_envelope`. Its payload is
 it through the normal queue. After that:
 
 1. Before a paid call, the agent runs
-   `review_queue.py spend --envelope <id> --topic <key> --estimate <amount>`.
+   `spend.py reserve --envelope <id> --topic <key> --estimate <amount> --endpoint <name>`.
    The cost is reserved atomically.
 2. If the topic matches and `spent + reserved + estimate <= cap`, the call is
    approved, with the approver recorded as `envelope:<id>`. The agent runs it

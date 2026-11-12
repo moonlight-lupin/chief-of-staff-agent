@@ -58,6 +58,26 @@ def _notion_lines(notion: Mapping[str, Any], md: bool = False) -> list[str]:
     return lines
 
 
+def _spend_lines(sp: Mapping[str, Any], md: bool = False) -> list[str]:
+    """Spend envelopes and month-to-date spend (read-only)."""
+    if not sp:
+        return []
+    bullet = "-" if md else "  -"
+    lines = ["## Spend\n" if md else "Spend:"]
+    ccy = sp.get("currency") or ""
+    for provider, total in (sp.get("month_to_date") or {}).items():
+        cap = (sp.get("monthly_caps") or {}).get(provider)
+        lines.append(f"{bullet} {provider} this month: {total} {ccy}" + (f" of {cap} cap" if cap is not None else ""))
+    for e in sp.get("envelopes") or []:
+        lines.append(f"{bullet} Budget '{e['topic']}': {e['spent']} spent, {e['remaining']} {e['currency']} "
+                     f"remaining of {e['cap']} (until {str(e.get('expires_at') or '')[:10]})")
+    stale = sp.get("stale_reservations") or []
+    if stale:
+        lines.append(f"{bullet} {len(stale)} reservation(s) never recorded: run spend.py record or release")
+    lines.append("")
+    return lines
+
+
 def render_text(briefing: dict[str, Any]) -> str:
     """Render briefing as human-readable text for CLI."""
     if isinstance(briefing, dict) and briefing.get("kind") == "weekly":
@@ -256,6 +276,7 @@ def render_text(briefing: dict[str, Any]) -> str:
     _append_loader_source_text(lines, bk.get("sources"))
 
     lines.extend(_notion_lines(sections.get("notion") or {}))
+    lines.extend(_spend_lines(sections.get("spend") or {}))
 
     # Pipeline / CRM
     pl = sections.get("pipeline", {})
@@ -466,6 +487,9 @@ def render_markdown_sections(briefing: dict[str, Any]) -> list[tuple[str, str]]:
     notion_md = _notion_lines(sections.get("notion") or {}, md=True)
     if notion_md:
         blocks.append((None, notion_md))
+    spend_md = _spend_lines(sections.get("spend") or {}, md=True)
+    if spend_md:
+        blocks.append((None, spend_md))
 
     divergence: list[str] = []
     _append_loader_source_text(divergence, _daily_bookkeeper_sources(sections))
@@ -1019,6 +1043,11 @@ def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
     if notion:
         items = "".join(f"<li>{_esc(line.lstrip(' -'))}</li>" for line in _notion_lines(notion)[1:] if line.strip())
         sections_html.append(_html_section("Notion", f"<ul>{items}</ul>", open_by_default=True))
+
+    sp = sections.get("spend") or {}
+    if sp:
+        items = "".join(f"<li>{_esc(line.lstrip(' -'))}</li>" for line in _spend_lines(sp)[1:] if line.strip())
+        sections_html.append(_html_section("Spend", f"<ul>{items}</ul>"))
 
     sh = sections.get("system_health", {})
     if sh and sh.get("warnings"):

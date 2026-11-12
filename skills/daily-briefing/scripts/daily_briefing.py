@@ -998,7 +998,9 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
     # Build suggested next actions
     next_actions: list[dict[str, Any]] = []
     for a in pending:
-        if a.get("state") in ("requested", "pending", "approved"):
+        if a.get("state") in ("requested", "pending", "approved") and not (
+            a.get("type") == "data.spend_envelope" and a.get("state") == "approved"
+        ):
             risk = get_action_risk(a.get("type", "")) if "get_action_risk" in dir() else "low"
             next_actions.append({
                 "title": f"Review: {a.get('type', '?')} — {a.get('summary', '')}",
@@ -1014,7 +1016,11 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
             "why": f"Auto-generated from event {s.get('event_id', '?')}",
         })
 
-    # Pending approvals grouped
+    # Pending approvals grouped. An approved spend envelope is an active
+    # budget, not work waiting to run: it is shown under Spend instead.
+    def _is_active_budget(a: Mapping[str, Any]) -> bool:
+        return a.get("type") == "data.spend_envelope" and a.get("state") == "approved"
+
     pa_grouped: dict[str, list[dict[str, Any]]] = {}
     for risk_level in ("high", "medium", "low"):
         pa_grouped[risk_level] = [
@@ -1022,7 +1028,7 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
              "summary": a.get("summary", ""), "state": a.get("state", "?"),
              "risk": risk_level, "created_at": a.get("created_at", "")}
             for a in risk_groups.get(risk_level, [])
-            if a.get("state") in ("requested", "pending", "approved")
+            if a.get("state") in ("requested", "pending", "approved") and not _is_active_budget(a)
         ]
 
     # Calendar deadlines — from agent-provided --input envelope when present.
@@ -1074,6 +1080,13 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
             "executions_performed": False,
         },
     }
+    try:
+        from spend import briefing_summary as spend_summary
+        spend_section = spend_summary(config) if config else None
+    except Exception:
+        spend_section = None
+    if spend_section:
+        briefing["sections"]["spend"] = spend_section
     if notion_section is not None:
         briefing["sections"]["notion"] = notion_section
         briefing["summary"]["notion_items"] = int(notion_section.get("count") or 0)

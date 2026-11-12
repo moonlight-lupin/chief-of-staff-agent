@@ -44,6 +44,23 @@ _COMPANY_NOTE = (
 )
 
 
+def _spend_section(config: Any) -> dict[str, Any]:
+    try:
+        from spend import _spend_config, month_to_date, status
+
+        raw = _spend_config(config)
+        return {
+            "currency": raw.get("currency"),
+            "monthly_caps": {k: v.get("monthly_cap") for k, v in raw.items() if hasattr(v, "get")},
+            "active_envelopes": [e for e in status(config) if e["state"] == "approved"],
+            "month_to_date": month_to_date(config),
+            "rule": ("Paid calls need an approved spend envelope: reserve before each call "
+                     "(spend.py reserve), record after. Refusals go back to the user."),
+        }
+    except Exception:
+        return {}
+
+
 def _notion_section(config: Any) -> dict[str, Any]:
     try:
         from notion_mirror import notion_settings
@@ -161,6 +178,7 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         "version": version,
         "company": company,
         "notion": _notion_section(config),
+        "spend": _spend_section(config),
         "company_note": _COMPANY_NOTE if company else "",
         "provider": provider,
         "provider_verified": verified,

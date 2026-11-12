@@ -272,6 +272,12 @@ def _expected_effect(action_type: str, target: str, payload: Mapping[str, Any]) 
     if action_type in {"notion.page.create", "notion.page.update"}:
         verb = "Create" if action_type == "notion.page.create" else "Replace the content of"
         return f"{verb} Notion page {payload.get('title')!r} from wiki/{payload.get('source_path')}."
+    if action_type == "data.spend_envelope":
+        allowed = f" (endpoints: {', '.join(payload['endpoints'])})" if payload.get("endpoints") else ""
+        return (f"Pre-approve up to {payload.get('cap')} {payload.get('currency')} of {payload.get('provider')} "
+                f"calls for: {payload.get('purpose')} (topic '{payload.get('topic')}'){allowed}, until "
+                f"{str(payload.get('expires_at') or '')[:10]}. Each call is logged with its cost; going over "
+                f"the cap or onto another topic comes back to you.")
     if action_type == "notion.db.add_property":
         return (f"Add a {payload.get('type')} column '{payload.get('property')}' to Notion database "
                 f"{payload.get('database_id')} ({payload.get('domain')}). Existing rows are not changed.")
@@ -313,6 +319,7 @@ def _reversal_hint(action_type: str) -> str:
         "notion.page.archive": "Restore the page from Notion trash while retention allows.",
         "notion.pull": "Edit the record back in the plugin; the store audit log holds the prior values.",
         "notion.db.add_property": "Delete the column in Notion (its values are lost with it).",
+        "data.spend_envelope": "Close it with spend.py close; money already spent is not refunded.",
         "notion.link": "Links only affect later syncs; re-link after removing them from the mirror.",
         "notion.resolve": "Nothing is copied until the follow-up sync action is approved; dismiss that instead.",
     }

@@ -2,6 +2,28 @@
 
 ## Unreleased — Multi-company phases 1 and 2, Notion mirror
 
+### Spend envelopes (phase 4a)
+
+**Adds `data.spend_envelope` (high risk) and a spend ledger.**
+
+- New `shared/scripts/spend.py`. A human approves an envelope once:
+  provider, purpose, topic, cap, currency, expiry, and optionally which
+  endpoints it allows. Before each paid call the agent reserves the estimated
+  cost (`spend.py reserve`). A call on the same topic within the cap is
+  approved by the envelope and audited with `envelope:<id>` as the approver.
+  The call is refused with a reason code (and exit code 3) for a different
+  topic, an endpoint not on the list, going over the cap or the company
+  monthly cap (`spend.<provider>.monthly_cap`), an envelope that has expired
+  or changed after approval, or an envelope from another company.
+- Reservations are atomic, so concurrent calls cannot overshoot the cap. The
+  actual cost is recorded after the call. An overrun is recorded as it
+  happened and exhausts the envelope. Unrecorded reservations are flagged by
+  `doctor` (`spend_reservations`).
+- The daily briefing gains a **Spend** section (month to date against the
+  cap, remaining budget per envelope). Approved envelopes no longer appear as
+  pending approvals. `capabilities` reports spend, and `preview` explains an
+  envelope before it is approved.
+
 ### Onboarding an existing Notion database
 
 **Adds `notion.db.add_property` (high risk, agent path) and `notion.link` /

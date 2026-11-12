@@ -20,6 +20,8 @@ HIGH_RISK_TYPES: set[str] = {
     "notion.page.archive",
     # Changes the structure of the operator's database.
     "notion.db.add_property",
+    # Pre-authorises paid calls up to its cap: approve one at a time.
+    "data.spend_envelope",
 }
 
 MEDIUM_RISK_TYPES: set[str] = {

@@ -1401,8 +1401,27 @@ def _check_executor_accounts(fix: bool, data: dict[str, Any] | None, config_path
     return CheckResult("executor_accounts", "pass", "every checked execution used the declared account")
 
 
+def _check_spend_reservations(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Paid-call reservations that were never recorded or released."""
+    try:
+        from config_loader import load_config
+        from spend import STALE_RESERVATION_HOURS, stale_reservations
+
+        config = load_config(config_path, quiet=True)
+        stale = stale_reservations(config) if config is not None else []
+    except Exception as exc:
+        return CheckResult("spend_reservations", "pass", f"not checked: {exc}")
+    if stale:
+        return CheckResult(
+            "spend_reservations", "warn",
+            f"{len(stale)} reservation(s) open over {STALE_RESERVATION_HOURS}h: {', '.join(stale)} — check the "
+            f"provider's run history, then spend.py record --actual <cost> or spend.py release",
+        )
+    return CheckResult("spend_reservations", "pass", "no stale paid-call reservations")
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
-    _check_break_glass, _check_company_registry, _check_executor_accounts,
+    _check_break_glass, _check_company_registry, _check_executor_accounts, _check_spend_reservations,
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_assistant_name,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,
