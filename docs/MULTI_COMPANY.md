@@ -1,12 +1,12 @@
 # Multi-company, Notion and Monid: design decisions
 
-Status: accepted (2026-11-12). Phase 1 is implemented; phases 2 to 4 are planned.
+Status: accepted (2026-11-12). Phases 1 and 2 are implemented; phases 3 and 4 are planned.
 
 ## Decisions
 
 | # | Decision | Consequence |
 |---|---|---|
-| D1 | **YAML is the source of truth.** Notion is a mirror and capture surface. | Sync runs from YAML to Notion. Edits made in Notion come back as *suggestions* in the review queue and are never written into YAML silently. |
+| D1 | **The plugin's own store is the source of truth; Notion is a mirror.** | Live records sit in each scope's `state.db` (YAML files are imported once and exported for backup). Sync runs from the store to Notion. Edits made in Notion come back as *suggestions* in the review queue and are never written into the store silently. |
 | D2 | **Group-level writes are allowed.** | A group owns its own store and approval queue. A company never writes directly into a sister company's store. |
 | D3 | **Paid data calls run against approved budgets.** | A human approves a *spend envelope* once. Paid calls made for the same purpose within the envelope's cap are approved by the envelope. Exceeding the cap or starting a new topic means a new envelope, which goes back to the human. |
 
@@ -29,15 +29,26 @@ registry (companies.yaml)
   `company_id` it was created under, and that ID is part of the approval
   fingerprint. A claim from any other company is refused and audited as
   `company_mismatch`.
-- **Reads across companies (phase 2)** need *both* companies in the same group
-  *and* a `share:` entry for that data domain. They are read-only.
-- **Group writes (phase 2)** go into the group store through the group's own
-  queue. The group config lists its approvers.
+- **Reads across companies** need the reader to be a sister company or the
+  group scope, *and* a `share:` entry for that data domain
+  (`pipeline`, `todos`, `invoices`, `expenses`). `company_registry.read_shared`
+  opens the owner's `state.db` read-only, creates nothing in it, and audits
+  every attempt (`shared.read`, success or denied) in the reader's log.
+- **Group writes** happen in group scope (`--group <slug>`), which has its own
+  config, `state.db`, audit log and queue. Its actions are bound to
+  `group:<slug>`, so no member company can claim them. A group config must
+  list `approvals.approvers`; approval by anyone else is refused and audited
+  as `approver_not_authorised`. A company config may list approvers too.
+- **Group roll-up:** `chief_of_staff.py --group <slug> group-summary` is a
+  read-only summary of each member's shared domains. Domains that are not
+  shared show as `not shared`.
 - **Connector identity is detected, not prevented.** Under the `agent`
   provider the plugin cannot stop a connector acting from the wrong mailbox.
-  `capabilities` states this limitation now. In phase 2, each company declares
-  the accounts it expects and `record-execution` records the account that
-  actually acted, so a mismatch shows up in the audit log and in `doctor`.
+  Each company declares `accounts:` (mail, calendar, drive, notion; calendar
+  and drive fall back to mail). `claim` returns `expected_account`, and
+  `record-execution --executor-account` is checked against it. A mismatch is
+  still recorded as executed, because it has already happened, but it is
+  audited as `account_mismatch` and `doctor` warns about it.
 
 ## Spend envelopes (phase 4)
 
@@ -73,6 +84,10 @@ Every call is audited along with its cost.
 groups:
   lupin:
     name: "Lupin Holdings"
+    config: groups/lupin/group.yaml       # optional; needed for group writes
+    share:                                # read-only, per data domain
+      pipeline: read
+      todos: read
 companies:
   acme:
     config: companies/acme/company.yaml   # relative to this file
@@ -81,7 +96,22 @@ companies:
     config: companies/solo/company.yaml
 ```
 
-The order of precedence is: an explicit `--config` path, then
+A group config is an ordinary company.yaml for the holding entity, plus:
+
+```yaml
+approvals:
+  approvers: ["Alicia Tan"]
+```
+
+A company config may declare the accounts its connectors should act from:
+
+```yaml
+accounts:
+  mail: ops@acme.example
+  notion: acme-workspace
+```
+
+`--group` and `--company` cannot be combined. The order of precedence is: an explicit `--config` path, then
 `CHIEF_OF_STAFF_COMPANY` (looked up in the registry), then
 `CHIEF_OF_STAFF_CONFIG`, then the registry's only company, then
 `shared/config/company.yaml`. Without a registry, behaviour is unchanged.

@@ -244,7 +244,9 @@ def test_group_summary_rolls_up_shared_domains_only(group_setup, monkeypatch):
     acme = _scope(monkeypatch, company="acme")
     _seed(acme, deals=[DEAL, {**DEAL, "id": "deal-2", "value": 500}],
           todos=[{"id": "t1", "title": "x", "status": "open", "due": "2000-01-01"}],
-          invoices=[{"id": "INV-1", "direction": "sent", "amount": 10, "status": "sent"}])
+          invoices=[{"id": "INV-1", "direction": "sent", "counterparty": "Client", "amount": 10,
+                     "currency": "SGD", "issue_date": "2026-11-01", "due_date": "2026-11-30",
+                     "status": "sent"}])
     group = _scope(monkeypatch, group="lupin")
 
     summary = reg.group_summary(group)

@@ -583,6 +583,15 @@ def _config_company_id(config: Any) -> str | None:
     return str(value) if value else None
 
 
+def _config_approvers(config: Any) -> list[str]:
+    """Named approvers from ``approvals.approvers``; empty means unrestricted."""
+    try:
+        from company_registry import config_approvers
+        return config_approvers(config) if config is not None else []
+    except Exception:
+        return []
+
+
 def approval_hash(action: Mapping[str, Any]) -> str:
     """Fingerprint of what a human approved: type, target, payload and company.
 
@@ -1015,6 +1024,18 @@ class StateDB:
             self._cas_update(action_id, "approved", "expired", expired_at=_now())
             _audit_action(self.config, current, "expired", {"reason": "approval_lapsed"})
             return None
+
+        if requested_state == "approved" and current["state"] == "requested":
+            allowed_approvers = _config_approvers(self.config)
+            approver = str(fields.get("approver") or "").strip()
+            if allowed_approvers and approver not in allowed_approvers:
+                _audit_action(self.config, current, "blocked", {
+                    "reason": "approver_not_authorised",
+                    "approver": approver,
+                })
+                _log_event("approver_not_authorised", level="warning", component="pending_actions",
+                           action_id=action_id, action_type=current.get("type"))
+                return None
 
         if requested_state == "executing" and (current.get("company_id") or None) != _config_company_id(self.config):
             # Claimed from a different company than the one it was created

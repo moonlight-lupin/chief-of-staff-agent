@@ -174,10 +174,23 @@ def _registry_config_path() -> tuple[Path, str | None]:
     guessing when several companies are registered and none is selected.
     """
 
-    from company_registry import COMPANY_ENV, RegistryError, load_registry, resolve_active_company
+    from company_registry import (
+        COMPANY_ENV, GROUP_ENV, RegistryError, load_registry, resolve_active_company, resolve_active_group,
+    )
 
     selected = os.getenv(COMPANY_ENV)
+    selected_group = os.getenv(GROUP_ENV)
     registry = load_registry()
+    if selected and selected_group:
+        raise RegistryError(
+            f"both {COMPANY_ENV}={selected} and {GROUP_ENV}={selected_group} are set; "
+            f"choose a company or a group, not both"
+        )
+    if selected_group:
+        if registry is None:
+            raise RegistryError(f"{GROUP_ENV}={selected_group} is set but no company registry exists")
+        group = resolve_active_group(registry, selected_group)
+        return group.config_path, group.scope_id
     if selected:
         if registry is None:
             raise RegistryError(f"{COMPANY_ENV}={selected} is set but no company registry exists")
@@ -206,6 +219,9 @@ def _registered_company_for(config_path: Path) -> str | None:
     for company in registry.companies.values():
         if company.config_path == config_path:
             return company.slug
+    for group in registry.groups.values():
+        if group.config_path == config_path:
+            return group.scope_id
     return None
 
 

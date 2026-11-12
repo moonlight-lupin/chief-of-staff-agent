@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased — Multi-company phase 1
+## Unreleased — Multi-company phases 1 and 2
+
+### Phase 2 — group scope, sharing, roll-up, connector accounts
+
+**Touches the approval transition and record-execution.**
+
+- Group scope: `--group <slug>` / `CHIEF_OF_STAFF_GROUP` selects the group's
+  own config and store. Its actions are bound to `group:<slug>`. Selecting a
+  company and a group at the same time is refused.
+- `approvals.approvers`: when a config lists approvers, approval by anyone
+  else is refused and audited as `approver_not_authorised`. Group configs
+  must list approvers. Configs without a list are unchanged.
+- Registry `share:` gives per-domain, read-only sharing within a group.
+  `company_registry.read_shared` opens the owner's store read-only and audits
+  every attempt. Writable or unknown share entries are rejected, and group
+  stores must not overlap company stores.
+- New `chief_of_staff.py --group <slug> group-summary`: a read-only roll-up of
+  pipeline, todos, invoices and expenses for domains the group shares.
+- `accounts:` in company.yaml. `claim` returns `expected_account`, and
+  `record-execution --executor-account` is checked against it (`match`,
+  `mismatch`, `unverified`, or `not_declared` in the result). A mismatch is
+  audited, and `doctor` gains the `executor_accounts` and `company_registry`
+  checks. `doctor` now follows the registry's company selection.
+- CLAUDE.md gains a "Multiple companies" section for agents.
+
+### Phase 1
 
 Lets one install serve several companies, each with its own isolated store.
 Design and decisions: [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md).

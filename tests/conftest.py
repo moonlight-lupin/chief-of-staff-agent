@@ -65,6 +65,7 @@ def _no_operator_state(monkeypatch, tmp_path_factory):
     # No ambient multi-company registry or selection (docs/MULTI_COMPANY.md).
     monkeypatch.setenv("CHIEF_OF_STAFF_REGISTRY", str(sandbox / "no-companies.yaml"))
     monkeypatch.delenv("CHIEF_OF_STAFF_COMPANY", raising=False)
+    monkeypatch.delenv("CHIEF_OF_STAFF_GROUP", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(sandbox / "hermes"))
     monkeypatch.setenv("CHIEF_OF_STAFF_HERMES_HOME", str(sandbox / "hermes"))
     # The operator's Google credentials and script: with these a test could

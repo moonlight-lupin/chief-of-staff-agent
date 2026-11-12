@@ -51,6 +51,8 @@ for _path in (_SCRIPT_DIR, _DOC_PREPARER_SCRIPTS):
         sys.path.insert(0, str(_path))
 
 from action_risk import get_action_risk, get_risk_explanation, get_risk_icon  # noqa: E402
+from company_registry import account_check, config_approvers, expected_account  # noqa: E402
+from workspace_audit import audit_workspace_action  # noqa: E402
 from config_loader import get_project_root, load_config  # noqa: E402
 from state_db import (  # noqa: E402
     approve_pending_action,
@@ -460,7 +462,15 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return 1
     result = approve_pending_action(config, args.action_id, approver=args.approver, reason=args.reason)
     if not result:
-        print(f"Approval failed for {args.action_id} (state={before.get('state')})", file=sys.stderr)
+        approvers = config_approvers(config)
+        if approvers and str(args.approver or "").strip() not in approvers:
+            print(
+                f"Not approved: '{args.approver or ''}' is not a listed approver for this scope "
+                f"(approvals.approvers: {', '.join(approvers)}).",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Approval failed for {args.action_id} (state={before.get('state')})", file=sys.stderr)
         return 1
     action_type = str(result.get("type") or result.get("action_type") or "")
     print(f"✅ Approved: {action_type} ({args.action_id})")
@@ -586,6 +596,10 @@ def cmd_claim(args: argparse.Namespace) -> int:
         "approver": claimed.get("approver") or "",
         "approved_at": claimed.get("approved_at") or "",
         "claimed_at": claimed.get("executing_at") or "",
+        # Multi-company: the account this company expects the action to be
+        # performed from. Use exactly this account, and pass it back with
+        # record-execution --executor-account.
+        "expected_account": expected_account(config, str(claimed.get("type") or "")),
         "next_step": (
             "Perform exactly this action with your own connector tools, then close "
             f"the loop with: review_queue.py record-execution --action-id {args.action_id} "
@@ -662,6 +676,24 @@ def cmd_record_execution(args: argparse.Namespace) -> int:
         "executor": str(getattr(args, "executor", "") or "agent"),
         "audited": True,
     }
+    expected = expected_account(config, str(action.get("type") or ""))
+    actual = str(getattr(args, "executor_account", "") or "").strip() or None
+    check = account_check(expected, actual)
+    result["executor_account"] = actual
+    result["account_check"] = check
+    if check == "mismatch":
+        # The action has already happened, so it is recorded as executed —
+        # but the wrong account acted, which must be visible, not silent.
+        audit_workspace_action(
+            config, str(action.get("provider") or ""), str(action.get("type") or ""), "record-execution",
+            target=str(action.get("target") or ""), status="account_mismatch",
+            extra={"action_id": args.action_id, "expected_account": expected, "executor_account": actual},
+        )
+        print(
+            f"WARNING: {args.action_id} was performed from {actual}, but this company expects "
+            f"{expected}. Recorded as executed; check the provider and correct it if needed.",
+            file=sys.stderr,
+        )
 
     executed = mark_executed(config, args.action_id, result)
     if executed is None:
@@ -864,6 +896,11 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument(
         "--executor", default=None,
         help="Who executed it (e.g. 'claude-cowork'); recorded in the audit trail",
+    )
+    record_parser.add_argument(
+        "--executor-account", default=None,
+        help="The connector account that performed the action (e.g. the sending mailbox); "
+             "checked against the company's declared accounts",
     )
 
     summary_parser = sub.add_parser("summary", help="Show grouped queue counts and recommended next step")

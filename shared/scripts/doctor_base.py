@@ -150,7 +150,16 @@ def _copy_example(name: str) -> bool:
 
 
 def _config_path(arg: str | None) -> Path:
-    return Path(arg).expanduser().resolve() if arg else CONFIG_DIR / "company.yaml"
+    if arg:
+        return Path(arg).expanduser().resolve()
+    # Multi-company: follow the same selection as load_config. On a registry
+    # error, fall back to the default path; _check_company_registry reports it.
+    try:
+        from config_loader import _registry_config_path
+
+        return _registry_config_path()[0].expanduser().resolve()
+    except Exception:
+        return CONFIG_DIR / "company.yaml"
 
 
 def _parse_config(config_path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -1326,8 +1335,66 @@ def _check_break_glass(fix: bool, data: dict[str, Any] | None, config_path: Path
     return CheckResult("break_glass", "pass", "approval-gate break-glass switches are off")
 
 
+def _check_company_registry(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Multi-company registry is valid and a scope is selected (docs/MULTI_COMPANY.md)."""
+    try:
+        from company_registry import load_registry
+        from config_loader import _registry_config_path
+
+        registry = load_registry()
+        if registry is None:
+            return CheckResult("company_registry", "pass", "no registry — single-company mode")
+        _registry_config_path()
+    except Exception as exc:
+        return CheckResult("company_registry", "fail", str(exc))
+    return CheckResult(
+        "company_registry", "pass",
+        f"{len(registry.companies)} companies, {len(registry.groups)} groups; active config {config_path}",
+    )
+
+
+def _check_executor_accounts(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Executed actions performed from an account other than the declared one."""
+    root = _project_root_from_data(data, config_path)
+    db_path = root / "state.db" if root else None
+    if not db_path or not db_path.exists():
+        return CheckResult("executor_accounts", "pass", "no executed actions to check")
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT id, result FROM pending_actions WHERE state='executed' AND result IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return CheckResult("executor_accounts", "warn", f"could not read state.db: {exc}")
+    mismatched, unverified = [], []
+    for action_id, raw in rows:
+        try:
+            check = (json.loads(raw) or {}).get("account_check")
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if check == "mismatch":
+            mismatched.append(action_id)
+        elif check == "unverified":
+            unverified.append(action_id)
+    if mismatched:
+        return CheckResult(
+            "executor_accounts", "warn",
+            f"performed from the wrong account: {', '.join(mismatched)} — check the provider "
+            f"(e.g. Sent mail) and correct it",
+        )
+    if unverified:
+        return CheckResult("executor_accounts", "pass",
+                           f"{len(unverified)} executed without --executor-account; account not verified")
+    return CheckResult("executor_accounts", "pass", "every checked execution used the declared account")
+
+
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
-    _check_break_glass,
+    _check_break_glass, _check_company_registry, _check_executor_accounts,
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_assistant_name,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,
