@@ -303,13 +303,18 @@ def cmd_execute(args: argparse.Namespace) -> int:
     # confirmation. Set AUTO_APPROVE (so reversible SAFE_WRITE actions such as
     # calendar.cancel pass the non-interactive gate) and ALLOW_DESTRUCTIVE, then
     # restore the previous values so we don't leak state into other processes.
+    from workspace_guardrails import execution_grant
+    try:
+        _cos_grant = execution_grant(cfg, args.action_id)
+        _cos_grant.__enter__()
+    except PermissionError as exc:
+        mark_failed(cfg, args.action_id, str(exc))
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
     old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
     old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
     os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
-    from workspace_guardrails import execution_grant
-    _cos_grant = execution_grant(cfg, args.action_id)
-    _cos_grant.__enter__()
 
     try:
         method = getattr(client, method_name, None)

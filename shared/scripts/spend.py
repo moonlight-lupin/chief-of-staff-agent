@@ -200,6 +200,13 @@ def _valid_envelope(config: Any, envelope_id: str) -> dict[str, Any]:
         raise SpendRefused("not_approved", f"envelope is {env.get('state')}, not approved")
     if env.get("approval_hash") != approval_hash(env):
         raise SpendRefused("integrity", "envelope changed after approval")
+    from approval_signing import enforced, verify_decision
+
+    if enforced(config):   # signed approvals (docs/SECURITY_MODEL.md): budgets too
+        reason = verify_decision(config, env, "approve", str(env.get("approver") or "").strip(),
+                                 env.get("approval_signature"))
+        if reason:
+            raise SpendRefused(reason, "envelope approval is not signed: re-approve it with /cos approve")
     expires = env["payload"].get("expires_at")
     if expires and datetime.fromisoformat(expires) <= _now():
         raise SpendRefused("expired", f"envelope expired at {expires}")

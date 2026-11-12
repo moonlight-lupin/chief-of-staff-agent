@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 STORE = "approval_signing"
+MARKER = "approval-signing.json"   # under <Hermes home>/chief-of-staff/
 DECISIONS = frozenset({"approve", "dismiss"})
 MAX_KEYS = 50
 
@@ -53,6 +54,29 @@ def _message(action: Mapping[str, Any], decision: str, approver: str, issued_at:
 
 def _key_id(public_raw: bytes) -> str:
     return hashlib.sha256(public_raw).hexdigest()[:16]
+
+
+def _marker_path():
+    from config_loader import get_hermes_home
+
+    return get_hermes_home() / "chief-of-staff" / MARKER
+
+
+def install_enrolled() -> bool:
+    """True once any store on this install was enrolled. Read without the
+    database, so a locked or unreadable store still fails closed, and a fresh
+    or copied store is enforced too."""
+    try:
+        return _marker_path().is_file()
+    except Exception:
+        return False
+
+
+def _write_marker(now: str) -> None:
+    path = _marker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(json.dumps({"enforced": True, "enrolled_at": now}) + "\n", encoding="utf-8")
 
 
 class GatewaySigner:
@@ -88,8 +112,19 @@ class GatewaySigner:
             data["enforced"] = True
             data.setdefault("enrolled_at", now)
 
+        _write_marker(now)
         with _open_db(config) as db:
             db.mutate_kv(STORE, apply)
+        try:   # every enrolment is visible: doctor and the audit log show who enrolled, and when
+            import os
+            import sys
+
+            from workspace_audit import audit_workspace_action
+
+            audit_workspace_action(config, "hermes", "approval_signing.enrol", "gateway", target=self.key_id,
+                                   extra={"pid": os.getpid(), "argv": [str(a) for a in sys.argv[:3]]})
+        except Exception:
+            pass
 
     def sign_decision(self, action: Mapping[str, Any], decision: str, approver: str, config: Any = None) -> str:
         if decision not in DECISIONS:
@@ -122,6 +157,10 @@ def _state(config: Any) -> Mapping[str, Any]:
 
 
 def enforced(config: Any) -> bool:
+    """Fail closed: the install marker alone is enough; a store read error
+    never turns enforcement off."""
+    if install_enrolled():
+        return True
     try:
         return signing_state(_state(config))[0]
     except Exception:

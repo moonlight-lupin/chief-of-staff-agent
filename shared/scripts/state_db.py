@@ -811,6 +811,7 @@ class StateDB:
         actor: str = "agent",
     ) -> None:
         plain = _plain(dict(data))
+        self._guard_signing_store(store_name, plain)
         with self.conn:
             self.conn.execute(
                 "INSERT OR REPLACE INTO kv_stores (store_name, key, value, updated_at) VALUES (?,?,?,?)",
@@ -818,6 +819,18 @@ class StateDB:
             )
         if action:
             self._append_kv_audit(store_name, action, before, after if after is not None else plain, actor)
+
+    def _guard_signing_store(self, store_name: str, new: Mapping[str, Any]) -> None:
+        """Enforcement is sticky: no store API can switch signed approvals off."""
+        from approval_signing import STORE as _SIGN_STORE, install_enrolled
+
+        if store_name != _SIGN_STORE:
+            return
+        row = self.conn.execute("SELECT value FROM kv_stores WHERE store_name=? AND key=?",
+                                (store_name, KV_ROOT_KEY)).fetchone()
+        was = bool((_loads(row["value"]) or {}).get("enforced")) if row else False
+        if (was or install_enrolled()) and not new.get("enforced"):
+            raise PermissionError("signed approvals cannot be switched off through the store API")
 
     def set_kv(self, store_name: str, value: dict) -> None:
         """Alias for ``put_kv`` — persist a JSON object at the store root."""
@@ -856,6 +869,7 @@ class StateDB:
             result = mutate_fn(data)
             if not isinstance(data, dict):
                 raise TypeError("mutate_fn must keep the KV store as a dict")
+            self._guard_signing_store(store_name, data)
             if _fill_defaults:
                 _fill_required_store_fields(store_name, data)
             validate_store(store_name, data, config=self.config)
@@ -1014,11 +1028,11 @@ class StateDB:
                             signature: Any, on_execute: bool = False) -> bool:
         """True unless this store is enrolled for signed approvals and the
         decision's signature is missing or invalid (docs/SECURITY_MODEL.md)."""
-        from approval_signing import STORE as _SIGN_STORE, signing_state, verify_with
+        if not self._signing_enforced():
+            return True
+        from approval_signing import STORE as _SIGN_STORE, verify_with
 
         data = self.get_kv(_SIGN_STORE)
-        if not signing_state(data)[0]:
-            return True
         reason = verify_with(data, action, decision, approver, signature)
         if reason is None:
             return True
@@ -1028,6 +1042,16 @@ class StateDB:
         _log_event(reason, level="warning", component="pending_actions",
                    action_id=action.get("id"), action_type=action.get("type"))
         return False
+
+    def _signing_enforced(self) -> bool:
+        from approval_signing import STORE as _SIGN_STORE, install_enrolled, signing_state
+
+        if install_enrolled():
+            return True
+        try:
+            return signing_state(self.get_kv(_SIGN_STORE))[0]
+        except Exception:
+            return False
 
     def transition_action(self, action_id: str, new_state: str, **fields: Any) -> dict | None:
         current = self.get_action(action_id)
@@ -1046,6 +1070,13 @@ class StateDB:
         if requested_state == "executing" and _is_approval_lapsed(current):
             self._cas_update(action_id, "approved", "expired", expired_at=_now())
             _audit_action(self.config, current, "expired", {"reason": "approval_lapsed"})
+            return None
+
+        if requested_state == "approved" and current["state"] != "requested" and self._signing_enforced():
+            # Approval is a fresh signed decision on a proposal, never a way to
+            # re-arm an action that is executing (or ran) under an old signature.
+            _audit_action(self.config, current, "blocked", {"reason": "approval_rearm_refused",
+                                                            "from_state": current["state"]})
             return None
 
         if requested_state == "approved" and current["state"] == "requested":
@@ -1099,7 +1130,8 @@ class StateDB:
                 extra["last_error"] = fields["last_error"]
             elif "error" in fields:
                 extra["last_error"] = fields["error"]
-            if retry_count >= MAX_RETRIES:
+            if retry_count >= MAX_RETRIES or self._signing_enforced():
+                # Signed stores: a failure is final; a retry is a new signed approval.
                 extra["failed_at"] = now
                 new_state = "failed"
             else:

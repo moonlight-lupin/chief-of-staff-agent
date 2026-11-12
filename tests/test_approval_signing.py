@@ -196,9 +196,8 @@ def test_execution_grant_allows_only_the_approved_action(cfg, signer, monkeypatc
     state_db.approve_pending_action(cfg, action["id"], approver="Alicia Tan", reason="ok", signature=sig)
     state_db.mark_executing(cfg, action["id"])
     with g.execution_grant(cfg, action["id"]):
-        assert _guarded_write(cfg, monkeypatch, "gmail.send") is True
-        assert _guarded_write(cfg, monkeypatch, "mail.send") is True          # provider alias
         assert _guarded_write(cfg, monkeypatch, "drive.delete") is False      # not what was approved
+        assert _guarded_write(cfg, monkeypatch, "mail.send") is True          # provider alias of gmail.send
     assert _guarded_write(cfg, monkeypatch, "gmail.send") is False            # grant ended
 
 
@@ -329,3 +328,151 @@ def test_workflow_pointer_names_the_users_approval():
 
     text = workflow_hooks._next_action_text({"id": "send", "review_queue": {}, "action_id": "act-9"})
     assert "/cos approve act-9" in text and "await operator approval" in text
+
+
+# ------------------------------------------- adversarial review regressions
+
+
+def _signed_executing(cfg, signer, action_type="gmail.send", target="x@example.com", payload=None):
+    action = state_db.create_pending_action(cfg, action_type, "google_api", target,
+                                            payload or {"to": target, "subject": "hi"})
+    sig = signer.sign_decision(action, "approve", "Alicia Tan", cfg)
+    state_db.approve_pending_action(cfg, action["id"], approver="Alicia Tan", reason="ok", signature=sig)
+    assert state_db.mark_executing(cfg, action["id"])["state"] == "executing"
+    return action
+
+
+def test_unsigned_approve_cannot_rearm_an_executing_action(cfg, signer):          # finding 2
+    action = _signed_executing(cfg, signer)
+    assert state_db.approve_pending_action(cfg, action["id"], approver="Alicia Tan", reason="again") is None
+    assert state_db.get_pending_action(cfg, action["id"])["state"] == "executing"
+
+
+def test_failure_is_final_when_enforced(cfg, signer):                              # finding 2
+    action = _signed_executing(cfg, signer)
+    state_db.mark_failed(cfg, action["id"], "provider 500")
+    assert state_db.get_pending_action(cfg, action["id"])["state"] == "failed"
+    assert state_db.mark_executing(cfg, action["id"]) is None
+
+
+def test_failure_still_retries_when_not_enrolled(cfg):
+    action = _new(cfg)
+    state_db.approve_pending_action(cfg, action["id"], approver="op", reason="ok")
+    state_db.mark_executing(cfg, action["id"])
+    state_db.mark_failed(cfg, action["id"], "provider 500")
+    assert state_db.get_pending_action(cfg, action["id"])["state"] == "approved"
+
+
+def test_a_fresh_store_is_enforced_once_the_install_enrolled(cfg, signer, tmp_path, monkeypatch):  # finding 3
+    (tmp_path / "other").mkdir()
+    other = _config(tmp_path / "other")
+    assert aps.enforced(other) is True
+    action = _new(other)
+    assert state_db.approve_pending_action(other, action["id"], approver="op", reason="ok") is None
+    monkeypatch.setenv("CHIEF_OF_STAFF_AUTO_APPROVE", "1")
+    monkeypatch.setenv("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", "1")
+    assert _guarded_write(other, monkeypatch) is False
+
+
+def test_enforcement_fails_closed_when_the_store_is_unreadable(cfg, signer, monkeypatch):  # finding 4
+    import workspace_guardrails as g
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(state_db, "_open_db", boom)
+    assert aps.enforced(cfg) is True
+    monkeypatch.setenv("CHIEF_OF_STAFF_AUTO_APPROVE", "1")
+    monkeypatch.setenv("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", "1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    assert g.confirm_action("gmail.send", config=cfg, to="x@example.com") is False
+
+
+def test_grant_is_bound_to_the_approved_target(cfg, signer, monkeypatch):       # finding 5
+    import workspace_guardrails as g
+
+    action = _signed_executing(cfg, signer)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    with g.execution_grant(cfg, action["id"]):
+        assert g.confirm_action("gmail.send", config=cfg, to="attacker@evil.example") is False
+        assert g.confirm_action("gmail.send", config=cfg, to="x@example.com") is True
+
+
+def test_grant_is_single_use(cfg, signer, monkeypatch):                          # finding 5
+    import workspace_guardrails as g
+
+    action = _signed_executing(cfg, signer)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    with g.execution_grant(cfg, action["id"]):
+        assert g.confirm_action("gmail.send", config=cfg, to="x@example.com") is True
+        assert g.confirm_action("gmail.send", config=cfg, to="x@example.com") is False
+
+
+def test_grant_ends_when_the_action_leaves_executing(cfg, signer, monkeypatch):  # finding 5
+    import workspace_guardrails as g
+
+    action = _signed_executing(cfg, signer)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    with g.execution_grant(cfg, action["id"]):
+        state_db.mark_executed(cfg, action["id"], {"ok": True})
+        assert g.confirm_action("gmail.send", config=cfg, to="x@example.com") is False
+
+
+def test_unsigned_spend_envelope_cannot_be_spent_after_enrolment(cfg):        # finding 6
+    import spend
+
+    env = spend.propose(cfg, "monid", "Find leads", "leads", 10, "USD")
+    state_db.approve_pending_action(cfg, env["id"], approver="op", reason="ok")    # before enrolment
+    aps.GatewaySigner.generate().enrol(cfg)
+    with pytest.raises(spend.SpendRefused):
+        spend.reserve(cfg, env["id"], "leads", 1, "/x")
+
+
+def test_executor_marks_failed_when_the_grant_is_refused(cfg, signer, monkeypatch):  # finding 7
+    import importlib.util
+    import types
+
+    import workspace_guardrails as g
+
+    spec = importlib.util.spec_from_file_location(
+        "send_email_t", PLUGIN_ROOT / "skills/document-preparer/scripts/send_email.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    action = state_db.create_pending_action(cfg, "gmail.send", "google_api", "x@example.com",
+                                            {"to": "x@example.com", "subject": "hi", "body": "b"})
+    sig = signer.sign_decision(action, "approve", "Alicia Tan", cfg)
+    state_db.approve_pending_action(cfg, action["id"], approver="Alicia Tan", reason="ok", signature=sig)
+
+    def refuse(*_a, **_k):
+        raise PermissionError("refused for test")
+
+    monkeypatch.setattr(g, "execution_grant", refuse)
+    monkeypatch.setattr(mod, "get_client", lambda _cfg: types.SimpleNamespace(), raising=False)
+    monkeypatch.setattr(mod, "load_config", lambda *_a, **_k: cfg, raising=False)
+    rc = mod.cmd_execute(types.SimpleNamespace(action_id=action["id"], config=str(cfg.source_path),
+                                               summary=False, json=False))
+    assert rc == 1
+    assert state_db.get_pending_action(cfg, action["id"])["state"] != "executing"
+
+
+def test_enforcement_cannot_be_switched_off_through_the_store_api(cfg, signer):  # finding 1
+    with pytest.raises(PermissionError):
+        with state_db._open_db(cfg) as db:
+            db.set_kv(aps.STORE, {"enforced": False})
+    with pytest.raises(PermissionError):
+        with state_db._open_db(cfg) as db:
+            db.mutate_kv(aps.STORE, lambda d: d.update({"enforced": False}))
+    assert aps.enforced(cfg) is True
+
+
+def test_every_enrolment_is_audited(cfg):                                       # finding 1
+    aps.GatewaySigner.generate().enrol(cfg)
+    audit = _audit_bytes(cfg)
+    assert b"approval_signing.enrol" in audit and b"pid" in audit
+
+
+def test_doctor_lists_enrolments(cfg, signer):                                  # finding 1
+    import doctor_base
+
+    result = doctor_base._check_approval_signing(False, None, Path(cfg.source_path))
+    assert "1 gateway key" in result.detail

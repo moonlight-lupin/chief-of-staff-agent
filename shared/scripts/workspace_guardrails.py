@@ -20,7 +20,7 @@ import inspect
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 # Actions that modify external state (Gmail, Calendar, Drive).
 # Legacy gmail.*/drive.* ids are used by the Google/Composio providers;
@@ -308,12 +308,46 @@ def execution_grant(config: Any, action_id: str):
                                  action.get("approval_signature"))
         if reason:
             raise PermissionError(f"action {action_id}: {reason}")
+    targets = _grant_targets(action)
     token = _GRANT.set({"action_id": action_id, "allowed": _grant_aliases(str(action.get("type") or "")),
-                        "enforced": is_enforced})
+                        "enforced": is_enforced, "config": config, "targets": targets, "used": False})
     try:
         yield
     finally:
         _GRANT.reset(token)
+
+
+def _norm_targets(value: Any) -> set[str]:
+    if isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        items = str(value or "").replace(";", ",").split(",")
+    return {str(v).strip().lower() for v in items if str(v).strip()}
+
+
+def _grant_targets(action: Mapping[str, Any]) -> set[str]:
+    """Everything the approved action may address: its target and payload values."""
+    out = _norm_targets(action.get("target"))
+    for value in (action.get("payload") or {}).values():
+        if isinstance(value, (str, list, tuple)):
+            out |= _norm_targets(value)
+    return out
+
+
+def _grant_allows(grant: dict, action: str, details: Mapping[str, Any]) -> bool:
+    if grant["used"] or action not in grant["allowed"]:
+        return False
+    requested = set().union(*(_norm_targets(v) for v in details.values() if v)) if details else set()
+    if requested and not requested <= grant["targets"]:
+        return False   # a different recipient / file / event than the one approved
+    from state_db import get_pending_action
+
+    live = get_pending_action(grant["config"], grant["action_id"]) or {}
+    if live.get("state") != "executing":
+        return False   # the grant ends when the action leaves executing
+    if grant["enforced"]:
+        grant["used"] = True   # one approved write per signed action
+    return True
 
 
 def _store_enforced(config: Any) -> bool:
@@ -324,7 +358,9 @@ def _store_enforced(config: Any) -> bool:
 
         return enforced(config)
     except Exception:
-        return False
+        from approval_signing import install_enrolled
+
+        return install_enrolled()   # fail closed on an enrolled install
 
 
 def confirm_action(action: str, *, config: Any = None, **details: Any) -> bool:
@@ -353,7 +389,7 @@ def confirm_action(action: str, *, config: Any = None, **details: Any) -> bool:
         return False
 
     grant = _GRANT.get()
-    if grant is not None and action in grant["allowed"]:
+    if grant is not None and _grant_allows(grant, action, details):
         return True
     if (grant is not None and grant["enforced"]) or (grant is None and _store_enforced(config)):
         print(

@@ -36,11 +36,21 @@ store:
 - **Every execution re-verifies the signature.** An approved row edited
   afterwards, or an approval made before enrolment, does not run. Re-approve it
   with `/cos approve`.
+- **Approval is only ever a fresh decision on a proposal.** An executing or
+  finished action cannot be approved again. A failed action stays failed, and
+  a retry is a new proposal and a new approval.
+- **Enrolment covers the whole install.** Once one store is enrolled, every
+  store on the install is enforced, including a new or copied one. If a store
+  can't be read, the check fails closed.
+- **Enforcement is sticky and visible.** No plugin API can switch it off.
+  Every enrolment is recorded in the audit log, with the process that made
+  it, and `doctor` lists the enrolled keys.
 - **The break-glass switches stop counting as approval.**
   `CHIEF_OF_STAFF_AUTO_APPROVE` and `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE`, and a
   "y" typed at a prompt, no longer let a write through. A guarded write runs
-  only inside an *execution grant*, which is tied to one signed action that is
-  executing, and covers only that action's own kind of write.
+  only inside an *execution grant*. The grant is tied to one signed action
+  while it is executing, and covers that action's own kind of write to its
+  approved target, once.
 
 Stores that are never enrolled, such as a standalone CLI install or Claude
 Code, keep the original model: the operator approves at their own terminal.
@@ -65,7 +75,11 @@ approvals:
 ## Limits we state plainly
 
 - **Not a sandbox.** Signed approvals stop an agent from approving through
-  the plugin's own commands. An agent with an unrestricted shell as the same
+  the plugin's own commands. Code that an agent writes and runs as your OS
+  user can still forge a decision, because the plugin cannot tell which
+  process is calling it. Keep Hermes's command approval on (the default) so
+  scripts and `python -c` need your OK, add the deny rules above, and audit
+  enrolments in `doctor`. An agent with an unrestricted shell as the same
   OS user could still tamper with local files. It could also call a
   provider's API directly with credentials it can reach, which skips the
   plugin entirely. For that boundary, use an isolated terminal backend.

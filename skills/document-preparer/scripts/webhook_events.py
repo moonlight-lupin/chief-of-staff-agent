@@ -322,15 +322,20 @@ def cmd_execute(args: argparse.Namespace) -> int:
     # Establish approved execution context — the explicit approval IS the confirmation.
     # Set env vars for guardrails, matching send_email.py and delete_actions.py behavior.
     # Restore previous values after execution (safe for tests/workers/long-running processes).
+    from workspace_guardrails import execution_grant
+    try:
+        _cos_grant = execution_grant(cfg, args.action_id)
+        _cos_grant.__enter__()
+    except PermissionError as exc:
+        mark_failed(cfg, args.action_id, str(exc))
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
     old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
     old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
 
     try:
         os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
         os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
-        from workspace_guardrails import execution_grant
-        _cos_grant = execution_grant(cfg, args.action_id)
-        _cos_grant.__enter__()
 
         try:
             if action_type == "gmail.send":

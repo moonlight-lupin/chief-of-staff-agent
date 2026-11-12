@@ -222,13 +222,18 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     # Approval queue already recorded human consent — unlock the destructive gate
     # for this call only, then restore prior env.
+    from workspace_guardrails import execution_grant
+    try:
+        _cos_grant = execution_grant(cfg, args.action_id)
+        _cos_grant.__enter__()
+    except PermissionError as exc:
+        mark_failed(cfg, args.action_id, str(exc))
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
     prev_destr = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
     prev_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
     os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-    from workspace_guardrails import execution_grant
-    _cos_grant = execution_grant(cfg, args.action_id)
-    _cos_grant.__enter__()
 
     # Execute the send
     try:
