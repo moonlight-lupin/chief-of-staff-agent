@@ -18,6 +18,7 @@ ALL_SKILLS = [
     "entity-research", "travel-itinerary", "backup",
     "email-organisation", "self-sign", "esign-connector",
     "news-monitoring", "workflow-architect",
+    "notion-sync", "notion-wiki",
 ]
 
 
