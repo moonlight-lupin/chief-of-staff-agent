@@ -440,11 +440,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             out = close(config, args.envelope)
     except SpendRefused as exc:
-        print(
-            f"Spend refused ({exc.code}): {exc.message}. Do NOT make the call. If the work should go on, "
-            f"propose a new envelope (spend.py propose ...) and ask the user to approve it.",
-            file=sys.stderr,
-        )
+        if exc.code == "not_approved" and getattr(args, "envelope", None):
+            nxt = (f"Ask the user to review and approve envelope {args.envelope} "
+                   f"(review_queue.py preview --action-id {args.envelope}).")
+        else:
+            nxt = "If the work should go on, propose a new envelope (spend.py propose ...) and ask the user to approve it."
+        print(f"Spend refused ({exc.code}): {exc.message}. Do NOT make the call. {nxt}", file=sys.stderr)
         return 3
     except SpendError as exc:
         print(f"Spend error: {exc}", file=sys.stderr)

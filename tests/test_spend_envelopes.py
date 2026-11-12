@@ -289,3 +289,11 @@ def test_doctor_warns_on_stale_reservations(config, monkeypatch):
     monkeypatch.setattr(spend, "_now", lambda: later)
     results = {r.name: r for r in doctor_base.run_checks()}
     assert results["spend_reservations"].status == "warn"
+
+
+def test_cli_unapproved_envelope_asks_for_approval_not_a_new_one(config, capsys):
+    env = spend.propose(config, "monid", "p", "t", 10, "USD")
+    rc = spend.main(["--config", str(config.source_path), "reserve", "--envelope", env["id"],
+                     "--topic", "t", "--estimate", "1", "--endpoint", "serp"])
+    err = capsys.readouterr().err
+    assert rc == 3 and "approve" in err and env["id"] in err and "propose a new" not in err

@@ -2,6 +2,31 @@
 
 ## Unreleased — Multi-company phases 1 and 2, Notion mirror
 
+### Prospecting, SEO audit, competitor watch (phase 4b)
+
+- `prospecting` skill and `shared/scripts/prospecting.py`. Ingests leads the
+  agent fetched, each with full provenance (provider, endpoint, run,
+  fetched-at, purpose).
+  - PDPA minimisation: business contact fields only; others are dropped and
+    reported by name; personal mailbox addresses are dropped.
+  - Leads already in the pipeline, already listed, or opted out are skipped.
+  - Opt-outs are kept as hashes in a suppression list that outlives purges.
+  - Phone and SMS contact are blocked until the number is cleared against the
+    DNC registry.
+  - Chosen prospects become queued `pipeline.deal.add` actions.
+  - Retention purge is a dry run unless confirmed.
+  - The skill is registered only when `spend:` names a provider.
+- `seo-audit` skill and `shared/scripts/seo_audit.py`: on-page checks in
+  three severity levels, a prioritised fix list, keyword rankings,
+  opportunities, the domains that outrank the site, and rank and issue
+  changes since the last recorded audit. The Markdown report keeps no page
+  content.
+- `competitor-watch` skill and `shared/scripts/competitor_watch.py`: snapshot
+  diffs showing new and removed pages, title, content and price changes.
+  Only titles, hashes and the prices found are stored.
+- Paid fetching for all three goes through spend envelopes. Their
+  instructions name Monid's discover, inspect, run and dispute flow.
+
 ### Spend envelopes (phase 4a)
 
 **Adds `data.spend_envelope` (high risk) and a spend ledger.**

@@ -41,6 +41,9 @@ skill_profiles:
       - workflow-architect
       - notion-sync
       - notion-wiki
+      - prospecting
+      - seo-audit
+      - competitor-watch
   enterprise:
     registered:
       - daily-briefing
@@ -65,3 +68,6 @@ skill_profiles:
       - workflow-architect
       - notion-sync
       - notion-wiki
+      - prospecting
+      - seo-audit
+      - competitor-watch

@@ -110,7 +110,7 @@ NOTION_SKILLS = frozenset({"notion-sync", "notion-wiki"})
 
 def _filter_configured_skills(skills: list[str]) -> list[str]:
     """Hide externally-backed skills when their required config is absent."""
-    if "esign-connector" not in skills and not NOTION_SKILLS & set(skills):
+    if "esign-connector" not in skills and not (NOTION_SKILLS | {"prospecting"}) & set(skills):
         return skills
     config_path = _config_path(os.getenv("CHIEF_OF_STAFF_CONFIG"))
     data, _ = _parse_config(config_path)
@@ -122,6 +122,9 @@ def _filter_configured_skills(skills: list[str]) -> list[str]:
     notion = data.get("notion") if isinstance(data.get("notion"), dict) else {}
     if not (notion.get("databases") or notion.get("wiki_parent_page")):
         hidden |= NOTION_SKILLS
+    spend = data.get("spend") if isinstance(data.get("spend"), dict) else {}
+    if not any(isinstance(v, dict) for v in spend.values()):
+        hidden.add("prospecting")  # paid lead data needs a spend provider and budget
     return [skill for skill in skills if skill not in hidden]
 
 

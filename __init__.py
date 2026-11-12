@@ -110,7 +110,21 @@ def _filter_configured_skills(skills: list[str]) -> list[str]:
         hidden.add("esign-connector")
     if _NOTION_SKILLS & set(skills) and not _notion_configured():
         hidden |= _NOTION_SKILLS
+    if "prospecting" in skills and not _spend_provider_configured():
+        hidden.add("prospecting")
     return [skill for skill in skills if skill not in hidden]
+
+
+def _spend_provider_configured() -> bool:
+    raw_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
+    config_path = Path(raw_path).expanduser() if raw_path else PLUGIN_ROOT / "shared" / "config" / "company.yaml"
+    try:
+        with open(config_path) as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        return False
+    spend = data.get("spend") if isinstance(data, dict) else None
+    return isinstance(spend, dict) and any(isinstance(v, dict) for v in spend.values())
 
 
 def _notion_configured() -> bool:

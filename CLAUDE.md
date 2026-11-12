@@ -82,6 +82,7 @@ JSON; show the user the summary.
 ```bash
 chief_of_staff.py capabilities     # operating envelope (start here)
 chief_of_staff.py --group <g> group-summary   # read-only group roll-up
+spend.py status                    # budgets, spend, remaining
 chief_of_staff.py daily            # the daily loop — read-only
 chief_of_staff.py doctor           # health check
 chief_of_staff.py readiness        # go/no-go per capability
@@ -175,6 +176,16 @@ for exactly one scope: `--company <slug>` or `--group <slug>`.
   shares. Never write one company's records into another company's store.
 - Only the approvers listed for a group may approve group actions. Never
   put a listed approver's name on an approval they did not give.
+
+## Paid data calls
+
+Paid endpoints (e.g. Monid runs) are spent only against an **approved spend
+envelope** ([`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md)). Run
+`spend.py reserve` **before** every paid call and `spend.py record` after. If
+`reserve` refuses (exit 3), do not make the call: tell the user why, and
+propose a new envelope only if they want to continue. Never reuse a topic for
+a different purpose to stay inside a budget. Free discovery and price checks
+need no envelope.
 
 ## Hosted cloud sessions
 
