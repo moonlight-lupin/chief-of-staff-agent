@@ -16,18 +16,17 @@
   - Chosen prospects become queued `pipeline.deal.add` actions.
   - Retention purge is a dry run unless confirmed.
   - The skill is registered only when `spend:` names a provider.
-- `seo-tracker` skill and `shared/scripts/seo_audit.py`. When OpenSEO
-  (every-app/open-seo, MIT) is connected, it routes SEO work to OpenSEO's
-  skills: `seo-coach`, `seo-project-setup`, `seo-audit`, `keyword-research`,
-  `keyword-clustering`, `competitive-landscape`, `competitor-analysis`,
-  `local-seo`, `link-prospecting`, `ai-prompt-research`,
-  `ai-visibility-audit` and `seo-report`. It adds a spend envelope around
-  OpenSEO credits, and records rankings and issue counts after each audit to
-  show what moved. Without OpenSEO it falls back to built-in on-page checks
-  in three severity levels, with a prioritised fix list, keyword rankings,
-  opportunities and the domains that outrank the site. It is named
-  `seo-tracker`, not `seo-audit`, to avoid clashing with OpenSEO's own
-  `seo-audit` skill.
+- `seo-tracker` skill and `shared/scripts/seo_audit.py`. The workflows are
+  adapted from OpenSEO's skills (every-app/open-seo, MIT, credited in
+  NOTICE): choosing a workflow, project setup, site audit, keyword research,
+  competitive landscape, local SEO, backlinks, AI visibility, and the report
+  structure. The OpenSEO app and MCP server are not used. SEO data comes from
+  DataForSEO through Monid: endpoints are found with `monid_discover`,
+  priced with `monid_inspect`, and every paid call goes through a spend
+  envelope. The default location is the company's own market. Project
+  context and the research log live in the wiki. `seo_tracker.py` records
+  rankings and issue counts after each run to show what moved, and its
+  built-in on-page checks give a quick health check.
 - `competitor-watch` skill and `shared/scripts/competitor_watch.py`: snapshot
   diffs showing new and removed pages, title, content and price changes.
   Only titles, hashes and the prices found are stored.
