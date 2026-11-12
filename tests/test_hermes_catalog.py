@@ -315,8 +315,22 @@ def test_m365_device_code_refuses_without_a_terminal(monkeypatch):
 
 _HERMES_CONFIG_TYPES = {"str", "string", "int", "integer", "float", "number", "bool", "boolean",
                         "list", "array", "dict", "object", "secret"}
-_BINARY_MAGIC = (b"\x7fELF", b"MZ", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
+_BINARY_MAGIC = (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
                  b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\x00asm")
+
+
+def _is_pe(head: bytes) -> bool:
+    """A Windows PE: "MZ", then "PE\\0\\0" at the offset stored at 0x3c (not just text starting MZ)."""
+    if not head.startswith(b"MZ") or len(head) < 0x40:
+        return False
+    offset = int.from_bytes(head[0x3C:0x40], "little")
+    return head[offset:offset + 4] == b"PE\0\0"
+
+
+def test_pe_detection_needs_the_pe_header():
+    assert not _is_pe(b"MZ is a postcode prefix" + b" " * 100)
+    fake = bytearray(b"MZ" + b"\0" * 0x3A + (0x80).to_bytes(4, "little") + b"\0" * 0x40 + b"PE\0\0")
+    assert _is_pe(bytes(fake))
 
 
 def _tracked_files() -> list[Path]:
@@ -333,7 +347,7 @@ def test_manifest_has_the_admission_fields():
 
 def test_requires_hermes_parses_strictly():
     for clause in str(MANIFEST["requires_hermes"]).split(","):
-        assert re.fullmatch(r"\s*(>=|<=|==|!=|>|<|~=)?\s*\d+(\.\d+){0,2}\s*", clause), clause
+        assert re.fullmatch(r"\s*(>=|<=|==|!=|>|<)?\s*\d+(\.\d+){0,2}\s*", clause), clause
 
 
 def test_config_schema_types_are_ones_hermes_accepts():
@@ -356,8 +370,8 @@ def test_rule_17_no_bytecode_or_native_binaries_are_tracked():
             bad.append(path.name)
         elif path.is_file():
             with path.open("rb") as fh:
-                head = fh.read(4)
-            if any(head.startswith(m) for m in _BINARY_MAGIC):
+                head = fh.read(4096)
+            if any(head.startswith(m) for m in _BINARY_MAGIC) or _is_pe(head):
                 bad.append(path.name)
     assert not bad, f"rule 17: unscannable payloads tracked: {bad}"
 

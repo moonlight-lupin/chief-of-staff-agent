@@ -49,8 +49,8 @@ Seven steps on the sample data:
 1. the morning briefing;
 2. the agent proposes a follow-up email;
 3. the preview, showing what it will do, to whom, and how it is reversed;
-4. **your** signed approval, exactly as `/cos approve` does it;
-5. execution through the real guarded path, against a stand-in mailbox;
+4. **your** approval as a signed decision. In Hermes, `/cos approve` does this in the gateway; the demo plays that part itself;
+5. execution through the real guarded path (claim, checks, single-use grant, the `@guarded` wrapper) around a stand-in mailbox;
 6. the audit trail;
 7. the queue afterwards.
 

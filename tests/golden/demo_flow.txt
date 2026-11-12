@@ -14,15 +14,16 @@ Risk:            high — Sending email can contact external recipients and cann
 Expected effect: Send an email to john@acme.example with subject 'Following up: Acme Corp proposal'.
 Reversal:        No full reversal; send a correction/follow-up if needed.
 
-Step 4/7 — Approve: you decide (signed, exactly as /cos approve does)
+Step 4/7 — Approve: you decide (a signed decision, as with /cos approve)
 ──────────────────────────────────────────────────────────────────────
 In Hermes you would type:  /cos approve <id>
-The gateway signs your decision with a key the agent never holds.
+There, the gateway checks who typed it and signs with a key the agent never holds.
+Here the demo plays the gateway's part itself, in this process, against its own throwaway store.
 Approved by demo-user — signed (key <key>).
 
 Step 5/7 — Execute (simulated): the real guarded path, a stand-in mailbox
 ──────────────────────────────────────────────────────────────────────
-Claimed → account checked → capability checked → single-use grant → sent → recorded.
+Claimed → account checked → capability checked → single-use grant consumed by the guarded send → recorded.
 Simulated: message demo-0001 to john@acme.example. No mail left this machine.
 
 Step 6/7 — Audit: what happened, when, and who decided

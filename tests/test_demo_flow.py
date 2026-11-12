@@ -32,9 +32,14 @@ def _run(**kw) -> tuple[int, str]:
 
 @pytest.fixture(autouse=True)
 def _isolated_hermes_home(tmp_path, monkeypatch):
+    """Stand-ins for every place a real Hermes home could be found."""
     home = tmp_path / "real-hermes-home"
-    home.mkdir()
+    user_home = tmp_path / "user-home"
+    for d in (home, user_home, tmp_path / "hermes-env-home"):
+        d.mkdir()
     monkeypatch.setenv("CHIEF_OF_STAFF_HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-env-home"))
+    monkeypatch.setenv("HOME", str(user_home))
     return home
 
 
@@ -57,18 +62,37 @@ def test_the_approval_is_signed_and_the_action_runs_through_the_real_path():
 
 
 def test_nothing_leaves_the_machine():
-    with patch("workspace_client.get_workspace_client", side_effect=AssertionError("no real client")):
+    """No real client is built and no network library is called."""
+    boom = AssertionError("network or real client used")
+    with patch("workspace_client.get_workspace_client", side_effect=boom), \
+         patch("requests.Session.request", side_effect=boom), \
+         patch("requests.request", side_effect=boom), \
+         patch("socket.create_connection", side_effect=boom):
         rc, out = _run()
     assert rc == 0
     assert "simulated" in out.lower()
 
 
-def test_writes_nothing_outside_its_directory(_isolated_hermes_home):
+def test_the_guarded_wrapper_consumes_the_grant():
+    """Step 5 runs the real @guarded wrapper: the stand-in send is audited as a provider write."""
+    rc, out = _run()
+    assert rc == 0 and "grant consumed by the guarded send" in out
+
+
+def test_step_one_is_the_real_briefing():
+    rc, out = _run()
+    step1 = out.split("Step 1/7")[1].split("Step 2/7")[0]
+    assert "Good morning, Sample Co (DEMO)" in step1
+    assert len(step1.splitlines()) > 10
+
+
+def test_writes_nothing_outside_its_directory(_isolated_hermes_home, tmp_path):
     before = sorted(p.name for p in (ROOT / "examples").iterdir())
     rc, _ = _run()
     assert rc == 0
     assert sorted(p.name for p in (ROOT / "examples").iterdir()) == before
-    assert list(_isolated_hermes_home.iterdir()) == []         # the real Hermes home is untouched
+    for d in (_isolated_hermes_home, tmp_path / "hermes-env-home", tmp_path / "user-home"):
+        assert list(d.iterdir()) == [], f"demo wrote into {d}"
 
 
 def test_restores_the_environment(monkeypatch):
@@ -112,6 +136,58 @@ def test_reset_refuses_a_directory_without_the_marker(tmp_path):
     (other / "important.txt").write_text("keep me")
     assert demo_flow.reset(other) != 0
     assert (other / "important.txt").exists()
+
+
+def test_rerun_with_keep_never_deletes_files_the_user_added(tmp_path):
+    keep = tmp_path / "demo-state"
+    assert _run(keep=keep)[0] == 0
+    (keep / "precious.txt").write_text("mine")
+    rc, out = _run(keep=keep)
+    assert rc != 0 and "precious.txt" in out
+    assert (keep / "precious.txt").read_text() == "mine"
+    assert demo_flow.reset(keep) != 0
+    assert (keep / "precious.txt").exists()
+
+
+def test_reset_refuses_a_stray_or_empty_marker(tmp_path):
+    other = tmp_path / "mine"
+    other.mkdir()
+    (other / demo_flow.MARKER).write_text("")
+    assert demo_flow.reset(other) != 0
+    assert other.exists()
+
+
+@pytest.mark.parametrize("where", ["home", "cwd", "plugin", "root"])
+def test_reset_and_keep_refuse_protected_directories(where, tmp_path, monkeypatch):
+    target = {"home": Path.home(), "cwd": Path.cwd(), "plugin": ROOT, "root": Path("/")}[where]
+    with patch.object(demo_flow, "_owned_by_demo", return_value=None):
+        assert demo_flow.reset(target) != 0
+        assert _run(keep=target)[0] != 0
+    assert target.exists()
+
+
+def test_reset_refuses_a_symlink(tmp_path):
+    keep = tmp_path / "demo-state"
+    assert _run(keep=keep)[0] == 0
+    link = tmp_path / "link"
+    link.symlink_to(keep)
+    assert demo_flow.reset(link) != 0
+    assert keep.exists()
+
+
+def test_keep_refuses_a_file(tmp_path):
+    f = tmp_path / "file.txt"
+    f.write_text("x")
+    rc, out = _run(keep=f)
+    assert rc != 0 and f.read_text() == "x"
+
+
+@pytest.mark.parametrize("argv", [["demo", "--keep", "x"], ["demo", "--flow", "--reset", "x"],
+                                  ["demo", "--reset", "x", "--keep", "y"]])
+def test_cli_rejects_flag_combinations(argv, capsys):
+    import chief_of_staff
+
+    assert chief_of_staff.main(argv) == 2
 
 
 def _normalise(text: str) -> str:

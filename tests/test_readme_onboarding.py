@@ -25,8 +25,7 @@ README = (ROOT / "README.md").read_text(encoding="utf-8")
 def _readme_bootstrap_argv() -> list[str]:
     block = re.search(r"python shared/scripts/bootstrap\.py \\\n(.*?)\n\n", README, re.S)
     assert block, "README has no bootstrap example"
-    text = re.sub(r"#.*", "", block.group(1)).replace("\\\n", " ")
-    argv = shlex.split(text)
+    argv = shlex.split(block.group(1).replace("\\\n", " "), comments=True)
     # Placeholders the reader fills in.
     return [a.replace("<directory-tenant-id>", "11111111-1111-1111-1111-111111111111")
              .replace("<application-client-id>", "22222222-2222-2222-2222-222222222222") for a in argv]

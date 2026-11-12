@@ -9,8 +9,9 @@
   1. the briefing;
   2. a proposal;
   3. the preview (what, to whom, how reversed);
-  4. a **signed** approval, as `/cos approve` does;
-  5. execution through the real guarded path against a stand-in mailbox;
+  4. a **signed** approval, with the demo playing the gateway's part;
+  5. execution through the real guarded path and `@guarded` wrapper, around a
+     stand-in mailbox;
   6. the timeline and audit log;
   7. the queue afterwards.
 
@@ -32,6 +33,21 @@
   - The storage choice is shown.
   - Hermes users are sent to plugin settings for secrets, not `.env`.
   - Positioning states which providers have run against live accounts.
+- **`docs/V1_READINESS_ASSESSMENT.md`**: the go/no-go for 1.0. Verdict:
+  conditional GO, after four owner actions. The version stays 0.9.0.
+- **Hardening from an adversarial review:**
+  - **`--keep` and `--reset`** only ever delete a directory that holds nothing
+    but the demo's own files under its exact marker. They refuse symlinks,
+    files, `/`, the home directory, the current directory, the plugin, and the
+    parents of those.
+  - **Flag combinations** that made no sense are rejected.
+  - **The stand-in mailbox** now runs inside the real `@guarded` wrapper, so
+    the single-use grant is consumed.
+  - **The approval step** says plainly that the demo plays the gateway's part.
+  - **Safety tests** now isolate `HOME` and `HERMES_HOME` and block the
+    network.
+  - **The catalog binary check** needs a real PE header, not just text
+    starting "MZ".
 
 ### One execution path for approved actions
 

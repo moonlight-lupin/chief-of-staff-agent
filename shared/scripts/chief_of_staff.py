@@ -1733,6 +1733,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
     ``demo`` outside the runtime-log lifecycle so a missing company.yaml does not
     print config-not-found noise.
     """
+    if getattr(args, "reset", None) and (getattr(args, "flow", False) or getattr(args, "keep", None)):
+        print("demo: --reset stands alone (it removes kept demo state); drop --flow/--keep", file=sys.stderr)
+        return 2
+    if getattr(args, "keep", None) and not getattr(args, "flow", False):
+        print("demo: --keep needs --flow", file=sys.stderr)
+        return 2
     if getattr(args, "reset", None):
         import demo_flow
 
