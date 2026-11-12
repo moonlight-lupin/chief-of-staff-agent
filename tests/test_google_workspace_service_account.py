@@ -89,12 +89,14 @@ class TestBuildCmd:
         cmd = client._build_cmd("calendar", "list")
         assert "--account" not in cmd
 
-    def test_derives_account_from_service_account_path(self, mock_script):
-        """If account_alias not set but service_account_path contains 'phronesis', derive it."""
+    def test_account_is_never_guessed_from_the_key_file_name(self, mock_script):
+        """The account a write acts as comes only from config (account_alias /
+        delegate_email), never from a file name: a guessed alias could pick
+        another company's token (P0.2, docs/MULTI_COMPANY.md)."""
         from providers.google_workspace import GoogleWorkspaceClient
         cfg = make_config(account_alias="", service_account_path="~/.hermes/phronesis_service_account.json")
         client = GoogleWorkspaceClient(cfg)
-        assert client.account_alias == "phronesis"
+        assert client.account_alias == ""
 
 
 class TestReadMethods:

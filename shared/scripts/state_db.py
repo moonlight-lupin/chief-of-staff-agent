@@ -138,6 +138,7 @@ _ALLOWED_CAS_COLUMNS: frozenset[str] = frozenset({
     "approval_hash",
     "company_id",
     "approval_signature",
+    "binding",
 })
 
 _SCHEMA_SQL = """
@@ -175,7 +176,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     result TEXT,
     approval_hash TEXT,
     company_id TEXT,
-    approval_signature TEXT
+    approval_signature TEXT,
+    binding TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pa_state ON pending_actions(state);
 CREATE INDEX IF NOT EXISTS idx_pa_created ON pending_actions(created_at);
@@ -522,6 +524,7 @@ def _row_to_action(row: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
     d["payload"] = _loads(d.get("payload"), {})
     d["risk"] = _loads(d.get("risk"), None)
     d["result"] = _loads(d.get("result"), None)
+    d["binding"] = _loads(d.get("binding"), None)
     if d.get("retry_count") is None:
         d["retry_count"] = 0
     return d
@@ -562,6 +565,7 @@ def _action_insert_params(action: Mapping[str, Any]) -> tuple[Any, ...]:
         action.get("approval_hash"),
         action.get("company_id"),
         action.get("approval_signature"),
+        _dumps(action["binding"]) if action.get("binding") is not None else None,
     )
 
 
@@ -571,8 +575,8 @@ INSERT OR REPLACE INTO pending_actions (
     approver, approval_reason, created_at, approved_at, executing_at,
     executed_at, cancelled_at, dismissed_at, expired_at, failed_at,
     cancel_reason, dismiss_reason, retry_count, last_error, result,
-    approval_hash, company_id, approval_signature
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    approval_hash, company_id, approval_signature, binding
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 
@@ -595,6 +599,21 @@ def _config_approvers(config: Any) -> list[str]:
         return []
 
 
+def _action_binding(config: Any, action_type: str) -> dict[str, Any] | None:
+    try:
+        from company_registry import action_binding
+
+        return action_binding(config, action_type)
+    except Exception:
+        return None
+
+
+def _binding_drift(bound: Mapping[str, Any], now: Mapping[str, Any] | None) -> str | None:
+    from company_registry import binding_drift
+
+    return binding_drift(bound, now)
+
+
 def approval_hash(action: Mapping[str, Any]) -> str:
     """Fingerprint of what a human approved: type, target, payload and company.
 
@@ -606,6 +625,8 @@ def approval_hash(action: Mapping[str, Any]) -> str:
     parts: list[Any] = [action.get("type") or "", action.get("target") or "", action.get("payload") or {}]
     if action.get("company_id"):
         parts.append({"company_id": str(action["company_id"])})
+    if action.get("binding") is not None:   # new actions only: legacy fingerprints unchanged
+        parts.append({"binding": action["binding"]})
     material = json.dumps(
         parts,
         sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str,
@@ -683,6 +704,7 @@ class StateDB:
             self._ensure_column("pending_actions", "approval_hash", "TEXT")
             self._ensure_column("pending_actions", "company_id", "TEXT")
             self._ensure_column("pending_actions", "approval_signature", "TEXT")
+            self._ensure_column("pending_actions", "binding", "TEXT")
             self.conn.execute("INSERT OR IGNORE INTO audit_lock (id) VALUES (1)")
             self.conn.commit()
             # BEGIN IMMEDIATE so two writers cannot both read version N and
@@ -987,6 +1009,7 @@ class StateDB:
             "cancel_reason": None,
             "dismiss_reason": None,
             "company_id": _config_company_id(self.config),
+            "binding": _action_binding(self.config, type),
         }
         with self.conn:
             self.conn.execute(_ACTION_INSERT_SQL, _action_insert_params(action))
@@ -1113,6 +1136,15 @@ class StateDB:
                 current, "approve", str(current.get("approver") or "").strip(),
                 current.get("approval_signature"), on_execute=True):
             return None
+
+        if requested_state == "executing" and isinstance(current.get("binding"), Mapping):
+            drift = _binding_drift(current["binding"], _action_binding(self.config, str(current.get("type") or "")))
+            if drift:
+                # The account or provider this would act as is not the one approved.
+                _audit_action(self.config, current, "blocked", {"reason": "binding_changed", "detail": drift})
+                _log_event("binding_changed", level="warning", component="pending_actions",
+                           action_id=action_id, action_type=current.get("type"))
+                return None
 
         if requested_state == "executing" and current.get("approval_hash") != approval_hash(current):
             # Changed after approval, or never approved through the queue.

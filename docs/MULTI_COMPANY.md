@@ -50,6 +50,42 @@ registry (companies.yaml)
   still recorded as executed, because it has already happened, but it is
   audited as `account_mismatch` and `doctor` warns about it.
 
+## Account binding: what is enforced before the write
+
+Every workspace action (mail, calendar, files, contacts, Notion) is bound,
+when it is created, to two things:
+
+- the account its company declares for that family (`accounts:` in
+  company.yaml; calendar and drive fall back to `mail`);
+- the configured workspace provider;
+- the identity the configured client acts as: the Google `delegate_email`,
+  the Microsoft 365 client-credentials `user_principal`, or a digest of the
+  Composio routing (`user_id`, `account_aliases`). This holds even with no
+  `accounts:` block, which is the default.
+
+The binding is part of the approval fingerprint.
+
+| Check | When | Result |
+|---|---|---|
+| The account or provider changed in company.yaml after approval | Before execution, on every path | Refused as `binding_changed`; nothing runs |
+| Python path: the client knowably acts as another account | Before the provider call | Refused as `account_mismatch`; the action is marked failed |
+| Agent path: the agent states an account at `claim` | Before the action moves to `executing` | Missing (when one is declared) or mismatched: refused |
+| Agent path: the account reported at `record-execution` | After the side effect (it already happened) | Recorded; a mismatch or missing account is audited and `doctor` warns |
+| Python path: the client cannot know who it is (M365 device code, Composio) | At execution | Runs, recorded as `unverified`; `doctor` warns |
+| Two registered scopes (companies or groups) send as the same account (`accounts.mail`, the Google delegate, the M365 mailbox) | When the registry loads | Refused. A shared calendar or Notion workspace is allowed |
+
+**What the client can know.** Google `google_api` acts as `delegate_email`.
+Microsoft 365 with client credentials acts as `user_principal`. Microsoft 365
+device code, Composio and agent-native connectors act as whoever signed in,
+which the plugin cannot see. For those, the check is the stated account
+(agent path) and the audit. The plugin never presents that as proof.
+
+**Secrets are install-wide.** Under Hermes, a provider's key (for example
+`GOOGLE_SERVICE_ACCOUNT_JSON`, `M365_CLIENT_SECRET`, `COMPOSIO_MCP_KEY`) is
+one per install. Companies that need different Google service accounts or
+Composio users need separate installs or Hermes profiles until per-company
+secret names land.
+
 ## Spend envelopes (phase 4)
 
 An envelope is a pending action of type `data.spend_envelope`. Its payload is

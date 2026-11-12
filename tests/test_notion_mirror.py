@@ -94,7 +94,8 @@ def _execute_agent(config, action_id, data):
     import review_queue
 
     state_db.approve_pending_action(config, action_id, approver="op", reason="ok")
-    assert review_queue._main(["--config", str(config.source_path), "claim", "--action-id", action_id]) == 0
+    assert review_queue._main(["--config", str(config.source_path), "claim", "--action-id", action_id,
+                               "--executor-account", "acme-workspace"]) == 0
     assert review_queue._main([
         "--config", str(config.source_path), "record-execution", "--action-id", action_id,
         "--status", "success", "--result-json", json.dumps(data),
@@ -345,7 +346,8 @@ def test_claim_names_the_notion_account(config, capsys):
     _, queued = _queue(config, "pipeline", [])
     action_id = queued["created"][0]["id"]
     state_db.approve_pending_action(config, action_id, approver="op", reason="ok")
-    review_queue._main(["--config", str(config.source_path), "claim", "--action-id", action_id])
+    review_queue._main(["--config", str(config.source_path), "claim", "--action-id", action_id,
+                        "--executor-account", "acme-workspace"])
     assert json.loads(capsys.readouterr().out)["expected_account"] == "acme-workspace"
 
 

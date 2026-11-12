@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Account binding: refuse the wrong account before the write
+
+- **Workspace actions are bound when they are created.** This covers mail,
+  calendar, files, contacts and Notion.
+  - The `binding` records the account the company declares, the workspace
+    provider, and the identity the configured client acts as (the Google
+    delegate, the M365 mailbox, or a digest of the Composio routing).
+    Identity is bound even when no `accounts:` block exists.
+  - The binding is part of the approval fingerprint, for new actions only,
+    so existing approvals keep theirs.
+  - If either changes in company.yaml after approval, execution is refused as
+    `binding_changed` before anything runs.
+- **Python path.** Clients report the identity they act as when they can know
+  it without a network call: Google `delegate_email`, Microsoft 365
+  client-credentials `user_principal`. `send_email`, `delete_actions` and
+  `webhook_events` refuse a mismatch before the provider call.
+- **Agent path.** `claim --executor-account` is required when an account is
+  declared, and a mismatch is refused (and audited) before the action moves
+  to `executing`. `record-execution` compares against the approved binding,
+  not today's config.
+- **`doctor`** now warns when executions were recorded without a verified
+  account. Previously that passed.
+- **The registry** refuses two scopes (companies or groups) that send as the same account. A shared calendar or Notion workspace is allowed.
+- **Python-path executions** record `account_check`. Unverifiable ones show as `unverified` in `doctor`.
+- **Google.** The guessed `account_alias` heuristic (from the key file's name)
+  is removed. The alias comes only from config.
+- **Breaking for agents:** `claim` needs `--executor-account` wherever
+  `accounts:` is declared. CLAUDE.md, SETUP and the Notion skills are updated.
+- **Docs:** `docs/MULTI_COMPANY.md` gains "Account binding: what is enforced
+  before the write", including what cannot be verified.
+
+
 ### Signed approvals: only the user approves (Hermes)
 
 - **New `shared/scripts/approval_signing.py`.**

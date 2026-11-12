@@ -312,6 +312,12 @@ def cmd_execute(args: argparse.Namespace) -> int:
     from workspace_client import get_workspace_client
     from workspace_capabilities import require_capability
     client = get_workspace_client(cfg)
+    from company_registry import preflight
+    _account_error, _account_check = preflight(action, client, cfg)
+    if _account_error:
+        mark_failed(cfg, args.action_id, _account_error)
+        print(f"❌ {_account_error}", file=sys.stderr)
+        return 1
 
     unsupported = require_capability(client, action_type, target=action.get("target", ""))
     if unsupported:
@@ -417,7 +423,8 @@ def cmd_execute(args: argparse.Namespace) -> int:
                 print_json({"success": False, "error": error, "result": result})
             return 1
 
-        mark_executed(cfg, args.action_id, result if isinstance(result, dict) else {"raw": str(result)})
+        mark_executed(cfg, args.action_id, {**(result if isinstance(result, dict) else {"raw": str(result)}),
+                                            "account_check": _account_check})
 
         if args.summary:
             print(f"✅ Executed: {action_type} ({args.action_id})")

@@ -138,7 +138,7 @@ review_queue.py execute --action-id <id>
 
 ```bash
 review_queue.py approve --action-id <id> --approver "<who>" --reason "<why>"
-review_queue.py claim   --action-id <id>      # returns what to execute
+review_queue.py claim   --action-id <id> --executor-account <account>   # returns what to execute
 #   ... now perform exactly that action with your own tool ...
 review_queue.py record-execution --action-id <id> --status success \
     --result-json '{"message_id": "..."}' --executor "claude"
@@ -173,11 +173,12 @@ for exactly one scope: `--company <slug>` or `--group <slug>`.
 - **Never switch scope to get past a refusal.** An action belongs to the
   company or group it was created in. A claim from any other scope is refused
   as `company_mismatch`, and that is correct.
-- **Act from the declared account.** `claim` returns `expected_account`.
-  Perform the action from that connector account, and pass it back with
-  `record-execution --executor-account <account>`. If your connector is
-  signed in to a different account, stop and tell the user. Do not perform
-  the action.
+- **Act from the declared account.** Pass the account your connector is
+  signed in to on `claim --executor-account <account>`. When the company
+  declares one, `claim` requires it and refuses a mismatch before anything
+  runs. Pass it again on `record-execution --executor-account`. If your
+  connector is signed in to a different account, stop and tell the user.
+  Do not perform the action.
 - **Sister-company data is read-only**, and only for domains the group
   shares. Never write one company's records into another company's store.
 - Only the approvers listed for a group may approve group actions. Never

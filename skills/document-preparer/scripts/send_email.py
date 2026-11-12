@@ -218,6 +218,12 @@ def cmd_execute(args: argparse.Namespace) -> int:
         return 1
 
     client = get_client(cfg)
+    from company_registry import preflight
+    _account_error, _account_check = preflight(action, client, cfg)
+    if _account_error:
+        mark_failed(cfg, args.action_id, _account_error)
+        print(f"❌ {_account_error}", file=sys.stderr)
+        return 1
     payload = action["payload"]
 
     # Approval queue already recorded human consent — unlock the destructive gate
@@ -263,7 +269,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         mark_failed(cfg, args.action_id, error)
         print_result(result, args.summary, "Send failed")
         return 1
-    mark_executed(cfg, args.action_id, result)
+    mark_executed(cfg, args.action_id, {**result, "account_check": _account_check} if isinstance(result, dict) else result)
     print_result(result, args.summary, f"Mail sent to {payload['to']}")
     return 0
 

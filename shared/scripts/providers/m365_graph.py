@@ -287,6 +287,13 @@ class M365GraphClient(WorkspaceClient):
 
     # ── User base path ────────────────────────────────────────────────
 
+    def acting_identity(self, family: str) -> str | None:
+        """client_credentials acts as the configured mailbox; device_code acts
+        as whoever signed in, which is not knowable without a network call."""
+        if self.auth_mode == "device_code":
+            return None
+        return str(self.user_principal or "").strip() or None
+
     def _user_base(self) -> str:
         """Return the Graph path prefix for the active identity."""
         if self.auth_mode == "device_code":

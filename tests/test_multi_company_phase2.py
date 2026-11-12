@@ -292,7 +292,7 @@ def test_claim_tells_the_agent_which_account_to_use(acme_with_accounts, capsys):
     import review_queue
 
     action_id = _claimed_mail_action(acme_with_accounts)
-    assert review_queue._main(["claim", "--action-id", action_id]) == 0
+    assert review_queue._main(["claim", "--action-id", action_id, "--executor-account", "ops@acme.example"]) == 0
     assert json.loads(capsys.readouterr().out)["expected_account"] == "ops@acme.example"
 
 
@@ -306,7 +306,7 @@ def test_record_execution_checks_the_executing_account(acme_with_accounts, capsy
     import review_queue
 
     action_id = _claimed_mail_action(acme_with_accounts)
-    assert review_queue._main(["claim", "--action-id", action_id]) == 0
+    assert review_queue._main(["claim", "--action-id", action_id, "--executor-account", "ops@acme.example"]) == 0
     argv = ["record-execution", "--action-id", action_id, "--status", "success"]
     if given:
         argv += ["--executor-account", given]
@@ -324,7 +324,7 @@ def test_doctor_warns_on_account_mismatch(acme_with_accounts, monkeypatch):
     import review_queue
 
     action_id = _claimed_mail_action(acme_with_accounts)
-    review_queue._main(["claim", "--action-id", action_id])
+    review_queue._main(["claim", "--action-id", action_id, "--executor-account", "ops@acme.example"])
     review_queue._main(["record-execution", "--action-id", action_id, "--status", "success",
                         "--executor-account", "ops@beta.example"])
     results = {r.name: r for r in doctor_base.run_checks()}

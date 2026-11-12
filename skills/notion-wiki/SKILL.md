@@ -42,7 +42,8 @@ accounts:
 2. The user approves each action (`review_queue.py preview` shows the title
    and target first).
 
-3. Run `review_queue.py claim --action-id <id>`, then create or update the
+3. Run `review_queue.py claim --action-id <id> --executor-account <your Notion
+   workspace>`, then create or update the
    page with your Notion connector. The title and Markdown are in the claimed
    payload. Then run `review_queue.py record-execution --action-id <id>
    --status success --result-json '{"page_id": "…"}' --executor-account
