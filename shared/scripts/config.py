@@ -7,6 +7,8 @@ Thin layer over the most critical environment variables. Existing
 from __future__ import annotations
 
 import os
+
+import plugin_secrets
 from dataclasses import dataclass, field
 
 
@@ -19,5 +21,5 @@ class Settings:
         s.strip() for s in os.getenv("CHIEF_OF_STAFF_AUDIT_STRICT", "").split(",") if s.strip()
     ])
     project_root: str | None = field(default_factory=lambda: os.getenv("CHIEF_OF_STAFF_PROJECT_ROOT"))
-    webhook_secret: str | None = field(default_factory=lambda: os.getenv("CHIEF_OF_STAFF_WEBHOOK_SECRET"), repr=False)
+    webhook_secret: str | None = field(default_factory=lambda: plugin_secrets.get("CHIEF_OF_STAFF_WEBHOOK_SECRET"), repr=False)
     pubsub_audience: str | None = field(default_factory=lambda: os.getenv("CHIEF_OF_STAFF_PUBSUB_AUDIENCE"))

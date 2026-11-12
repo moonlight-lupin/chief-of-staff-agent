@@ -26,6 +26,7 @@ _PARENT = Path(__file__).resolve().parent.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
+import plugin_secrets  # noqa: E402
 from providers import google_contacts
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
@@ -120,17 +121,34 @@ def _sa_credentials(*, service_account_path: str, delegate_email: str, scopes: l
     from google.auth.transport.requests import Request
     from google.oauth2 import service_account
 
-    sa_path = Path(service_account_path).expanduser()
-    if not sa_path.is_file():
-        raise RuntimeError(f"service account JSON not found: {sa_path}")
     if not (delegate_email or "").strip():
         raise RuntimeError(
             "google.delegate_email is required for this Google REST operation"
         )
-    credentials = service_account.Credentials.from_service_account_file(
-        str(sa_path),
-        scopes=scopes,
-    ).with_subject(delegate_email.strip())
+    if service_account_path == plugin_secrets.SA_SECRET_SOURCE:
+        raw = plugin_secrets.get(plugin_secrets.SA_JSON_ENV) or ""
+        try:
+            info = json.loads(raw)
+        except ValueError as exc:
+            raise RuntimeError(
+                "the GOOGLE_SERVICE_ACCOUNT_JSON secret is not valid JSON "
+                "(paste the whole key file's contents)"
+            ) from exc
+        credentials = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    else:
+        if plugin_secrets.under_hermes():
+            raise RuntimeError(
+                "under Hermes the service-account key must come from the "
+                "GOOGLE_SERVICE_ACCOUNT_JSON secret (Hermes settings), not a key file"
+            )
+        sa_path = Path(service_account_path).expanduser()
+        if not sa_path.is_file():
+            raise RuntimeError(f"service account JSON not found: {sa_path}")
+        credentials = service_account.Credentials.from_service_account_file(
+            str(sa_path),
+            scopes=scopes,
+        )
+    credentials = credentials.with_subject(delegate_email.strip())
     credentials.refresh(Request())
     return credentials
 
@@ -616,9 +634,7 @@ class GoogleWorkspaceClient(WorkspaceClient):
             if isinstance(self.config, Mapping)
             else {}
         )
-        sa_path = str(google_cfg.get("service_account_path") or "").strip()
-        if not sa_path:
-            sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
+        sa_path, _ = google_contacts.service_account_settings(self.config)
         delegate = self.delegate_email or str(
             google_cfg.get("delegate_email") or ""
         ).strip()
@@ -661,9 +677,7 @@ class GoogleWorkspaceClient(WorkspaceClient):
             if isinstance(self.config, Mapping)
             else {}
         )
-        sa_path = str(google_cfg.get("service_account_path") or "").strip()
-        if not sa_path:
-            sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
+        sa_path, _ = google_contacts.service_account_settings(self.config)
         delegate = self.delegate_email or str(
             google_cfg.get("delegate_email") or ""
         ).strip()
@@ -752,9 +766,7 @@ class GoogleWorkspaceClient(WorkspaceClient):
             if isinstance(self.config, Mapping)
             else {}
         )
-        sa_path = str(google_cfg.get("service_account_path") or "").strip()
-        if not sa_path:
-            sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
+        sa_path, _ = google_contacts.service_account_settings(self.config)
         delegate = self.delegate_email or str(
             google_cfg.get("delegate_email") or ""
         ).strip()

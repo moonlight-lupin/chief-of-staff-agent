@@ -252,8 +252,15 @@ def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, st
     Returns a mapping of the keys/values this call newly set (never contains
     keys that were already present in the environment).
     """
-    env_path = Path(path).expanduser() if path is not None else (_PLUGIN_ROOT / ".env")
     applied: dict[str, str] = {}
+    # Hermes catalog rule 11: under Hermes, secrets come only through Hermes
+    # (config_schema secrets -> get_secret / register_session_env). Never read
+    # a .env file there, the plugin's own included.
+    from plugin_secrets import under_hermes
+
+    if under_hermes():
+        return applied
+    env_path = Path(path).expanduser() if path is not None else (_PLUGIN_ROOT / ".env")
     try:
         if not env_path.is_file():
             return applied

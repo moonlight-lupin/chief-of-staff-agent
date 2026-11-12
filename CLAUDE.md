@@ -53,7 +53,7 @@ remediation command.
 | Path | What it is |
 |---|---|
 | `shared/config/company.yaml` | The single config file. Not secret — safe to read and show. |
-| `.env` (plugin root) | Secrets only. Auto-loaded; shell env wins. **Never echo, never commit, never paste into chat.** |
+| `.env` (plugin root) | Secrets only, standalone or Claude Code. Auto-loaded; shell env wins. **Never read under Hermes**: there, secrets come from the plugin's Hermes settings. **Never echo, never commit, never paste into chat.** |
 | `paths.project_root` | The user's data: `pipeline.yaml`, `invoices.yaml`, `expenses.yaml`, `todos.yaml`, `wiki/`. Plain YAML and Markdown. |
 | `shared/scripts/` | Shared machinery — guardrails, state, providers, audit. |
 | `skills/<name>/` | The skills, each with `SKILL.md` and its own `scripts/`. Notion skills appear only when `notion:` is configured. |

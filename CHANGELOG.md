@@ -1,6 +1,54 @@
 # Changelog
 
-## Unreleased
+## v0.8.1 (beta) — Hermes plugin-catalog readiness
+
+Makes the plugin admissible to the Hermes plugin catalog. Every rule that can
+be checked in code is covered by `tests/test_hermes_catalog.py`. See
+[`docs/HERMES_CATALOG.md`](docs/HERMES_CATALOG.md) for the rule-by-rule
+mapping, the draft entry and the submission steps.
+
+### Credentials through Hermes (catalog rule 11)
+
+- New `shared/scripts/plugin_secrets.py`, the one place secrets are read.
+  Inside Hermes it uses `agent.secret_scope.get_secret`; outside, the command
+  environment.
+- Every secret is declared in `plugin.yaml` → `config_schema` as
+  `type: secret`, so Hermes stores it and the Desktop shows a masked field.
+  All of them are optional, so none is listed in `requires_env`, which would
+  disable the plugin when unset.
+- `register()` hands the secrets to the plugin's own commands per session
+  through `ctx.register_session_env`. Each value is read with `get_secret`,
+  and older Hermes releases skip this.
+- Under Hermes the plugin never reads a `.env` file, its own included.
+  Standalone and Claude Code installs still load the plugin-root `.env`.
+- Google service account: the new `GOOGLE_SERVICE_ACCOUNT_JSON` secret holds
+  the key's contents and is used with `from_service_account_info`. Under
+  Hermes a key file (`google.service_account_path`) is refused with a pointer
+  to the secret.
+- Every direct environment read of a secret now goes through
+  `plugin_secrets.get`. A test fails if one is added back.
+
+### Unattended runs (rule 12)
+
+These now refuse cleanly when there is no terminal, instead of waiting:
+- interactive onboarding (use `--non-interactive --config`);
+- self-sign confirmation (pass `--locations`);
+- Microsoft 365 device-code sign-in (scheduled and gateway runs need
+  `client_credentials`).
+
+### Manifest (rules 6, 10, 14)
+
+- `plugin.yaml` declares `requires_hermes: ">=0.23.0"`, `provides_tools: []`,
+  the five registered hooks, `requires_env: []`, `homepage`, `tags` and
+  `python_dependencies`.
+- Every dependency now has an upper bound, in both `pyproject.toml` and
+  `plugin.yaml`.
+
+### Disclosure (rule 13)
+
+- README gains "What it touches": network hosts, shell commands, data
+  locations, the optional webhook listener, credentials, approvals, and no
+  telemetry.
 
 ### Catalog readiness
 

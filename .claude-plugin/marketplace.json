@@ -9,7 +9,7 @@
       "name": "chief-of-staff",
       "source": ".",
       "description": "Approval-gated AI Chief of Staff: daily briefings, deadlines, pipeline, invoices, documents, knowledge wiki, research, travel, prospecting, SEO, competitor watch, and Notion sync — nothing consequential happens without your review.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "author": {
         "name": "moonlight-lupin"
       },

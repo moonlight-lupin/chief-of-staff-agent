@@ -102,6 +102,11 @@ def confirm_locations(locations: list[dict[str, Any]]) -> list[dict[str, Any]]:
             f"w={loc.get('w')} h={loc.get('h')} type={kind} party={party} confidence={conf}",
             file=sys.stderr,
         )
+    # Never wait for a person under cron or the gateway (catalog rule 12).
+    if not sys.stdin.isatty():
+        print("Confirmation needs a terminal; nothing was signed. Run this from a "
+              "terminal, or pass the confirmed locations with --locations.", file=sys.stderr)
+        return []
     answer = input("Sign/fill all listed locations? Type YES to proceed: ").strip()
     if answer != "YES":
         return []

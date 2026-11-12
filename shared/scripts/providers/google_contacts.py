@@ -25,6 +25,12 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
+_SHARED = Path(__file__).resolve().parent.parent
+if str(_SHARED) not in sys.path:
+    sys.path.insert(0, str(_SHARED))
+
+import plugin_secrets  # noqa: E402
+
 CONTACT_WRITES = {"contacts.create": "create", "contacts.update": "update", "contacts.delete": "delete"}
 PEOPLE_SCOPE = "https://www.googleapis.com/auth/contacts"
 PEOPLE_API = "https://people.googleapis.com/v1"
@@ -66,17 +72,26 @@ def service_account_settings(config: Any) -> tuple[str, str]:
     """(service_account_path, delegate_email) as the provider resolves them."""
     google = config.get("google", {}) if isinstance(config, Mapping) else {}
     google = google if isinstance(google, Mapping) else {}
+    delegate = str(google.get("delegate_email") or "").strip()
+    # The key from the GOOGLE_SERVICE_ACCOUNT_JSON secret wins: under Hermes it
+    # is the only allowed source (catalog rule 11: no reading key files).
+    if plugin_secrets.get(plugin_secrets.SA_JSON_ENV):
+        return plugin_secrets.SA_SECRET_SOURCE, delegate
     sa_path = str(google.get("service_account_path") or "").strip()
     if not sa_path:
         sa_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
-    return sa_path, str(google.get("delegate_email") or "").strip()
+    return sa_path, delegate
 
 
 def _rest_unavailable(config: Any) -> str | None:
     sa_path, delegate = service_account_settings(config)
     if not sa_path:
-        return "no google.service_account_path is configured"
-    if not Path(sa_path).expanduser().is_file():
+        return ("no service-account key: set the GOOGLE_SERVICE_ACCOUNT_JSON secret "
+                "(or google.service_account_path outside Hermes)")
+    if sa_path != plugin_secrets.SA_SECRET_SOURCE and plugin_secrets.under_hermes():
+        return ("under Hermes the service-account key must come from the "
+                "GOOGLE_SERVICE_ACCOUNT_JSON secret, not a key file")
+    if sa_path != plugin_secrets.SA_SECRET_SOURCE and not Path(sa_path).expanduser().is_file():
         return f"the service account file {sa_path} does not exist"
     if not delegate:
         return "no google.delegate_email is configured"

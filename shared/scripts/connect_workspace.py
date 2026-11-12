@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+
+import plugin_secrets
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -149,7 +151,7 @@ def cmd_status(config: dict[str, Any]) -> int:
             result["healthy"] = False
             result["error"] = str(exc)
     elif provider == "composio":
-        result["mcp_key_set"] = bool(os.getenv("COMPOSIO_MCP_KEY"))
+        result["mcp_key_set"] = bool(plugin_secrets.get("COMPOSIO_MCP_KEY"))
         result["user_id"] = workspace.get("user_id", "")
         result["family"] = _composio_family(workspace)
         # Check connections
@@ -320,7 +322,7 @@ def _cmd_composio_connect_mcp(config: dict[str, Any], toolkit: str) -> int:
     mcp_cfg = config.get("integrations", {}).get("workspace", {}).get("mcp", {})
     key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
 
-    if not os.getenv(key_env):
+    if not plugin_secrets.get(key_env):
         print(f"❌ {key_env} not set")
         print("   Get a Composio MCP key and set it in your .env file")
         return 1
@@ -455,9 +457,9 @@ def cmd_composio_mcp_url(config: dict[str, Any]) -> int:
 
     print(f"Endpoint: {endpoint}")
     print(f"Key env:  {key_env}")
-    print(f"Key set:  {'✅' if os.getenv(key_env) else '❌'}")
+    print(f"Key set:  {'✅' if plugin_secrets.get(key_env) else '❌'}")
 
-    if os.getenv(key_env):
+    if plugin_secrets.get(key_env):
         try:
             sys.path.insert(0, str(_SCRIPT_DIR))
             from mcp_client import MCPClient
@@ -493,7 +495,7 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
 
     print("✅ Mode: mcp")
     print(f"✅ Endpoint: {endpoint}")
-    if os.getenv(key_env):
+    if plugin_secrets.get(key_env):
         print(f"✅ {key_env}: set")
     else:
         print(f"❌ {key_env}: NOT set")
@@ -508,7 +510,7 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
         print("⚠️  user_id not set in config")
 
     # Show meta tools if initialized
-    if os.getenv(key_env):
+    if plugin_secrets.get(key_env):
         try:
             sys.path.insert(0, str(_SCRIPT_DIR))
             from mcp_client import MCPClient
@@ -522,7 +524,7 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
         except Exception as exc:
             print(f"⚠️  MCP initialize failed: {exc}")
 
-    if print_steps or not os.getenv(key_env):
+    if print_steps or not plugin_secrets.get(key_env):
         connect_tks = _composio_connect_toolkits(family)
         print("\nNext steps:")
         print(f"  1. Set {key_env} in .env (from https://connect.composio.dev)")
@@ -533,7 +535,7 @@ def cmd_provider_composio(config: dict[str, Any], print_steps: bool) -> int:
             step += 1
         print(f"  {step}. python connect_workspace.py --status")
 
-    return 0 if os.getenv(key_env) else 1
+    return 0 if plugin_secrets.get(key_env) else 1
 
 
 def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, tools_only: bool = False) -> int:
@@ -561,7 +563,7 @@ def cmd_composio_mcp_info(config: dict[str, Any], json_output: bool = False, too
     # Try to get MCP meta tools and initialization status
     mcp_initialized = False
     available_meta_tools: list[str] = []
-    if os.getenv(key_env):
+    if plugin_secrets.get(key_env):
         try:
             sys.path.insert(0, str(_SCRIPT_DIR))
             from mcp_client import MCPClient
