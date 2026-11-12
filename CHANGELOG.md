@@ -1,6 +1,35 @@
 # Changelog
 
-## Unreleased — Multi-company phases 1 and 2, Notion mirror
+## v0.8.0 (beta) — Multi-company phases 1 and 2, Notion mirror, prospecting v2
+
+### Prospecting v2: signals, written verdicts, replies
+
+- `prospecting` skill 0.2.0 reworks the workflow into an 11-step funnel where
+  spending rises with confidence. It runs brief, size and sample, budget,
+  accounts first, signals, written verdict, contacts for tier A and B only,
+  propose, one-signal drafts, replies, then learn. New references:
+  `references/signals.md` (vocabulary, weights, recency, hook rules) and
+  `references/messaging.md` (first-email anatomy, follow-ups, reply playbook).
+- `shared/scripts/prospecting.py` and `prospects.py` gain these commands:
+  - `observe` stores buying signals with evidence URL, event date, confidence
+    and attribution. Industry-wide news is refused as a company signal.
+  - `assess` takes a written fit verdict and derives the tier (A/B/C), the
+    anchor signal, a why-now line and a `do_not_pursue` flag (strong trigger,
+    weak fit). Strength is type weight × recency decay. Signals under 0.7
+    confidence or over 90 days old are unusable.
+  - `add-contact` adds a second contact at the same account.
+  - `reply` records the reply category. Reply text is never stored, and
+    opt-out wording overrides the category given. Any real reply pauses the
+    whole account.
+  - `touch` and `stats` give reply rates by opener signal and by tier.
+- Behaviour changes:
+  - `propose` now requires a `fit` verdict.
+  - A missing ICP field now counts as "not assessed" rather than a failed
+    check.
+  - `list` ranks by tier and shows the why-now line.
+- The concepts draw on three public outbound projects (explorium-ai/gtm-skills,
+  ethanplusai/sellbird, eracle/OpenOutreach). They are credited in NOTICE.
+  Ideas only: no code or text was copied.
 
 ### Prospecting, SEO audit, competitor watch (phase 4b)
 

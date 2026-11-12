@@ -122,6 +122,7 @@ def test_purge_is_a_dry_run_unless_confirmed(config):
 def test_propose_queues_pipeline_adds_for_approval(config):
     pr.ingest(config, [_lead()], source=SOURCE, purpose="p")
     (p,) = pr.list_prospects(config)
+    pr.assess(config, p["id"], "fit", "Right sector and size")   # proposing needs a written verdict
     (action,) = pr.propose(config, [p["id"]])
     assert action["type"] == "pipeline.deal.add" and action["state"] == "requested"
     assert action["payload"]["client_name"] == "PayFast Pte Ltd"

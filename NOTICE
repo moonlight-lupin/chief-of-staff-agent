@@ -72,3 +72,11 @@ Runtime dependencies
 The Python packages listed in requirements.txt are not redistributed with this
 work; they are installed separately by the operator and remain governed by
 their own licenses.
+
+skills/prospecting/ (SKILL.md, references/) and shared/scripts/prospecting.py
+    The prospecting workflow (signal-led qualification, written fit verdicts,
+    account-level reply handling, one-signal messaging) was informed by the
+    ideas in these public projects. No code or text from them is included:
+      - explorium-ai/gtm-skills (https://github.com/explorium-ai/gtm-skills), MIT
+      - ethanplusai/sellbird (https://github.com/ethanplusai/sellbird), AGPL-3.0
+      - eracle/OpenOutreach (https://github.com/eracle/OpenOutreach), GPL-3.0
