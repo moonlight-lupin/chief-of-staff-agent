@@ -21,6 +21,7 @@ is recorded truthfully and exhausts the envelope. A company-wide monthly cap
     spend.py record   --reservation <id> --actual 2.1 [--run-id ...] [--status failure]
     spend.py release  --reservation <id>
     spend.py status   [--envelope <id>]
+    spend.py stale    # open reservations older than a day, with the two ways out
     spend.py close    --envelope <id>
 """
 
@@ -45,6 +46,10 @@ LEDGER = "spend_ledger"
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 OPEN_ENVELOPE_STATES = frozenset({"requested", "approved"})
 STALE_RESERVATION_HOURS = 24
+LOCAL_ESTIMATE_NOTE = (
+    "These figures are a local estimate built from the costs recorded with spend.py; "
+    "they are not the provider's invoice. Reconcile against the provider's billing."
+)
 
 
 class SpendError(ValueError):
@@ -168,6 +173,13 @@ def propose(config: Any, provider: str, purpose: str, topic: str, cap: Any, curr
     currency = str(currency).strip().upper()
     if configured and currency != configured:
         raise SpendError(f"currency {currency} does not match spend.currency {configured}")
+    for env in _envelopes(config):
+        p = env.get("payload") or {}
+        other = str(p.get("currency") or "").upper()
+        if (p.get("provider") == provider and other and other != currency
+                and env.get("state") != "dismissed"):
+            raise SpendError(f"currency {currency} differs from {other} on {provider} envelope {env['id']}: "
+                             f"one provider's budgets must share a currency (set spend.currency)")
     monthly = _monthly_cap(config, provider)
     if monthly is not None and amount > monthly:
         raise SpendError(f"cap {amount} exceeds the monthly cap of {monthly} for {provider}")
@@ -214,7 +226,7 @@ def _valid_envelope(config: Any, envelope_id: str) -> dict[str, Any]:
 
 
 def reserve(config: Any, envelope_id: str, topic: str, estimate: Any, endpoint: str,
-            note: str = "") -> dict[str, Any]:
+            note: str = "", currency: str | None = None) -> dict[str, Any]:
     """Reserve the estimated cost of one paid call before making it."""
 
     provider = "unknown"
@@ -225,6 +237,9 @@ def reserve(config: Any, envelope_id: str, topic: str, estimate: Any, endpoint: 
         env = _valid_envelope(config, envelope_id)
         p = env["payload"]
         provider = p["provider"]
+        if currency and str(currency).strip().upper() != str(p.get("currency") or "").upper():
+            raise SpendRefused("currency_mismatch",
+                               f"estimate is in {str(currency).upper()}, the envelope is in {p.get('currency')}")
         if topic != p["topic"]:
             raise SpendRefused("topic_mismatch",
                                f"envelope covers '{p['topic']}', not '{topic}'; a new topic needs a new envelope")
@@ -279,6 +294,7 @@ def record(config: Any, reservation_id: str, actual: Any, status: str = "success
         raise SpendError(f"unknown reservation {reservation_id}")
     env = get_pending_action(config, pending["envelope_id"]) or {}
     cap = _dec((env.get("payload") or {}).get("cap") or 0)
+    monthly = _monthly_cap(config, str(pending.get("provider") or ""))
     out: dict[str, Any] = {}
 
     def settle(ledger: dict[str, Any]) -> None:
@@ -290,15 +306,18 @@ def record(config: Any, reservation_id: str, actual: Any, status: str = "success
         res.update({"status": "recorded", "actual": _num(amount), "call_status": status,
                     "run_id": run_id, "recorded_at": _now().isoformat()})
         spent, _, _ = _envelope_totals(ledger, res["envelope_id"])
+        month_total = _month_total(ledger, res["provider"], res.get("month") or "")
         out.update({"envelope_id": res["envelope_id"], "provider": res["provider"], "spent": _num(spent),
-                    "over_cap": spent > cap})
+                    "over_cap": spent > cap,
+                    "over_monthly_cap": monthly is not None and month_total > monthly})
         if spent > cap:
             ledger.setdefault("exhausted", {})[res["envelope_id"]] = True
 
     _mutate_ledger(config, settle)
     _audit(config, out["provider"], "spend.record", out["envelope_id"],
-           "over_cap" if out["over_cap"] else "success",
-           {"reservation_id": reservation_id, "actual": _num(amount), "run_id": run_id, "call_status": status})
+           "over_cap" if out["over_cap"] else "over_monthly_cap" if out["over_monthly_cap"] else "success",
+           {"reservation_id": reservation_id, "actual": _num(amount), "run_id": run_id, "call_status": status,
+            "over_monthly_cap": out["over_monthly_cap"]})
     return {"reservation_id": reservation_id, "actual": _num(amount), **out}
 
 
@@ -349,7 +368,8 @@ def close(config: Any, envelope_id: str) -> dict[str, Any]:
     ledger = _load_ledger(config)
     spent, reserved, calls = _envelope_totals(ledger, envelope_id)
     if reserved:
-        raise SpendError(f"{envelope_id} has open reservation(s) worth {reserved}; record or release them first")
+        raise SpendError(f"{envelope_id} has open reservation(s) worth {reserved}; record or release them "
+                         f"first (spend.py stale lists them with both commands)")
     summary = {"envelope_id": envelope_id, "spent": _num(spent), "calls": calls,
                "cap": (env.get("payload") or {}).get("cap"), "currency": (env.get("payload") or {}).get("currency")}
     if env.get("state") == "approved" and mark_executing(config, envelope_id) is not None:
@@ -365,12 +385,68 @@ def month_to_date(config: Any) -> dict[str, Any]:
     return {p: _num(_month_total(ledger, p, month)) for p in sorted(x for x in providers if x)}
 
 
+def _created(r: Mapping[str, Any]) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(r.get("created_at") or ""))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def stale_reservations(config: Any, hours: int = STALE_RESERVATION_HOURS) -> list[str]:
+    """Open reservations older than ``hours``; an unreadable timestamp counts as stale."""
     cutoff = _now() - timedelta(hours=hours)
     return sorted(
         rid for rid, r in (_load_ledger(config).get("reservations") or {}).items()
-        if r.get("status") == "open" and datetime.fromisoformat(r["created_at"]) < cutoff
+        if r.get("status") == "open" and ((created := _created(r)) is None or created < cutoff)
     )
+
+
+def stale_details(config: Any, hours: int = STALE_RESERVATION_HOURS) -> list[dict[str, Any]]:
+    """Stale open reservations, each with the two honest ways to close it.
+
+    Never resolved automatically: only the provider's records say whether the
+    call ran (and was charged), so the operator or agent must check first.
+    """
+    now = _now()
+    reservations = _load_ledger(config).get("reservations") or {}
+    out = []
+    for rid in stale_reservations(config, hours):
+        r = reservations[rid]
+        created = _created(r)
+        age = (now - created).total_seconds() / 3600 if created else None
+        out.append({
+            "reservation_id": rid, "envelope_id": r.get("envelope_id"), "provider": r.get("provider"),
+            "topic": r.get("topic"), "endpoint": r.get("endpoint"), "estimate": r.get("estimate"),
+            "created_at": r.get("created_at"), "age_hours": round(age, 1) if age is not None else None,
+            "if_the_call_ran": f"spend.py record --reservation {rid} --actual <cost from the provider>",
+            "if_it_did_not": f"spend.py release --reservation {rid}",
+        })
+    return out
+
+
+def month_over_caps(config: Any) -> dict[str, dict[str, Any]]:
+    """Providers over their monthly cap this month or last month.
+
+    Last month is included because a call reserved on the 31st and recorded on
+    the 1st is booked to the month it was reserved in.
+    """
+    ledger = _load_ledger(config)
+    now = _now()
+    this_month = now.strftime("%Y-%m")
+    last_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    providers = {r.get("provider") for r in (ledger.get("reservations") or {}).values()}
+    over: dict[str, dict[str, Any]] = {}
+    for provider in sorted(p for p in providers if p):
+        cap = _monthly_cap(config, provider)
+        if cap is None:
+            continue
+        for month in (this_month, last_month):
+            total = _month_total(ledger, provider, month)
+            if total > cap:
+                over[provider] = {"month": month, "spent": _num(total), "cap": _num(cap)}
+                break
+    return over
 
 
 def briefing_summary(config: Any) -> dict[str, Any] | None:
@@ -382,7 +458,8 @@ def briefing_summary(config: Any) -> dict[str, Any] | None:
     caps = {p: _num(c) for p in mtd if (c := _monthly_cap(config, p)) is not None}
     return {"envelopes": envelopes, "month_to_date": mtd, "monthly_caps": caps,
             "currency": _spend_config(config).get("currency"),
-            "stale_reservations": stale_reservations(config)}
+            "stale_reservations": stale_reservations(config),
+            "over_monthly_caps": month_over_caps(config), "note": LOCAL_ESTIMATE_NOTE}
 
 
 # ------------------------------------------------------------------ CLI
@@ -414,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--estimate", required=True)
     r.add_argument("--endpoint", required=True)
     r.add_argument("--note", default="")
+    r.add_argument("--currency", help="Currency of the estimate; refused if it differs from the envelope's")
     rec = sub.add_parser("record", help="Record the actual cost after the call")
     rec.add_argument("--reservation", required=True)
     rec.add_argument("--actual", required=True)
@@ -423,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     rel.add_argument("--reservation", required=True)
     st = sub.add_parser("status", help="Envelopes, spend and remaining budget")
     st.add_argument("--envelope")
+    sub.add_parser("stale", help="Open reservations older than a day, and how to close each")
     cl = sub.add_parser("close", help="End an envelope")
     cl.add_argument("--envelope", required=True)
     args = parser.parse_args(argv)
@@ -437,13 +516,19 @@ def main(argv: list[str] | None = None) -> int:
             out: Any = {"envelope_id": env["id"], "state": env["state"], "summary": env["summary"],
                         "next_step": "Ask the user to approve it: review_queue.py preview / approve"}
         elif args.command == "reserve":
-            out = reserve(config, args.envelope, args.topic, args.estimate, args.endpoint, args.note)
+            out = reserve(config, args.envelope, args.topic, args.estimate, args.endpoint, args.note,
+                          currency=args.currency)
         elif args.command == "record":
             out = record(config, args.reservation, args.actual, status=args.status, run_id=args.run_id)
         elif args.command == "release":
             out = release(config, args.reservation)
         elif args.command == "status":
-            out = {"envelopes": status(config, args.envelope), "month_to_date": month_to_date(config)}
+            out = {"envelopes": status(config, args.envelope), "month_to_date": month_to_date(config),
+                   "over_monthly_caps": month_over_caps(config), "note": LOCAL_ESTIMATE_NOTE}
+        elif args.command == "stale":
+            out = {"stale": stale_details(config),
+                   "note": ("Check the provider's run history before choosing: record the actual cost if the "
+                            "call ran, release only if it did not.")}
         else:
             out = close(config, args.envelope)
     except SpendRefused as exc:

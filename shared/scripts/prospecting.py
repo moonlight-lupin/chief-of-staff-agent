@@ -210,6 +210,54 @@ def signal_strength(sig: Mapping[str, Any]) -> float:
     return round(SIGNAL_WEIGHTS[sig["type"]] * factor, 3)
 
 
+def _paid_envelope(config: Any, source: Mapping[str, Any]) -> str | None:
+    """The spend envelope a paid source was bought under, or None for a free source.
+
+    A provider with a ``spend:`` section is paid. Its data is accepted only when
+    the ledger holds a *recorded* call with this ``run_id`` on an approved (or
+    since-closed) envelope of this company. A claimed ``envelope_id`` must be
+    that envelope. This stops paid data entering the pipeline outside a budget,
+    or under an invented or borrowed envelope id.
+    """
+    import spend
+    from state_db import _config_company_id, get_pending_action
+
+    provider = str(source.get("provider") or "").strip().lower()
+    paid = {str(k).lower() for k, v in spend._spend_config(config).items() if hasattr(v, "get")}
+    # "monid-dataforseo", "monid:serp" … are the same paid provider.
+    billed = next((p for p in sorted(paid) if provider == p or provider.startswith((f"{p}-", f"{p}_",
+                                                                                     f"{p}:", f"{p}/"))), None)
+    if billed is None:
+        return None
+    run_id = str(source.get("run_id") or "").strip()
+    endpoint = str(source.get("endpoint") or "").strip()
+    reservations = (spend._load_ledger(config).get("reservations") or {}).values()
+    envelopes = sorted({str(r.get("envelope_id")) for r in reservations
+                        if r.get("status") == "recorded" and r.get("call_status", "success") == "success"
+                        and r.get("provider") == billed and str(r.get("run_id") or "") == run_id
+                        and str(r.get("endpoint") or "") == endpoint})
+    if not envelopes:
+        raise ProspectError(
+            f"{billed} is a paid source (spend.{billed}), but run {run_id!r} on endpoint {endpoint!r} has no "
+            f"recorded, successful spend. Reserve before the call and record it with --run-id {run_id} "
+            f"(spend.py), then ingest.")
+    claimed = str(source.get("envelope_id") or "").strip()
+    if claimed and claimed not in envelopes:
+        raise ProspectError(f"envelope_id {claimed!r} is not the envelope that recorded run {run_id!r}")
+    company = _config_company_id(config)
+    for env_id in [claimed] if claimed else envelopes:
+        env = get_pending_action(config, env_id) or {}
+        # A recorded reservation proves the envelope was approved when the call
+        # was made (reserve refuses anything else); it may have expired or been
+        # closed since. Never-approved states cannot have reservations.
+        if (env.get("type") == spend.ENVELOPE_TYPE
+                and (env.get("payload") or {}).get("provider") == billed
+                and (env.get("company_id") or None) == company
+                and env.get("state") not in {"requested", "dismissed"}):
+            return env_id
+    raise ProspectError(f"no approved {billed} spend envelope of this company recorded run {run_id!r}")
+
+
 def ingest(config: Any, leads: Iterable[Mapping[str, Any]], source: Mapping[str, Any], purpose: str) -> dict[str, Any]:
     """Add leads to the prospect list. Local only; contacts no one."""
     from state_db import load_store
@@ -219,6 +267,7 @@ def ingest(config: Any, leads: Iterable[Mapping[str, Any]], source: Mapping[str,
         raise ProspectError(f"source must record {', '.join(SOURCE_FIELDS)}; missing: {', '.join(missing)}")
     if not str(purpose or "").strip():
         raise ProspectError("purpose is required: say why these leads were collected")
+    envelope_id = _paid_envelope(config, source)
 
     deals = load_store("pipeline", config).get("deals") or []
     deal_emails = {_norm(d.get("contact_email")) for d in deals if d.get("contact_email")}
@@ -260,7 +309,7 @@ def ingest(config: Any, leads: Iterable[Mapping[str, Any]], source: Mapping[str,
             record = {
                 "id": f"pr-{uuid.uuid4().hex[:10]}", **lead, "email": email, "domain": domain,
                 "source": {f: source[f] for f in SOURCE_FIELDS} | (
-                    {"envelope_id": source["envelope_id"]} if source.get("envelope_id") else {}),
+                    {"envelope_id": envelope_id} if envelope_id else {}),
                 "purpose": str(purpose).strip(), "collected_at": now, "status": "new",
                 "icp_fit": _icp_fit(config, lead), "account_id": _account_key(domain, company),
                 "signals": signals,

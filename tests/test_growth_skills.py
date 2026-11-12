@@ -34,10 +34,22 @@ prospecting:
 """
 
 
+def record_paid_run(cfg, run_id="run-1", topic="growth-fixture"):
+    """Monid is a paid source: ingest needs a recorded call on an approved envelope."""
+    import spend
+
+    env = spend.propose(cfg, "monid", "Test leads", topic, 50, "USD")
+    state_db.approve_pending_action(cfg, env["id"], approver="Alicia", reason="ok")
+    res = spend.reserve(cfg, env["id"], topic, 1, endpoint=SOURCE["endpoint"])
+    spend.record(cfg, res["reservation_id"], actual=1, run_id=run_id)
+    return env["id"]
+
+
 @pytest.fixture
 def config(tmp_path):
     cfg = _config(tmp_path, notion=ICP)
     state_db.save_store_atomic("pipeline", {"deals": [dict(DEAL)]}, config=cfg)
+    record_paid_run(cfg)
     return cfg
 
 

@@ -104,6 +104,28 @@ This keeps the core rule: no proposal is approved by the agent that made it.
 The human approved the envelope, so the plugin only carries that approval out.
 Every call is audited along with its cost.
 
+**Limits:**
+
+- **The ledger is a local estimate, not the provider's invoice.** It totals the
+  costs the agent recorded. The provider does not enforce it, and a call made
+  outside `spend.py` never reaches it. Reconcile against the provider's
+  billing.
+- **One currency per provider.** Set `spend.currency`. Even without it, a
+  provider's envelopes cannot mix currencies. `reserve --currency` refuses an
+  estimate in another currency.
+- **Overruns are recorded, never hidden.**
+  - An actual cost above the envelope's cap exhausts that envelope.
+  - A month-to-date total above `spend.<provider>.monthly_cap` is reported by
+    `record` (`over_monthly_cap`), `status` and the daily briefing.
+  - Further reservations are refused until the next month.
+- **Stale reservations.** A reservation still open after a day appears in
+  `spend.py stale` and in `doctor`. Check the provider's run history, then
+  either `record` the actual cost or `release` it if the call never ran. It is
+  never closed automatically.
+- **Paid data needs provenance.** Data from a provider with a `spend:` section
+  is ingested only when its `run_id` was recorded against an approved envelope
+  of the same company. A claimed `envelope_id` must be that envelope.
+
 ## Phases
 
 | Phase | Scope |
