@@ -18,13 +18,13 @@ provides_hooks: [on_session_start, pre_llm_call, post_llm_call, pre_tool_call, p
 requires_env: []
 # Rule 10: same list as pyproject.toml, each with an upper bound.
 python_dependencies:
-  - "PyYAML>=6.0,<7"
+  - "PyYAML>=6.0.2,<7"
   - "python-docx>=1.1,<2"
-  - "pymupdf>=1.24,<3"
-  - "requests>=2.31,<3"
+  - "pymupdf>=1.25,<3"
+  - "requests>=2.33,<3"
   - "google-auth>=2.38,<3"
-  - "cryptography>=38.0,<52"
-  - "msal>=1.28,<2"
+  - "cryptography>=50.0.0,<52"
+  - "msal>=1.37,<2"
 # Rule 11: secrets come only through Hermes. Each is stored by Hermes's
 # credential route (masked in the Desktop settings form), read in-process with
 # get_secret, and handed to the plugin's own commands per session through

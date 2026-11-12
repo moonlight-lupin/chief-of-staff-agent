@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Supply chain and release hygiene
+
+- **GitHub Actions** are pinned to commit SHAs. Workflows run with a
+  read-only token, and checkout no longer keeps the token.
+- **New `security` CI job.** It runs a pinned `pip-audit` against
+  `requirements.txt`, plus the repository hygiene tests.
+- **`requirements.txt`** now carries the same upper bounds as
+  `pyproject.toml`. Previously it had none, so a new major version could
+  install unreviewed.
+- **Dependabot** (pip and Actions) and **`.github/CODEOWNERS`** for the
+  security-sensitive paths.
+- **New `tests/test_supply_chain.py`.** It covers:
+  - pins and token permissions;
+  - dependency parity;
+  - manifest versions, including `.claude-plugin/*.json`;
+  - a scan for tracked secrets, credential files and user data.
+- **`SECURITY.md`** gains a supply-chain section, including the repository
+  settings the maintainer should enable.
+- **Hardening from an adversarial review:**
+  - **Dependency floors raised past known advisories,** in `requirements.txt`,
+    `pyproject.toml` and `plugin.yaml`:
+    - `cryptography>=50.0.0`;
+    - `requests>=2.33`;
+    - `PyYAML>=6.0.2`;
+    - `pymupdf>=1.25`;
+    - `msal>=1.37`, the first that accepts cryptography 50.
+
+    Previously the floors allowed versions with 15+ advisories, and an
+    environment already at the floor was never upgraded.
+  - **CI audits the floors too** and checks that they install together.
+  - **Hygiene tests:**
+    - Secret patterns gain Google OAuth client secrets, encrypted private
+      keys, Notion tokens and Stripe live keys.
+    - Every tracked text file is scanned.
+    - Runtime state directories (`.knowledge/`, `.runs/`, `.integrations/`,
+      `.last_briefing`, `*.db.*`) and records under any path are refused.
+    - Job-level write permissions and `workflow_run` are refused.
+    - Quoted and `docker://…@sha256` pins are understood, and the version
+      comment must be a real version.
+    - CODEOWNERS rules need an owner.
+    - Names are normalised per PEP 503, and `plugin.yaml` must match too.
+  - **A stray runtime file** (`.knowledge/memory_changes.json`, two generic
+    wiki-index entries) is no longer tracked. Runtime directories are now
+    ignored.
+
 ### Spend envelopes: overruns, currency, recovery, provenance
 
 - **A month-to-date total over `spend.<provider>.monthly_cap`** is now

@@ -1,0 +1,14 @@
+# Weekly update PRs for Python dependencies and the SHA-pinned Actions in
+# .github/workflows. Each lands as a reviewed PR with CI, never directly.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
