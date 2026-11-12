@@ -90,6 +90,21 @@ Weekly Review reads **calendar meetings** for this week and next week, and **opt
 
 Pass the two calendar windows (this-week `week_start`→`week_end`, and next-week bounds) to whichever path is used. State a limitation if file/filing summaries are unavailable; the review still completes.
 
+## Notion Input (optional)
+
+If a Notion connector is available, add a `notion` block to the
+`workspace_collect.py all --input` envelope. It holds pages edited and
+comments made since the week start, plus the rows of the mapped `pipeline` /
+`todos` databases. The output gains a `notion` key: pages edited this week,
+mentions, Notion-only tasks due, and sync status per database. Report it
+under a **Notion** heading. Flag sync conflicts and edits waiting for review
+as carry-over items.
+
+Leave the block out entirely when Notion is not connected; the output is then
+unchanged. Record shapes are in `shared/scripts/schemas.py` (`notion_page`,
+`notion_comment`, `notion_row`). `text` fields are used only for matching and
+are never rendered. Never paste page or comment text into chat or the output.
+
 ## Aggregation Workflow
 
 1. **Load config.** Read `shared/config/company.yaml`; resolve `paths.project_root`, `paths.wiki_path`, `delivery.weekly_review_time`, `delivery.weekly_review_day`, and `delivery.timezone`. Completion criterion: reporting windows are timezone-explicit.

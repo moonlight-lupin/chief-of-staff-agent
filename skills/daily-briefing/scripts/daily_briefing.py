@@ -977,6 +977,17 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
                 "risk": risk,
                 "why": f"Pending approval: {a.get('type', '?')} action created {a.get('created_at', '?')}",
             })
+    # Notion — read-only summary of the envelope's optional ``notion`` block.
+    notion_section: dict[str, Any] | None = None
+    notion_block = (workspace_input or {}).get("notion")
+    if notion_block is not None and config:
+        try:
+            from notion_inputs import summarise as summarise_notion
+            notion_section = summarise_notion(config, notion_block, since_hours=since_hours)
+        except Exception as exc:  # never let an optional input break the briefing
+            notion_section = {"error": concise_error(exc)}
+        needs_attention.extend(notion_section.get("needs_attention") or [])
+
     for s in suggestions:
         needs_attention.append({
             "title": f"Suggestion: {s.get('title', s.get('summary', ''))}",
@@ -994,6 +1005,8 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
                 "risk": risk,
                 "why": get_risk_explanation(a.get("type", ""), risk) if "get_risk_explanation" in dir() else "",
             })
+    if notion_section:
+        next_actions.extend(notion_section.get("next_actions") or [])
     for s in suggestions[:5]:
         next_actions.append({
             "title": f"Suggestion: {s.get('title', s.get('summary', ''))}",
@@ -1032,7 +1045,7 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
     if not sys_health.get("runs_dir", True):
         sys_warnings += 1
 
-    return {
+    briefing = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window": f"{since_hours}h",
         "operator": operator,
@@ -1061,6 +1074,10 @@ def _build_structured_briefing(config_path: str | None, since_hours: int = 24, l
             "executions_performed": False,
         },
     }
+    if notion_section is not None:
+        briefing["sections"]["notion"] = notion_section
+        briefing["summary"]["notion_items"] = int(notion_section.get("count") or 0)
+    return briefing
 
 
 def build_briefing(config_path: str | None, since_hours: int = 24, limit: int = 50,

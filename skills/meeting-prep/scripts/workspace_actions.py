@@ -173,6 +173,15 @@ def cmd_gather(args: argparse.Namespace) -> int:
     # Drive context: use event title or --drive-query
     if workspace_input is not None:
         result["drive_files"] = workspace_input.get("files", [])
+        if workspace_input.get("notion") is not None:
+            # Notion pages and mirrored rows about these attendees (read-only).
+            cfg = load_config(args.config)
+            if cfg is not None:
+                from notion_inputs import meeting_context
+                result["notion_context"] = meeting_context(cfg, workspace_input["notion"], attendees)
+            else:
+                result["notion_context"] = []
+                result["notion_note"] = "config not loaded; Notion context not matched"
     else:
         drive_query = args.drive_query or event_title
         result["drive_files"] = client.files_search(drive_query, max_results=5)

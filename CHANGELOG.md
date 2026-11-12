@@ -2,6 +2,27 @@
 
 ## Unreleased — Multi-company phases 1 and 2, Notion mirror
 
+### Notion as an input to existing skills
+
+- The workspace envelope (`--input`) accepts an optional `notion` block: pages,
+  comments, and rows of the mapped databases. It is validated in `schemas.py`
+  and kept only when present, so envelopes without Notion normalise exactly
+  as before.
+- New `shared/scripts/notion_inputs.py` (read-only). It produces recently
+  edited pages, mentions of the operator, Notion-only tasks due or overdue,
+  and sync status per mirrored database (edits waiting for review, conflicts,
+  changes not yet queued). Page and comment text is used only for matching
+  and is never returned.
+- Daily briefing: a new **Notion** section in text, Markdown and HTML.
+  Mentions, Notion-only tasks and sync conflicts appear under Needs
+  Attention, and pending sync work appears as a suggested `notion-sync` run.
+  The summary gains `notion_items`.
+- Weekly review: `workspace_collect.py all --input` adds a `notion` key for
+  the week.
+- Meeting prep: `gather --input` adds `notion_context`: pages and rows that
+  match attendees by email, by company domain, or by the client name of their
+  pipeline deal.
+
 ### Notion mirror (phase 3)
 
 **Adds agent-path action types and a new local action, `notion.pull`.**

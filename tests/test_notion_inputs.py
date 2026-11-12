@@ -46,7 +46,7 @@ def config(tmp_path, monkeypatch):
 
 NOTION_BLOCK = {
     "pages": [
-        {"id": "p-old", "title": "Old plan", "last_edited_time": _iso(72)},
+        {"id": "p-old", "title": "Old plan", "last_edited_time": _iso(96)},
         {"id": "p-new", "title": "Q4 launch plan", "last_edited_time": _iso(2),
          "last_edited_by": "Sam", "url": "https://notion.so/p-new"},
         {"id": "p-client", "title": "Client Co — kickoff notes", "last_edited_time": _iso(5)},

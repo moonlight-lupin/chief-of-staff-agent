@@ -73,6 +73,19 @@ def collect_drive(config: Any, query: str = "", max_results: int = 20) -> list[d
     return client.files_search(query, max_results=max_results)
 
 
+def _notion_week(config_path: str | None, block: dict[str, Any], start_date: date) -> dict[str, Any]:
+    """Read-only Notion summary for the review week (pages, mentions, sync status)."""
+    from datetime import datetime, timezone
+
+    cfg = load_config(config_path)
+    if cfg is None:
+        return {"error": "config not loaded; Notion input not summarised"}
+    from notion_inputs import summarise
+
+    since = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    return summarise(cfg, block, since=since)
+
+
 def cmd_all(args: argparse.Namespace) -> int:
     """Gather all workspace data for the week."""
     workspace_input = _maybe_load_input(args)
@@ -90,6 +103,8 @@ def cmd_all(args: argparse.Namespace) -> int:
             "calendar_events": workspace_input.get("events", []),
             "drive_recent": workspace_input.get("files", []),
         }
+        if workspace_input.get("notion") is not None:
+            result["notion"] = _notion_week(args.config, workspace_input["notion"], start_date)
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
         return 0
 
