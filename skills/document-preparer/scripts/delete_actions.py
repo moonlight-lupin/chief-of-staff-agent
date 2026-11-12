@@ -28,7 +28,6 @@ Core rules:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -257,13 +256,14 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     Uses mark_executing() BEFORE the provider call to prevent the race where
     a provider action succeeds but the approval has lapsed.
-    State machine: approved → executing → executed | failed (back to approved).
+    State machine: approved → executing → executed | failed (back to approved:
+    soft deletes are idempotent).
     """
     cfg = load_config(args.config)
     if cfg is None:
         return 1
 
-    from state_db import get_pending_action, mark_executing, mark_executed, mark_failed
+    from state_db import get_pending_action
     action = get_pending_action(cfg, args.action_id)
     if not action:
         print(f"Action not found: {args.action_id}", file=sys.stderr)
@@ -272,97 +272,40 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print(f"Action {args.action_id} is not approved (state={action['state']}).", file=sys.stderr)
         return 1
 
-    # Pre-execution eligibility check — prevents race with lapsed approval
-    executing = mark_executing(cfg, args.action_id)
-    if not executing:
-        print(f"Action {args.action_id} cannot be executed (approval may have lapsed).", file=sys.stderr)
-        return 1
-
+    # Type check BEFORE claiming: a wrong-type action must never be left in
+    # 'executing' (it would need doctor --fix to recover).
     action_type = action["type"]
     if action_type not in SOFT_DELETE_ACTIONS:
         print(f"Action type {action_type} is not a soft-delete action.", file=sys.stderr)
         return 1
-
     meta = SOFT_DELETE_ACTIONS[action_type]
     method_name = meta["provider_method"]
-    client = get_client(cfg)
-    from company_registry import preflight
-    _account_error, _account_check = preflight(action, client, cfg)
-    if _account_error:
-        mark_failed(cfg, args.action_id, _account_error, attempted=False)
-        print(f"❌ {_account_error}", file=sys.stderr)
-        return 1
 
-    # Capability gate — refuse an approved action the provider cannot support
-    # (e.g. m365 calendar.cancel, whose capability is False) BEFORE invoking any
-    # provider method. Mirrors webhook_events.cmd_execute exactly: the action is
-    # already in 'executing' state (mark_executing above); nothing was
-    # attempted, so mark_failed(attempted=False) lets it go back to 'approved'.
-    from workspace_capabilities import require_capability
-    unsupported = require_capability(client, action_type, target=action.get("target", ""))
-    if unsupported:
-        mark_failed(cfg, args.action_id, f"{action_type} not supported by {client.provider_name}",
-                    attempted=False)
-        print(f"❌ {action_type} not supported by {client.provider_name}", file=sys.stderr)
-        return 1
+    # Claim → account pre-flight → capability (e.g. m365 calendar.cancel is
+    # False) → grant → call → record (shared/scripts/action_execution.py).
+    from action_execution import NotAttempted, run_approved
 
-    # Establish the approved-execution context — the explicit approval IS the
-    # confirmation. Set AUTO_APPROVE (so reversible SAFE_WRITE actions such as
-    # calendar.cancel pass the non-interactive gate) and ALLOW_DESTRUCTIVE, then
-    # restore the previous values so we don't leak state into other processes.
-    from workspace_guardrails import execution_grant
-    try:
-        _cos_grant = execution_grant(cfg, args.action_id)
-        _cos_grant.__enter__()
-    except PermissionError as exc:
-        mark_failed(cfg, args.action_id, str(exc), attempted=False)
-        print(f"❌ {exc}", file=sys.stderr)
-        return 1
-    old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
-    old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
-    os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
-    os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
-
-    try:
+    def soft_delete(client, _action):
         method = getattr(client, method_name, None)
         if method is None:
-            result = {
-                "success": False,
-                "action": action_type,
-                "provider": client.provider_name,
-                "target": action["target"],
-                "error": f"Provider {client.provider_name} does not implement {method_name}",
-                "audited": False,
-            }
-        else:
-            result = method(action["target"])
-    except Exception as exc:
-        mark_failed(cfg, args.action_id, str(exc))
-        print(f"Execute failed: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        _cos_grant.__exit__(None, None, None)
-        if old_auto is None:
-            os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
-        else:
-            os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = old_auto
-        if old_destructive is None:
-            os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
-        else:
-            os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = old_destructive
+            raise NotAttempted(f"Provider {client.provider_name} does not implement {method_name}")
+        return method(action["target"])
 
-    # Check the provider result BEFORE marking executed — a provider failure
-    # (success=False) must transition the action to failed (back to 'approved'
-    # for retry), NOT be recorded as executed. Mirrors webhook_events.cmd_execute.
-    success = result.get("success", False) if isinstance(result, dict) else True
-    if not success:
-        error = result.get("error", "provider returned failure") if isinstance(result, dict) else "unknown error"
-        mark_failed(cfg, args.action_id, error)
-        print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+    out = run_approved(cfg, action, get_client(cfg), soft_delete, accept_non_dict=True)
+    if out.stage == "claim":
+        print(f"Action {args.action_id} cannot be executed (approval may have lapsed).", file=sys.stderr)
         return 1
-
-    mark_executed(cfg, args.action_id, {**result, "account_check": _account_check} if isinstance(result, dict) else result)
-    print_result(result, args.summary, f"{meta['label']}: {action['target']}")
+    if out.stage == "call":
+        print(f"Execute failed: {out.error}", file=sys.stderr)
+        return 1
+    if out.stage == "provider":
+        print_result(out.result if isinstance(out.result, dict) else {"success": False, "error": out.error},
+                     args.summary, f"{meta['label']}: {action['target']}")
+        return 1
+    if not out.ok:
+        print(f"❌ {out.error}", file=sys.stderr)
+        return 1
+    print_result(out.result, args.summary, f"{meta['label']}: {action['target']}")
     return 0
 
 

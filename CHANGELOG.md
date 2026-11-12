@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### One execution path for approved actions
+
+- **New `shared/scripts/action_execution.py`.** `run_approved` is now the
+  single claim → account pre-flight → capability gate → execution grant →
+  call → record sequence. `send_email.py`, `delete_actions.py` and
+  `webhook_events.py` previously carried three slightly different copies; a
+  safety fix now lands once.
+- **The break-glass environment flags** are set for the provider call only
+  and always restored, and the grant is always released, even when the call
+  raises.
+- **Refusals before any provider I/O are recorded as not attempted,** so a
+  send stays retryable. That covers a payload-path refusal, a provider
+  missing the method, and an unknown type.
+- **`delete_actions.py execute`** checks the action type *before* claiming
+  it. A wrong-type action was previously left stuck in `executing`.
+- **Capability refusals** in `delete_actions.py` now record the provider's
+  full reason (e.g. why m365 cannot cancel), not a bare "not supported".
+
 ### Supply chain and release hygiene
 
 - **GitHub Actions** are pinned to commit SHAs. Workflows run with a
