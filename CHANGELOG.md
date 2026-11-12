@@ -19,6 +19,19 @@
   it. A wrong-type action was previously left stuck in `executing`.
 - **Capability refusals** in `delete_actions.py` now record the provider's
   full reason (e.g. why m365 cannot cancel), not a bare "not supported".
+- **Hardening from an adversarial review:**
+  - **`send_email.py`** now runs the capability gate too. A provider that
+    cannot send (e.g. `agent`) refuses before the call and keeps the approval,
+    where before it would raise in the call and make the send fail for good.
+  - **An unexpected error before the provider call** (account pre-flight,
+    capability table, grant) is recorded as a refusal and the action returns to
+    `approved`. Previously it was left stuck in `executing`.
+  - **A `None` provider result is never success**, in any executor.
+    `delete_actions` and `webhook_events` used to record it as executed.
+    Non-dict results are stored as `{"raw": …, "account_check": …}`.
+  - **`webhook_events execute`** prints a JSON or summary line for a refusal
+    before any call (`"attempted": false`). The action stays approved.
+  - **Integration tests** run the executors through the real capability gate.
 
 ### Supply chain and release hygiene
 

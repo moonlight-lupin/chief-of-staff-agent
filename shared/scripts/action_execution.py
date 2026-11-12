@@ -70,7 +70,12 @@ def run_approved(
     check_capability: bool = True,
     accept_non_dict: bool = False,
 ) -> Execution:
-    """Claim, check, call and record one approved action. Never raises for a refusal."""
+    """Claim, check, call and record one approved action.
+
+    Refusals and provider errors come back as an :class:`Execution`; only a
+    BaseException such as KeyboardInterrupt propagates (after the grant is
+    released and the environment restored).
+    """
     from company_registry import preflight
     from state_db import mark_executed, mark_executing, mark_failed
 
@@ -82,23 +87,27 @@ def run_approved(
         mark_failed(cfg, action_id, error, attempted=False)
         return Execution(False, stage, error=error)
 
-    account_error, account_check = preflight(action, client, cfg)
-    if account_error:
-        return refuse("preflight", account_error)
-    if check_capability:
-        from workspace_capabilities import require_capability
-
-        unsupported = require_capability(client, action["type"], target=action.get("target", ""))
-        if unsupported:
-            return refuse("capability", unsupported.get("error") or f"{action['type']} not supported")
-
-    from workspace_guardrails import execution_grant
-
+    # Steps 2–4 do no provider I/O, so any error here is a refusal, never an
+    # attempt: the action goes back to approved instead of sticking in executing.
+    stage = "preflight"
     try:
+        account_error, account_check = preflight(action, client, cfg)
+        if account_error:
+            return refuse("preflight", account_error)
+        if check_capability:
+            stage = "capability"
+            from workspace_capabilities import require_capability
+
+            unsupported = require_capability(client, action["type"], target=action.get("target", ""))
+            if unsupported:
+                return refuse("capability", unsupported.get("error") or f"{action['type']} not supported")
+        stage = "grant"
+        from workspace_guardrails import execution_grant
+
         grant = execution_grant(cfg, action_id)
         grant.__enter__()
-    except PermissionError as exc:
-        return refuse("grant", str(exc))
+    except Exception as exc:  # noqa: BLE001 — see above
+        return refuse(stage, f"{type(exc).__name__}: {exc}" if not isinstance(exc, PermissionError) else str(exc))
     try:
         with _approved_env():
             result = call(client, action)
@@ -116,6 +125,8 @@ def run_approved(
             mark_failed(cfg, action_id, error)
             return Execution(False, "provider", result=result, error=error, account_check=account_check)
         mark_executed(cfg, action_id, {**result, "account_check": account_check})
+    # None is never success: it says nothing about what happened. Other
+    # non-dict results are kept as "raw" where the executor always did so.
     elif accept_non_dict and result is not None:
         mark_executed(cfg, action_id, {"raw": str(result), "account_check": account_check})
     else:

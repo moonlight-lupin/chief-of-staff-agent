@@ -381,6 +381,14 @@ def cmd_execute(args: argparse.Namespace) -> int:
         else:
             print_json({"success": False, "error": out.error, "result": out.result})
         return 1
+    if out.stage == "refused":
+        # Refused before any provider call (payload path, unknown type): the
+        # action stays approved. Same stdout shape as a provider error.
+        if args.summary:
+            print(f"❌ Refused before any provider call: {out.error}")
+        else:
+            print_json({"success": False, "error": out.error, "attempted": False})
+        return 1
     if not out.ok:
         print(f"❌ {out.error}", file=sys.stderr)
         return 1

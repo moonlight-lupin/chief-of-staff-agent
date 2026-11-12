@@ -21,6 +21,9 @@ for sub in ("shared/scripts", "skills/document-preparer/scripts"):
 
 import action_execution as ax  # noqa: E402
 import state_db  # noqa: E402
+import workspace_capabilities  # noqa: E402
+
+_REAL_REQUIRE = workspace_capabilities.require_capability   # captured before any autouse patch
 
 
 @pytest.fixture
@@ -186,4 +189,103 @@ def test_delete_executor_refuses_a_wrong_type_before_claiming(cfg):
     action = _approved(cfg)   # a send, not a soft delete
     with patch("delete_actions.load_config", return_value=cfg):
         assert delete_actions.main(["execute", "--action-id", action["id"]]) == 1
+    assert _state(cfg, action) == "approved"
+
+
+# ── review regressions: real wiring, no autouse patches ─────────────────────
+
+class _Bare:
+    """A client with only what we give it (MagicMock would invent methods)."""
+
+    provider_name = "bare"
+
+    def __init__(self, supported=(), **methods):
+        self._supported = set(supported)
+        for name, fn in methods.items():
+            setattr(self, name, fn)
+
+    def supports(self, action):
+        return action in self._supported
+
+    def unsupported_reason(self, action):
+        return f"{action} is not supported by bare"
+
+
+def test_send_email_gates_capability_so_an_unsendable_provider_keeps_the_approval(cfg):
+    import send_email
+
+    action = _approved(cfg, payload={"to": "x@example.com", "subject": "s", "body": "b"})
+    sent = []
+    client = _Bare(supported=(), mail_send=lambda **kw: sent.append(kw))
+    with patch("send_email.load_config", return_value=cfg), patch("send_email.get_client", return_value=client), \
+         patch("workspace_capabilities.require_capability", side_effect=_REAL_REQUIRE):
+        assert send_email.main(["execute", "--action-id", action["id"]]) == 1
+    assert not sent
+    assert _state(cfg, action) == "approved"
+
+
+def test_unexpected_error_before_the_call_is_a_refusal_not_a_stuck_action(cfg):
+    action = _approved(cfg)
+    call = MagicMock()
+    with patch("company_registry.preflight", side_effect=RuntimeError("registry unreadable")):
+        out = ax.run_approved(cfg, action, _client(), call)
+    assert out.stage == "preflight" and "registry unreadable" in out.error
+    call.assert_not_called()
+    assert _state(cfg, action) == "approved"
+
+
+def test_grant_import_failure_is_a_refusal(cfg):
+    action = _approved(cfg)
+    with patch("workspace_guardrails.execution_grant", side_effect=ImportError("broken")):
+        out = ax.run_approved(cfg, action, _client(), MagicMock())
+    assert out.stage == "grant" and _state(cfg, action) == "approved"
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_none_result_is_never_success(cfg, accept):
+    action = _approved(cfg, "gmail.archive", "m1", {"message_id": "m1"})
+    out = ax.run_approved(cfg, action, _client(), lambda c, a: None, accept_non_dict=accept)
+    assert not out.ok and out.stage == "provider"
+
+
+def test_delete_executor_missing_method_is_not_an_attempt(cfg):
+    import delete_actions
+
+    action = _approved(cfg, "gmail.archive", "m1", {"message_id": "m1"})
+    client = _Bare(supported={"gmail.archive", "mail.archive"})
+    with patch("delete_actions.load_config", return_value=cfg), patch("delete_actions.get_client", return_value=client):
+        assert delete_actions.main(["execute", "--action-id", action["id"]]) == 1
+    stored = state_db.get_pending_action(cfg, action["id"])
+    assert stored["state"] == "approved" and "does not implement" in stored["last_error"]
+
+
+def test_webhook_unknown_type_is_refused_with_json_and_stays_approved(cfg, capsys):
+    import webhook_events
+
+    action = _approved(cfg, "mail.send", payload={"to": "x@example.com", "subject": "s", "body": "b"})
+    client = _client()
+    with patch("webhook_events.load_config", return_value=cfg), \
+         patch("workspace_client.get_workspace_client", return_value=client):
+        rc = webhook_events.main(["execute", "--action-id", action["id"]])
+    import json
+
+    assert rc == 1
+    assert json.loads(capsys.readouterr().out)["attempted"] is False
+    client.mail_send.assert_not_called()
+    assert _state(cfg, action) == "approved"
+
+
+def test_webhook_payload_refusal_keeps_an_upload_approved(cfg, tmp_path, capsys):
+    import webhook_events
+
+    secret = tmp_path / ".env"
+    secret.write_text("X=1")
+    # Bypass create-time policy to simulate a payload that slipped past it.
+    with patch("payload_policy.enforce"):
+        action = _approved(cfg, "drive.upload", "f", {"file_path": str(secret)})
+    client = _client()
+    with patch("webhook_events.load_config", return_value=cfg), \
+         patch("workspace_client.get_workspace_client", return_value=client):
+        assert webhook_events.main(["execute", "--action-id", action["id"]]) == 1
+    client.files_upload.assert_not_called()
     assert _state(cfg, action) == "approved"

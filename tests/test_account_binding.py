@@ -121,6 +121,9 @@ class FakeClient:
     def acting_identity(self, family):
         return self._identity
 
+    def supports(self, action):          # executors now gate capability too
+        return True
+
 
 @pytest.mark.parametrize("identity,refused", [
     ("ops@acme.example", False), ("OPS@acme.example", False),

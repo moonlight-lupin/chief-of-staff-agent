@@ -222,7 +222,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
             cc=payload.get("cc") or None,
         )
 
-    out = run_approved(cfg, action, get_client(cfg), send, check_capability=False)
+    out = run_approved(cfg, action, get_client(cfg), send)
     if out.stage == "claim":
         print(f"Action {args.action_id} cannot be executed (approval may have lapsed). "
               f"Re-approve with: send_email.py approve --action-id {args.action_id}", file=sys.stderr)
