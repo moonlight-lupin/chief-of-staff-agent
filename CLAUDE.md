@@ -92,6 +92,7 @@ chief_of_staff.py bookkeeper       # invoices, AR/AP
 chief_of_staff.py knowledge        # memory + wiki
 chief_of_staff.py smoke-test       # subsystem check
 chief_of_staff.py demo             # sample data, no credentials
+chief_of_staff.py demo --flow      # the whole loop, simulated: propose → signed approve → execute → audit
 chief_of_staff.py logs diagnose --latest-failed
 chief_of_staff.py sync status      # git-backed project state (cloud sessions)
 chief_of_staff.py sync push        # checkpoint state.db, commit, push the data repo

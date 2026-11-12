@@ -1,0 +1,49 @@
+Step 1/7 — Morning briefing (read-only, sample data)
+<briefing>
+
+Step 2/7 — Proposal: the agent suggests a follow-up (nothing is sent)
+──────────────────────────────────────────────────────────────────────
+Queued action <id>: email john@acme.example — "Following up: Acme Corp proposal"
+It waits in the review queue. The agent cannot approve its own proposal.
+
+Step 3/7 — Preview: what it will do, to whom, and how it is reversed
+──────────────────────────────────────────────────────────────────────
+To:              john@acme.example
+Subject:         Following up: Acme Corp proposal
+Risk:            high — Sending email can contact external recipients and cannot be fully undone.
+Expected effect: Send an email to john@acme.example with subject 'Following up: Acme Corp proposal'.
+Reversal:        No full reversal; send a correction/follow-up if needed.
+
+Step 4/7 — Approve: you decide (a signed decision, as with /cos approve)
+──────────────────────────────────────────────────────────────────────
+In Hermes you would type:  /cos approve <id>
+There, the gateway checks who typed it and signs with a key the agent never holds.
+Here the demo plays the gateway's part itself, in this process, against its own throwaway store.
+Approved by demo-user — signed (key <key>).
+
+Step 5/7 — Execute (simulated): the real guarded path, a stand-in mailbox
+──────────────────────────────────────────────────────────────────────
+Claimed → account checked → capability checked → single-use grant consumed by the guarded send → recorded.
+Simulated: message demo-0001 to john@acme.example. No mail left this machine.
+
+Step 6/7 — Audit: what happened, when, and who decided
+──────────────────────────────────────────────────────────────────────
+State: executed
+  requested  <ts>
+  approved   <ts>
+  executing  <ts>
+  executed   <ts>
+Approver: demo-user (signature recorded: yes)
+Audit log (.audit/workspace.log): 4 entries for this action
+  <ts>  gmail.send  requested
+  <ts>  gmail.send  approved
+  <ts>  gmail.send  executing
+  <ts>  gmail.send  executed
+
+Step 7/7 — Next briefing: the approval queue afterwards
+──────────────────────────────────────────────────────────────────────
+Waiting for you: 0. Executed: 1.
+Done: the follow-up to John Tan (Acme Corp) is executed (simulated) and on the record.
+
+── End of demo ──
+Demo state discarded. Run it again for a fresh start.

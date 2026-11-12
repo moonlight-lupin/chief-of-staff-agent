@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Flagship demo, catalog check, onboarding
+
+- **`chief_of_staff.py demo --flow`** runs the whole loop on sample data, in
+  seven steps:
+  1. the briefing;
+  2. a proposal;
+  3. the preview (what, to whom, how reversed);
+  4. a **signed** approval, with the demo playing the gateway's part;
+  5. execution through the real guarded path and `@guarded` wrapper, around a
+     stand-in mailbox;
+  6. the timeline and audit log;
+  7. the queue afterwards.
+
+  It runs in a throwaway directory with its own Hermes home and break-glass
+  cleared, so nothing leaves the machine and the user's real Hermes home is
+  untouched. `--keep DIR` keeps the state, and `--reset DIR` removes only a
+  directory the demo created. A golden-output test pins it.
+- **Hermes catalog re-validated** against the current admission rules (1–19)
+  and the validator's source.
+  - New tests mirror the static checks: manifest fields, a strict
+    `requires_hermes`, `config_schema` types and `requires_env`.
+  - Rule 17: no binaries or bytecode, and no file over 1 MB.
+  - `docs/HERMES_CATALOG.md` records the results. One known `caution`: the
+    repository is just over the scanner's 400-file soft limit.
+  - Running `hermes plugins validate` itself is a submission step.
+- **README onboarding, walked through on a clean clone:**
+  - The bootstrap example omitted `--user-principal`, which m365 requires, so
+    the first command failed. Fixed and now tested.
+  - The storage choice is shown.
+  - Hermes users are sent to plugin settings for secrets, not `.env`.
+  - Positioning states which providers have run against live accounts.
+- **`docs/V1_READINESS_ASSESSMENT.md`**: the go/no-go for 1.0. Verdict:
+  conditional GO, after four owner actions. The version stays 0.9.0.
+- **Hardening from an adversarial review:**
+  - **`--keep` and `--reset`** only ever delete a directory that holds nothing
+    but the demo's own files under its exact marker. They refuse symlinks,
+    files, `/`, the home directory, the current directory, the plugin, and the
+    parents of those.
+  - **Flag combinations** that made no sense are rejected.
+  - **The stand-in mailbox** now runs inside the real `@guarded` wrapper, so
+    the single-use grant is consumed.
+  - **The approval step** says plainly that the demo plays the gateway's part.
+  - **Safety tests** now isolate `HOME` and `HERMES_HOME` and block the
+    network.
+  - **The catalog binary check** needs a real PE header, not just text
+    starting "MZ".
+
 ### One execution path for approved actions
 
 - **New `shared/scripts/action_execution.py`.** `run_approved` is now the

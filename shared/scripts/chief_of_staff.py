@@ -1733,6 +1733,21 @@ def cmd_demo(args: argparse.Namespace) -> int:
     ``demo`` outside the runtime-log lifecycle so a missing company.yaml does not
     print config-not-found noise.
     """
+    if getattr(args, "reset", None) and (getattr(args, "flow", False) or getattr(args, "keep", None)):
+        print("demo: --reset stands alone (it removes kept demo state); drop --flow/--keep", file=sys.stderr)
+        return 2
+    if getattr(args, "keep", None) and not getattr(args, "flow", False):
+        print("demo: --keep needs --flow", file=sys.stderr)
+        return 2
+    if getattr(args, "reset", None):
+        import demo_flow
+
+        return demo_flow.reset(args.reset)
+    if getattr(args, "flow", False):
+        import demo_flow
+
+        return demo_flow.run_flow(keep=getattr(args, "keep", None))
+
     import tempfile as _tempfile
 
     examples_dir = PLUGIN_ROOT / "examples"
@@ -2305,6 +2320,11 @@ def build_parser() -> argparse.ArgumentParser:
     demo_out.add_argument("--summary", action="store_true", default=True, help="Human-readable text (default)")
     demo_out.add_argument("--json", action="store_true", help="Stable JSON schema")
     demo_out.add_argument("--markdown", action="store_true", help="Markdown formatted")
+    demo.add_argument("--flow", action="store_true",
+                      help="The seven-step loop: briefing, proposal, preview, signed approval, "
+                           "simulated execution, audit, next briefing")
+    demo.add_argument("--keep", metavar="DIR", help="With --flow: keep the demo state in DIR")
+    demo.add_argument("--reset", metavar="DIR", help="Delete demo state kept with --keep")
     demo.set_defaults(func=cmd_demo)
 
     # logs subcommand group (read-only observability; these do NOT create runs)

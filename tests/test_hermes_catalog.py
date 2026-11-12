@@ -306,3 +306,76 @@ def test_m365_device_code_refuses_without_a_terminal(monkeypatch):
     with pytest.raises(RuntimeError, match="client_credentials"):
         client._get_token()
     assert started == []
+
+
+# ─── Admission checks mirrored from hermes_cli/plugin_validate.py ──────────────
+# Checked against NousResearch/hermes-agent at 72c880370f (2026-11-12). These
+# are the static checks; the capability probe is covered above, and the
+# install scanner (tools/plugin_guard.py) is run by `hermes plugins validate`.
+
+_HERMES_CONFIG_TYPES = {"str", "string", "int", "integer", "float", "number", "bool", "boolean",
+                        "list", "array", "dict", "object", "secret"}
+_BINARY_MAGIC = (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
+                 b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\x00asm")
+
+
+def _is_pe(head: bytes) -> bool:
+    """A Windows PE: "MZ", then "PE\\0\\0" at the offset stored at 0x3c (not just text starting MZ)."""
+    if not head.startswith(b"MZ") or len(head) < 0x40:
+        return False
+    offset = int.from_bytes(head[0x3C:0x40], "little")
+    return head[offset:offset + 4] == b"PE\0\0"
+
+
+def test_pe_detection_needs_the_pe_header():
+    assert not _is_pe(b"MZ is a postcode prefix" + b" " * 100)
+    fake = bytearray(b"MZ" + b"\0" * 0x3A + (0x80).to_bytes(4, "little") + b"\0" * 0x40 + b"PE\0\0")
+    assert _is_pe(bytes(fake))
+
+
+def _tracked_files() -> list[Path]:
+    import subprocess
+
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=PLUGIN_ROOT, capture_output=True, check=True).stdout
+    return [PLUGIN_ROOT / p for p in out.decode().split("\0") if p]
+
+
+def test_manifest_has_the_admission_fields():
+    for key in ("name", "version", "description"):
+        assert MANIFEST.get(key), key
+
+
+def test_requires_hermes_parses_strictly():
+    for clause in str(MANIFEST["requires_hermes"]).split(","):
+        assert re.fullmatch(r"\s*(>=|<=|==|!=|>|<)?\s*\d+(\.\d+){0,2}\s*", clause), clause
+
+
+def test_config_schema_types_are_ones_hermes_accepts():
+    for key, spec in (MANIFEST.get("config_schema") or {}).items():
+        assert isinstance(spec, dict), key
+        assert str(spec.get("type", "str")).lower() in _HERMES_CONFIG_TYPES, key
+        assert spec.get("required") in (None, True, False), key
+
+
+def test_requires_env_is_upper_snake():
+    for entry in MANIFEST.get("requires_env") or []:
+        name = entry if isinstance(entry, str) else entry.get("name", "")
+        assert re.fullmatch(r"[A-Z][A-Z0-9_]*", name), name
+
+
+def test_rule_17_no_bytecode_or_native_binaries_are_tracked():
+    bad = []
+    for path in _tracked_files():
+        if path.suffix in (".pyc", ".pyo"):
+            bad.append(path.name)
+        elif path.is_file():
+            with path.open("rb") as fh:
+                head = fh.read(4096)
+            if any(head.startswith(m) for m in _BINARY_MAGIC) or _is_pe(head):
+                bad.append(path.name)
+    assert not bad, f"rule 17: unscannable payloads tracked: {bad}"
+
+
+def test_no_tracked_file_exceeds_the_scanner_single_file_limit():
+    big = [p.name for p in _tracked_files() if p.is_file() and p.stat().st_size > 1024 * 1024]
+    assert not big, f"plugin_guard flags files over 1 MB: {big}"
