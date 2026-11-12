@@ -15,6 +15,8 @@ import io
 import importlib.util
 import json
 import os
+
+import plugin_secrets
 import ipaddress
 import py_compile
 import shutil
@@ -520,8 +522,8 @@ def _check_docuseal(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     if not esign or str(esign.get("provider", "")).lower() != "docuseal":
         return CheckResult("docuseal", "warn", "skipped: e-sign not configured for DocuSeal")
     url = str(esign.get("url") or "").rstrip("/")
-    api_key = os.getenv("DOCUSEAL_API_KEY", "")
-    mcp_token = os.getenv("DOCUSEAL_MCP_TOKEN", "")
+    api_key = plugin_secrets.get("DOCUSEAL_API_KEY", "")
+    mcp_token = plugin_secrets.get("DOCUSEAL_MCP_TOKEN", "")
     auth_mode = str(esign.get("auth_mode", "auto")).lower()
     if not url or not (api_key or mcp_token):
         return CheckResult("docuseal", "warn", "skipped: missing DocuSeal URL or DOCUSEAL_API_KEY/DOCUSEAL_MCP_TOKEN")
@@ -964,7 +966,7 @@ def _check_composio(fix: bool, data: dict[str, Any] | None, config_path: Path) -
     # MCP mode: check COMPOSIO_MCP_KEY
     mcp_cfg = workspace.get("mcp", {})
     key_env = mcp_cfg.get("key_env", "COMPOSIO_MCP_KEY")
-    if os.getenv(key_env):
+    if plugin_secrets.get(key_env):
         details.append(f"{key_env}: set")
     else:
         details.append(f"{key_env}: NOT set")

@@ -945,6 +945,12 @@ def run(args: argparse.Namespace) -> int:
         config = normalize_non_interactive_config(preset)
         config.setdefault("checks", check_prerequisites())
     else:
+        # Never wait for a person under cron or the gateway (catalog rule 12).
+        if not sys.stdin.isatty():
+            raise OnboardingError(
+                "interactive onboarding needs a terminal; without one run "
+                "--non-interactive --config preset.yaml"
+            )
         config = build_interactive_config()
 
     PARTIAL_DATA.clear()

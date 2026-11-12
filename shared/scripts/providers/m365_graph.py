@@ -17,7 +17,7 @@ Config (under the top-level ``m365`` key, with
       client_secret_env: "M365_CLIENT_SECRET"   # env var holding the secret (default)
       auth: "client_credentials"                # or "device_code"
       user_principal: "user@tenant.com"         # mailbox UPN, REQUIRED for client_credentials
-      token_cache_path: "~/.hermes/secrets/m365-token-cache.json"  # optional
+      token_cache_path: "..."   # parsed but unused: tokens stay in memory only
 
 Auth modes:
   * ``client_credentials`` (default) -> msal.ConfidentialClientApplication,
@@ -115,6 +115,7 @@ _PARENT = Path(__file__).resolve().parent.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
+import plugin_secrets  # noqa: E402
 from workspace_client import WorkspaceClient
 from workspace_guardrails import guarded
 from query_compiler import compile_query
@@ -311,11 +312,16 @@ class M365GraphClient(WorkspaceClient):
                 "Install it with: pip install msal"
             ) from exc
 
-        import os
 
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
 
         if self.auth_mode == "device_code":
+            if not sys.stdin.isatty():
+                # Waits for a person: never under cron or the gateway (catalog rule 12).
+                raise RuntimeError(
+                    "m365 device_code sign-in needs a person at a terminal; scheduled "
+                    "and gateway runs must use auth: client_credentials"
+                )
             app = msal.PublicClientApplication(self.client_id, authority=authority)
             flow = app.initiate_device_flow(scopes=DEVICE_SCOPE)
             if "user_code" not in flow:
@@ -323,7 +329,7 @@ class M365GraphClient(WorkspaceClient):
             print(flow.get("message", "Complete device sign-in in your browser."), file=sys.stderr)
             result = app.acquire_token_by_device_flow(flow)
         else:
-            secret = os.getenv(self.client_secret_env, "")
+            secret = plugin_secrets.get(self.client_secret_env, "")
             if not secret:
                 raise RuntimeError(
                     f"m365 client_credentials auth requires the client secret in "
@@ -1276,12 +1282,17 @@ class M365GraphClient(WorkspaceClient):
                 "Microsoft 365 provider requires the 'msal' package. "
                 "Install it with: pip install msal"
             ) from exc
-        import os
 
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         scope = [f"https://{host}/.default"]
         if self.auth_mode == "device_code":
             # Device-code tokens are Graph-scoped; re-run device flow for SPO.
+            if not sys.stdin.isatty():
+                # Waits for a person: never under cron or the gateway (catalog rule 12).
+                raise RuntimeError(
+                    "m365 device_code sign-in needs a person at a terminal; scheduled "
+                    "and gateway runs must use auth: client_credentials"
+                )
             app = msal.PublicClientApplication(self.client_id, authority=authority)
             flow = app.initiate_device_flow(scopes=scope)
             if "user_code" not in flow:
@@ -1295,7 +1306,7 @@ class M365GraphClient(WorkspaceClient):
             )
             result = app.acquire_token_by_device_flow(flow)
         else:
-            secret = os.getenv(self.client_secret_env, "")
+            secret = plugin_secrets.get(self.client_secret_env, "")
             if not secret:
                 raise RuntimeError(
                     f"m365 client_credentials auth requires the client secret in "

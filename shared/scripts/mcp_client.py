@@ -11,7 +11,8 @@ Does NOT store the API key — reads from env var each time.
 from __future__ import annotations
 
 import json
-import os
+
+import plugin_secrets
 import re
 from typing import Any
 
@@ -36,7 +37,7 @@ class MCPClient:
         return self._id_counter
 
     def _get_key(self) -> str:
-        key = os.getenv(self.key_env, "")
+        key = plugin_secrets.get(self.key_env, "")
         if not key:
             raise ValueError(
                 f"{self.key_env} not set. Get a Composio MCP key and set it in your .env file."

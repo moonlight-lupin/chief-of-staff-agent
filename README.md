@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.8.0 (beta)
+> **Status:** v0.8.1 (beta)
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -221,8 +221,39 @@ Failed readiness rows print the exact diagnose command. No stack-trace archaeolo
 ## ⚙️ Configuration and data
 
 - One config file: `shared/config/company.yaml` (start from the bootstrap output or `company.yaml.example`)
-- Secrets: `.env` in the plugin root (auto-loaded, shell env wins) — never in YAML
+- Secrets, never in YAML:
+  - **Under Hermes:** set them in the plugin's settings (Desktop: Settings → Plugins → Chief of Staff), where Hermes stores them. The plugin reads them only through Hermes and never opens a `.env` or key file there.
+  - **Standalone or Claude Code:** `.env` in the plugin root (auto-loaded, shell env wins).
 - Your records, in plain text under `paths.project_root`: `pipeline.yaml` · `invoices.yaml` · `expenses.yaml` · `todos.yaml` · `wiki/`
+
+---
+
+## 🔎 What it touches
+
+Read this before installing. Nothing below happens without your configuration, and every consequential action waits for your approval.
+
+- **Network:** only the services you configure:
+  - Google APIs (`googleapis.com`, `gmail.googleapis.com`, `people.googleapis.com`);
+  - Microsoft Graph and Entra sign-in (`graph.microsoft.com`, `login.microsoftonline.com`);
+  - Composio (`backend.composio.dev`, `connect.composio.dev`);
+  - your own DocuSeal server.
+
+  Prospecting, SEO and competitor watch call Monid through the agent's own connector, and only against budgets you approved. Notion is reached through the agent's own connector. Under the `agent` provider the plugin makes no workspace calls at all: the agent's connectors do.
+- **Shell commands:**
+  - `hermes cron create` / `hermes cron list` (installing and checking the scheduled briefings you approve);
+  - `git` (only `sync push` / `sync status` for your private data repo);
+  - the optional google-workspace skill's `google_api.py` for Google reads;
+  - the plugin's own Python scripts.
+- **Your data, outside the plugin folder:**
+  - plain YAML and Markdown under `paths.project_root` (pipeline, invoices, expenses, todos, wiki);
+  - a local `state.db` (review queue, audit log, spend ledger);
+  - run logs, with secrets and message bodies redacted.
+
+  `sync push` commits and pushes that data to the private git repo you named, never to this repository.
+- **Background processes:** none by default. `webhook_receiver.py` is an optional HTTP listener you start yourself for push notifications. It only records events and never acts.
+- **Credentials:** all optional, one per provider: `COMPOSIO_MCP_KEY`, `M365_CLIENT_SECRET`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `DOCUSEAL_API_KEY`, `DOCUSEAL_MCP_TOKEN` and the two webhook secrets. Under Hermes they are read only through Hermes (`get_secret`, and per session for the plugin's own commands). The plugin stores no tokens of its own.
+- **Approvals:** sending, moving, deleting, filing, signing and paid data calls all go through the review queue: propose, approve, execute, audit. `CHIEF_OF_STAFF_AUTO_APPROVE` and `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` are operator break-glass switches that are off by default. Without a terminal, any confirmation that needs one is refused, never left waiting.
+- **Telemetry:** none.
 
 ---
 
@@ -236,6 +267,7 @@ Failed readiness rows print the exact diagnose command. No stack-trace archaeolo
 | [`docs/REVIEW_QUEUE.md`](docs/REVIEW_QUEUE.md) | Review, approve, execute, audit |
 | [`docs/BETA_DAILY_LOOP.md`](docs/BETA_DAILY_LOOP.md) | The daily operating loop |
 | [`docs/PIPELINE_MANAGER.md`](docs/PIPELINE_MANAGER.md) | CRM operations |
+| [`docs/HERMES_CATALOG.md`](docs/HERMES_CATALOG.md) | Hermes plugin-catalog entry, rule-by-rule compliance, submission steps |
 | [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md) | Several companies on one install: registry, isolation, group roll-up |
 | [`docs/BOOKKEEPER_INGESTION.md`](docs/BOOKKEEPER_INGESTION.md) | Invoice ingestion |
 | [`docs/MEMORY_WIKI_HARDENING.md`](docs/MEMORY_WIKI_HARDENING.md) | Knowledge lint, backup, rollback |

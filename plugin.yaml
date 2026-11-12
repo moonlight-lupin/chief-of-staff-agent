@@ -1,9 +1,41 @@
 name: chief-of-staff
-version: 0.8.0
+version: 0.8.1
 author: moonlight-lupin
 license: Apache-2.0
 description: "AI Chief of Staff for SMEs — briefings, deadlines, pipeline, bookkeeping, documents and signing, calendar, knowledge base, research, travel, prospecting, SEO and AI-search visibility, competitor watch, spend budgets, multiple companies, and Notion sync — every consequential action approved before it runs."
 requires_skills: []
+
+# ── Hermes plugin catalog (NousResearch/hermes-agent plugin-catalog/README.md) ──
+# Rule 14: SemVer floor; the catalog entry declares the same one.
+requires_hermes: ">=0.23.0"
+homepage: https://github.com/moonlight-lupin/chief-of-staff-agent
+tags: [chief-of-staff, sme, operations, crm, bookkeeping, approvals, prospecting, seo]
+# Rule 6: what register() registers. Skills only, plus these hooks; no tools.
+provides_tools: []
+provides_hooks: [on_session_start, pre_llm_call, post_llm_call, pre_tool_call, post_tool_call]
+# Every key is optional (one per workspace provider), so none gates loading.
+requires_env: []
+# Rule 10: same list as pyproject.toml, each with an upper bound.
+python_dependencies:
+  - "PyYAML>=6.0,<7"
+  - "python-docx>=1.1,<2"
+  - "pymupdf>=1.24,<3"
+  - "requests>=2.31,<3"
+  - "google-auth>=2.38,<3"
+  - "cryptography>=38.0,<52"
+  - "msal>=1.28,<2"
+# Rule 11: secrets come only through Hermes. Each is stored by Hermes's
+# credential route (masked in the Desktop settings form), read in-process with
+# get_secret, and handed to the plugin's own commands per session through
+# register_session_env. Never a .env file or a key file under Hermes.
+config_schema:
+  composio_mcp_key: {type: secret, env: COMPOSIO_MCP_KEY, description: "Composio MCP key, for the composio workspace provider (Google or Microsoft 365 via managed OAuth)."}
+  m365_client_secret: {type: secret, env: M365_CLIENT_SECRET, description: "Microsoft Entra app client secret, for the m365 workspace provider (client-credentials flow)."}
+  google_service_account_json: {type: secret, env: GOOGLE_SERVICE_ACCOUNT_JSON, description: "Google service-account key JSON (the file's contents), for the google_api provider's REST writes."}
+  docuseal_api_key: {type: secret, env: DOCUSEAL_API_KEY, description: "DocuSeal API key, for the esign-connector skill (self-hosted DocuSeal)."}
+  docuseal_mcp_token: {type: secret, env: DOCUSEAL_MCP_TOKEN, description: "DocuSeal MCP token, if DocuSeal is reached through its MCP server."}
+  webhook_secret: {type: secret, env: CHIEF_OF_STAFF_WEBHOOK_SECRET, description: "Shared secret that signs inbound workspace webhooks (optional webhook mode)."}
+  webhook_channel_token: {type: secret, env: CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN, description: "Google push-channel token checked on inbound webhooks (optional webhook mode)."}
 optional_skills:
   # google-workspace provides google_api.py for reads. Its shipped script
   # offers `contacts list` only; contacts writes use the People API via the

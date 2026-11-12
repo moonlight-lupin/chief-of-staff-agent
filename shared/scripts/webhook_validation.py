@@ -11,6 +11,8 @@ import hashlib
 import hmac
 import json
 import os
+
+import plugin_secrets
 import time
 from typing import Any
 
@@ -18,7 +20,7 @@ from typing import Any
 # ─── HMAC (generic endpoint) ──────────────────────────────────
 
 def get_webhook_secret() -> str | None:
-    return os.getenv("CHIEF_OF_STAFF_WEBHOOK_SECRET")
+    return plugin_secrets.get("CHIEF_OF_STAFF_WEBHOOK_SECRET")
 
 
 def sign_payload(body: bytes, secret: str, timestamp: str | None = None) -> str:
@@ -119,7 +121,7 @@ def verify_pubsub_oidc(authorization_header: str | None) -> tuple[bool, str]:
 # ─── Calendar/Drive Channel Token (fail-closed) ──────────────
 
 def get_channel_token() -> str | None:
-    return os.getenv("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN")
+    return plugin_secrets.get("CHIEF_OF_STAFF_WEBHOOK_CHANNEL_TOKEN")
 
 
 def verify_channel_token(token: str | None) -> bool:

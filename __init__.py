@@ -169,3 +169,12 @@ def register(ctx):
     # Register all 9 quality hooks
     from . import hooks
     hooks.register_all_hooks(ctx)
+
+    # Catalog rule 11: the plugin's commands run as child processes, so hand
+    # them the declared secrets per session, each read with get_secret.
+    # Older Hermes releases without the API simply skip this.
+    register_session_env = getattr(ctx, "register_session_env", None)
+    if callable(register_session_env):
+        import plugin_secrets  # shared/scripts is on sys.path once hooks is imported
+
+        register_session_env(list(plugin_secrets.SECRETS), plugin_secrets.session_env)
