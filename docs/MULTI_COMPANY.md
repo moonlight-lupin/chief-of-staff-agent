@@ -35,9 +35,9 @@ registry (companies.yaml)
   queue. The group config lists its approvers.
 - **Connector identity is detected, not prevented.** Under the `agent`
   provider the plugin cannot stop a connector acting from the wrong mailbox.
-  Each company declares the accounts it expects, and `record-execution` records
-  the account that actually acted, so a mismatch shows up in the audit log and
-  in `doctor`. `capabilities` states this limitation.
+  `capabilities` states this limitation now. In phase 2, each company declares
+  the accounts it expects and `record-execution` records the account that
+  actually acted, so a mismatch shows up in the audit log and in `doctor`.
 
 ## Spend envelopes (phase 4)
 
@@ -62,7 +62,7 @@ Every call is audited along with its cost.
 | Phase | Scope |
 |---|---|
 | 1 | Registry, active-company resolution, disjoint-store validation, `company_id` binding on actions, `capabilities` shows the company. |
-| 2 | Group store and queue, `share:` read policy, `daily --group` roll-up. |
+| 2 | Group store and queue, `share:` read policy, `daily --group` roll-up, expected-account declaration and executing-account audit. |
 | 3 | Notion action types (`notion.page.create/update`, `notion.db.upsert`, `notion.page.archive`) and skills `notion-sync`, `notion-wiki`, `notion-capture`. |
 | 4 | Spend envelopes, then Monid skills `prospecting`, `seo-audit`, `competitor-watch`. Covers PDPA data minimisation, a source record for every lead, and a Do Not Call flag before any contact. |
 

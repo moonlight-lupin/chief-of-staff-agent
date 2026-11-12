@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — Multi-company phase 1
+
+Lets one install serve several companies, each with its own isolated store.
+Design and decisions: [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md).
+**This change touches the pending-action state machine and the approval
+fingerprint.**
+
+### Changes
+
+- New `shared/scripts/company_registry.py`. The optional registry
+  (`shared/config/companies.yaml` or `CHIEF_OF_STAFF_REGISTRY`) lists
+  companies and groups. Loading it refuses a company whose `project_root` is
+  the same as, or nested inside, another company's, and refuses a declared
+  `company.id` that does not match the registry slug.
+- You select the active company with `--company <slug>` on
+  `chief_of_staff.py` / `review_queue.py`, or with `CHIEF_OF_STAFF_COMPANY`.
+  If several companies are registered and none is selected, `load_config`
+  refuses to run instead of guessing.
+- Pending actions now record `company_id` (a new column, migrated in place).
+  The ID is part of the approval fingerprint when set, so single-company
+  fingerprints are unchanged. A claim made from a different company is blocked
+  and audited as `company_mismatch`.
+- `capabilities` reports the active company and group, and states that the
+  agent provider cannot stop a connector acting from another company's
+  account.
+- Without a registry, behaviour is unchanged.
+
 ## v0.7.12 — Research skills 1.13.0 sync + task-brief skill
 
 deep-research 1.12.0 → **1.13.0** and entity-research 1.1.0 → **1.2.0**

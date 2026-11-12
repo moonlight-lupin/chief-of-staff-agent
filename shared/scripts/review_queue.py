@@ -877,6 +877,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _main(argv: list[str] | None = None) -> int:
+    from company_registry import RegistryError, apply_company_flag
+
+    try:
+        argv = apply_company_flag(argv if argv is not None else sys.argv[1:])
+    except RegistryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     parser = build_parser()
     args = parser.parse_args(argv)
     if hasattr(args, "sub_config"):

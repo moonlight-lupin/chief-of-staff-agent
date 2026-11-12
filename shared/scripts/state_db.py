@@ -136,6 +136,7 @@ _ALLOWED_CAS_COLUMNS: frozenset[str] = frozenset({
     "last_error",
     "result",
     "approval_hash",
+    "company_id",
 })
 
 _SCHEMA_SQL = """
@@ -171,7 +172,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     retry_count INTEGER DEFAULT 0,
     last_error TEXT,
     result TEXT,
-    approval_hash TEXT
+    approval_hash TEXT,
+    company_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pa_state ON pending_actions(state);
 CREATE INDEX IF NOT EXISTS idx_pa_created ON pending_actions(created_at);
@@ -556,6 +558,7 @@ def _action_insert_params(action: Mapping[str, Any]) -> tuple[Any, ...]:
         action.get("last_error"),
         _dumps(action["result"]) if action.get("result") is not None else None,
         action.get("approval_hash"),
+        action.get("company_id"),
     )
 
 
@@ -565,19 +568,34 @@ INSERT OR REPLACE INTO pending_actions (
     approver, approval_reason, created_at, approved_at, executing_at,
     executed_at, cancelled_at, dismissed_at, expired_at, failed_at,
     cancel_reason, dismiss_reason, retry_count, last_error, result,
-    approval_hash
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    approval_hash, company_id
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 
+def _config_company_id(config: Any) -> str | None:
+    """The registry company a config was resolved for, or None (single-company)."""
+    try:
+        company = config["company"]
+        value = company.get("id") if hasattr(company, "get") else None
+    except (KeyError, TypeError, AttributeError):
+        return None
+    return str(value) if value else None
+
+
 def approval_hash(action: Mapping[str, Any]) -> str:
-    """Fingerprint of what a human approved: type, target and payload.
+    """Fingerprint of what a human approved: type, target, payload and company.
 
     Stored at approval and re-checked before execution, so an action cannot
     be changed after approval — or inserted as 'approved' — and still run.
+    The company is included only when set, so single-company installs keep
+    their existing fingerprints (docs/MULTI_COMPANY.md).
     """
+    parts: list[Any] = [action.get("type") or "", action.get("target") or "", action.get("payload") or {}]
+    if action.get("company_id"):
+        parts.append({"company_id": str(action["company_id"])})
     material = json.dumps(
-        [action.get("type") or "", action.get("target") or "", action.get("payload") or {}],
+        parts,
         sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str,
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -651,6 +669,7 @@ class StateDB:
             self.conn.execute("DROP INDEX IF EXISTS idx_ev_key")
             self._ensure_column("pending_actions", "failed_at", "TEXT")
             self._ensure_column("pending_actions", "approval_hash", "TEXT")
+            self._ensure_column("pending_actions", "company_id", "TEXT")
             self.conn.execute("INSERT OR IGNORE INTO audit_lock (id) VALUES (1)")
             self.conn.commit()
             # BEGIN IMMEDIATE so two writers cannot both read version N and
@@ -940,6 +959,7 @@ class StateDB:
             "last_error": None,
             "cancel_reason": None,
             "dismiss_reason": None,
+            "company_id": _config_company_id(self.config),
         }
         with self.conn:
             self.conn.execute(_ACTION_INSERT_SQL, _action_insert_params(action))
@@ -994,6 +1014,18 @@ class StateDB:
         if requested_state == "executing" and _is_approval_lapsed(current):
             self._cas_update(action_id, "approved", "expired", expired_at=_now())
             _audit_action(self.config, current, "expired", {"reason": "approval_lapsed"})
+            return None
+
+        if requested_state == "executing" and (current.get("company_id") or None) != _config_company_id(self.config):
+            # Claimed from a different company than the one it was created
+            # and approved under: never cross the isolation boundary.
+            _audit_action(self.config, current, "blocked", {
+                "reason": "company_mismatch",
+                "action_company": current.get("company_id"),
+                "active_company": _config_company_id(self.config),
+            })
+            _log_event("company_mismatch", level="warning", component="pending_actions",
+                       action_id=action_id, action_type=current.get("type"))
             return None
 
         if requested_state == "executing" and current.get("approval_hash") != approval_hash(current):

@@ -1660,6 +1660,12 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
     # JSON is the default; --summary opts into the human-readable table.
     if getattr(args, "summary", False):
         print("Chief of Staff Capabilities")
+        company = report.get("company")
+        if company:
+            group = company.get("group") or "standalone"
+            print(f"  Company                   {company['id']} (group: {group}; "
+                  f"{company['registered_companies']} registered)")
+            print(f"    ! {report['company_note']}")
         print(f"  Provider                  {report['provider']}")
         print(f"  Live-verified             {'YES' if report['provider_verified'] else 'NO'}")
         if report["provider_verification_note"]:
@@ -2336,7 +2342,14 @@ def _run_had_warnings() -> bool:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    from company_registry import RegistryError, apply_company_flag
+
+    try:
+        argv = apply_company_flag(list(argv) if argv is not None else sys.argv[1:])
+    except RegistryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    args = parser.parse_args(argv)
 
     command = getattr(args, "command", None)
 

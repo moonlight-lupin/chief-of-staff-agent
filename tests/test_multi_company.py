@@ -217,8 +217,8 @@ def test_claim_from_another_company_is_refused_and_audited(two_companies, monkey
 
     assert state_db.mark_executing(beta, action["id"]) is None
     assert state_db.get_pending_action(beta, action["id"])["state"] == "approved"
-    audit_text = "".join(p.read_text() for p in (beta_root / ".audit").rglob("*") if p.is_file())
-    assert "company_mismatch" in audit_text
+    audit_bytes = b"".join(p.read_bytes() for p in beta_root.rglob("*") if p.is_file() and "audit" in str(p))
+    assert b"company_mismatch" in audit_bytes
 
     # The owning company can still claim it.
     assert state_db.mark_executing(acme, action["id"])["state"] == "executing"
@@ -260,3 +260,34 @@ def test_capabilities_reports_active_company(two_companies, monkeypatch):
     config = _config_for("beta", monkeypatch)
     report = capability_report.build_capability_report(config)
     assert report["company"] == {"id": "beta", "group": "lupin", "registered_companies": 2}
+
+
+# ---------------------------------------------------------------- --company flag
+
+
+def test_company_flag_is_stripped_and_selects_company(monkeypatch):
+    monkeypatch.delenv("CHIEF_OF_STAFF_COMPANY", raising=False)
+    argv = reg.apply_company_flag(["capabilities", "--company", "beta", "--summary"])
+    assert argv == ["capabilities", "--summary"]
+    import os
+    assert os.environ["CHIEF_OF_STAFF_COMPANY"] == "beta"
+    assert reg.apply_company_flag(["--company=acme", "doctor"]) == ["doctor"]
+    assert os.environ["CHIEF_OF_STAFF_COMPANY"] == "acme"
+
+
+def test_company_flag_without_value_is_an_error():
+    with pytest.raises(reg.RegistryError):
+        reg.apply_company_flag(["capabilities", "--company"])
+
+
+def test_review_queue_claim_honours_company_flag(two_companies, monkeypatch, capsys):
+    import review_queue
+
+    acme = _config_for("acme", monkeypatch)
+    action = state_db.create_pending_action(acme, "mail.send", "agent", "x@example.com", {"s": 1})
+    state_db.approve_pending_action(acme, action["id"], approver="op", reason="ok")
+    monkeypatch.delenv("CHIEF_OF_STAFF_COMPANY", raising=False)
+
+    # beta has its own store: the action does not exist there.
+    assert review_queue._main(["--company", "beta", "claim", "--action-id", action["id"]]) == 1
+    assert review_queue._main(["--company", "acme", "claim", "--action-id", action["id"]]) == 0

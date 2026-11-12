@@ -24,3 +24,6 @@ skills.local/
 .cos-backups/
 .cos-tmp/
 .cos-briefing.lock
+# Multi-company registry and per-company configs (docs/MULTI_COMPANY.md)
+shared/config/companies.yaml
+shared/config/companies/

@@ -165,6 +165,50 @@ def _default_config_path() -> Path:
     return get_config_dir() / "company.yaml"
 
 
+def _registry_config_path() -> tuple[Path, str | None]:
+    """Resolve the config path, honouring the multi-company registry.
+
+    Precedence (docs/MULTI_COMPANY.md): ``CHIEF_OF_STAFF_COMPANY`` via the
+    registry, then ``CHIEF_OF_STAFF_CONFIG``, then the registry's only company,
+    then ``shared/config/company.yaml``. Raises ``RegistryError`` rather than
+    guessing when several companies are registered and none is selected.
+    """
+
+    from company_registry import COMPANY_ENV, RegistryError, load_registry, resolve_active_company
+
+    selected = os.getenv(COMPANY_ENV)
+    registry = load_registry()
+    if selected:
+        if registry is None:
+            raise RegistryError(f"{COMPANY_ENV}={selected} is set but no company registry exists")
+        company = resolve_active_company(registry, selected)
+        return company.config_path, company.slug
+    env_path = os.getenv("CHIEF_OF_STAFF_CONFIG")
+    if env_path:
+        return Path(env_path).expanduser(), None
+    if registry is not None:
+        company = resolve_active_company(registry)
+        return company.config_path, company.slug
+    return get_config_dir() / "company.yaml", None
+
+
+def _registered_company_for(config_path: Path) -> str | None:
+    """Return the registry slug whose config is ``config_path``, if any."""
+
+    try:
+        from company_registry import load_registry
+
+        registry = load_registry()
+    except Exception:
+        return None
+    if registry is None:
+        return None
+    for company in registry.companies.values():
+        if company.config_path == config_path:
+            return company.slug
+    return None
+
+
 def load_dotenv_file(path: str | os.PathLike[str] | None = None) -> dict[str, str]:
     """Populate ``os.environ`` from a ``.env`` file (no python-dotenv dependency).
 
@@ -412,7 +456,16 @@ def load_config(
     # entrypoint that loads config (shell env always wins; values never logged).
     load_dotenv_file()
 
-    config_path = Path(path).expanduser() if path else _default_config_path()
+    company_id: str | None = None
+    if path:
+        config_path = Path(path).expanduser()
+    else:
+        try:
+            config_path, company_id = _registry_config_path()
+        except Exception as exc:  # RegistryError: ambiguous, unknown, overlapping stores
+            if not quiet:
+                print(f"Chief-of-Staff company selection failed: {exc}", file=sys.stderr)
+            return None
     try:
         config_path = config_path.resolve()
         if not config_path.exists():
@@ -426,6 +479,12 @@ def load_config(
             return None
         data = _load_yaml(config_path)
         _validate_config(data, config_path)
+        if company_id is None:
+            company_id = _registered_company_for(config_path)
+        if company_id:
+            company = data.get("company")
+            if isinstance(company, dict):
+                company["id"] = company_id
         return Config(data, source_path=config_path)
     except (OSError, ConfigError, Exception) as exc:
         if not quiet:
