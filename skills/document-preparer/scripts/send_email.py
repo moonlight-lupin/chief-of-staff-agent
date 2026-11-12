@@ -226,6 +226,9 @@ def cmd_execute(args: argparse.Namespace) -> int:
     prev_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
     os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
+    from workspace_guardrails import execution_grant
+    _cos_grant = execution_grant(cfg, args.action_id)
+    _cos_grant.__enter__()
 
     # Execute the send
     try:
@@ -240,6 +243,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print(f"Send failed: {exc}", file=sys.stderr)
         return 1
     finally:
+        _cos_grant.__exit__(None, None, None)
         if prev_destr is None:
             os.environ.pop("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE", None)
         else:

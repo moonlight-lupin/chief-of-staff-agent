@@ -137,6 +137,7 @@ _ALLOWED_CAS_COLUMNS: frozenset[str] = frozenset({
     "result",
     "approval_hash",
     "company_id",
+    "approval_signature",
 })
 
 _SCHEMA_SQL = """
@@ -173,7 +174,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     last_error TEXT,
     result TEXT,
     approval_hash TEXT,
-    company_id TEXT
+    company_id TEXT,
+    approval_signature TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pa_state ON pending_actions(state);
 CREATE INDEX IF NOT EXISTS idx_pa_created ON pending_actions(created_at);
@@ -559,6 +561,7 @@ def _action_insert_params(action: Mapping[str, Any]) -> tuple[Any, ...]:
         _dumps(action["result"]) if action.get("result") is not None else None,
         action.get("approval_hash"),
         action.get("company_id"),
+        action.get("approval_signature"),
     )
 
 
@@ -568,8 +571,8 @@ INSERT OR REPLACE INTO pending_actions (
     approver, approval_reason, created_at, approved_at, executing_at,
     executed_at, cancelled_at, dismissed_at, expired_at, failed_at,
     cancel_reason, dismiss_reason, retry_count, last_error, result,
-    approval_hash, company_id
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    approval_hash, company_id, approval_signature
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 
@@ -679,6 +682,7 @@ class StateDB:
             self._ensure_column("pending_actions", "failed_at", "TEXT")
             self._ensure_column("pending_actions", "approval_hash", "TEXT")
             self._ensure_column("pending_actions", "company_id", "TEXT")
+            self._ensure_column("pending_actions", "approval_signature", "TEXT")
             self.conn.execute("INSERT OR IGNORE INTO audit_lock (id) VALUES (1)")
             self.conn.commit()
             # BEGIN IMMEDIATE so two writers cannot both read version N and
@@ -1006,6 +1010,25 @@ class StateDB:
             actions = [a for a in actions if not _is_expired(a)]
         return actions
 
+    def _signed_decision_ok(self, action: Mapping[str, Any], decision: str, approver: str,
+                            signature: Any, on_execute: bool = False) -> bool:
+        """True unless this store is enrolled for signed approvals and the
+        decision's signature is missing or invalid (docs/SECURITY_MODEL.md)."""
+        from approval_signing import STORE as _SIGN_STORE, signing_state, verify_with
+
+        data = self.get_kv(_SIGN_STORE)
+        if not signing_state(data)[0]:
+            return True
+        reason = verify_with(data, action, decision, approver, signature)
+        if reason is None:
+            return True
+        _audit_action(self.config, action, "blocked", {
+            "reason": reason, "decision": decision, "stage": "execute" if on_execute else "decide",
+        })
+        _log_event(reason, level="warning", component="pending_actions",
+                   action_id=action.get("id"), action_type=action.get("type"))
+        return False
+
     def transition_action(self, action_id: str, new_state: str, **fields: Any) -> dict | None:
         current = self.get_action(action_id)
         if current is None:
@@ -1036,6 +1059,12 @@ class StateDB:
                 _log_event("approver_not_authorised", level="warning", component="pending_actions",
                            action_id=action_id, action_type=current.get("type"))
                 return None
+            if not self._signed_decision_ok(current, "approve", approver, fields.get("signature")):
+                return None
+
+        if requested_state == "dismissed" and not self._signed_decision_ok(
+                current, "dismiss", str(fields.get("approver") or "").strip(), fields.get("signature")):
+            return None
 
         if requested_state == "executing" and (current.get("company_id") or None) != _config_company_id(self.config):
             # Claimed from a different company than the one it was created
@@ -1047,6 +1076,11 @@ class StateDB:
             })
             _log_event("company_mismatch", level="warning", component="pending_actions",
                        action_id=action_id, action_type=current.get("type"))
+            return None
+
+        if requested_state == "executing" and not self._signed_decision_ok(
+                current, "approve", str(current.get("approver") or "").strip(),
+                current.get("approval_signature"), on_execute=True):
             return None
 
         if requested_state == "executing" and current.get("approval_hash") != approval_hash(current):
@@ -1082,6 +1116,8 @@ class StateDB:
                 extra["approval_reason"] = fields["reason"]
             if "approval_reason" in fields:
                 extra["approval_reason"] = fields["approval_reason"]
+            if current["state"] == "requested" and fields.get("signature"):
+                extra["approval_signature"] = fields["signature"]
         elif new_state == "executing":
             extra["executing_at"] = now
         elif new_state == "executed":
@@ -1094,6 +1130,10 @@ class StateDB:
                 extra["cancel_reason"] = fields.get("cancel_reason") or fields.get("reason")
         elif new_state == "dismissed":
             extra["dismissed_at"] = now
+            if fields.get("signature"):
+                extra["approval_signature"] = fields["signature"]
+            if fields.get("approver"):
+                extra["approver"] = fields["approver"]
             extra["dismiss_reason"] = (
                 fields.get("dismiss_reason")
                 if fields.get("dismiss_reason") is not None
@@ -2007,10 +2047,12 @@ def approve_pending_action(
     action_id: str,
     approver: str | None = None,
     reason: str | None = None,
+    signature: str | None = None,
 ) -> dict[str, Any] | None:
     return _call_db(
         config,
-        lambda db: db.transition_action(action_id, "approved", approver=approver, reason=reason),
+        lambda db: db.transition_action(action_id, "approved", approver=approver, reason=reason,
+                                        signature=signature),
     )
 
 
@@ -2029,10 +2071,13 @@ def dismiss_pending_action(
     config: Any,
     action_id: str,
     reason: str | None = None,
+    approver: str | None = None,
+    signature: str | None = None,
 ) -> dict[str, Any] | None:
     return _call_db(
         config,
-        lambda db: db.transition_action(action_id, "dismissed", reason=reason),
+        lambda db: db.transition_action(action_id, "dismissed", reason=reason, approver=approver,
+                                        signature=signature),
     )
 
 

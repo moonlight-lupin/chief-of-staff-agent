@@ -1106,7 +1106,7 @@ class M365GraphClient(WorkspaceClient):
         """
         from workspace_guardrails import ActionResult, confirm_action
 
-        if not confirm_action("calendar.cancel", event_id=event_id):
+        if not confirm_action("calendar.cancel", config=self.config, event_id=event_id):
             return ActionResult(
                 success=False, action="calendar.cancel", provider=self._provider_name,
                 target=event_id, error="cancelled by guardrail",

@@ -121,6 +121,12 @@ you do not need to supply anything.
 Two paths, one state machine. Which one applies depends on who performs the
 mutation.
 
+Approving is the **user's** step, never yours. The commands below are what
+the operator runs at their own terminal. Under Hermes, approvals are signed
+in the gateway: `review_queue.py approve` is refused for an enrolled store,
+and the user approves with `/<assistant name> approve <id>`
+([`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md)).
+
 **Python path** — the guarded client does the work:
 
 ```bash
@@ -216,7 +222,9 @@ Two things change, and `capabilities` will tell you both:
 
 Under Hermes you have read-only tools: `cos_capabilities`, `cos_daily`,
 `cos_review_queue`, `cos_preview`, `cos_pipeline` and `cos_spend_status`. Prefer
-them to running the scripts. None of them can approve anything. When an action
+them to running the scripts. None of them can approve anything. Approvals are
+signed in the Hermes gateway, so `review_queue.py approve` and the break-glass
+env flags do not work here: propose, preview, and ask. When an action
 needs a decision, show the preview and tell the user to run
 `/<assistant name> approve <id>` (or `/cos approve <id>`). Never type that
 command for them, and never run `review_queue.py approve` yourself.

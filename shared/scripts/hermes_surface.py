@@ -201,11 +201,15 @@ def _usage(command: str) -> str:
             f"{c} help                  this list")
 
 
+def _owner_name(config: Mapping[str, Any]) -> str:
+    return str(((config.get("user") or {}).get("name")) or "").strip()
+
+
 def _approver(platform: str, source: Any, config: Mapping[str, Any]) -> tuple[str | None, str]:
     """(approver name, refusal). Owner surfaces, or a listed chat user; else refused."""
     platform = str(platform or "").strip().lower()
     if platform in OWNER_SURFACES:
-        name = str(((config.get("user") or {}).get("name")) or "").strip()
+        name = _owner_name(config)
         return (name or f"operator ({platform})"), ""
     if not platform or source is None:
         return None, "not allowed: approvals need your own CLI/Desktop session or a listed chat approver"
@@ -223,6 +227,92 @@ def _text(run: Mapping[str, Any]) -> str:
     if run.get("ok"):
         return body or "Done."
     return (body + "\n" if body else "") + (run.get("stderr") or "").strip() or f"Failed (exit {run.get('exit_code')})."
+
+
+# ------------------------------------------------------------ signed decisions
+#
+# The gateway's signing key exists only in this process's memory, created when
+# Hermes loads the plugin (register). Approve/dismiss sign here, in-process;
+# nothing is handed to a child process, and a copy of this module imported by
+# any other process has no key and cannot decide anything.
+
+_SIGNER: Any = None
+
+
+def activate_gateway_signer(*configs: Any) -> None:
+    global _SIGNER
+    import approval_signing
+
+    if _SIGNER is None:
+        _SIGNER = approval_signing.GatewaySigner.generate()
+    for config in configs:
+        if config:
+            _SIGNER.enrol(config)
+
+
+def deactivate_gateway_signer() -> None:
+    global _SIGNER
+    _SIGNER = None
+
+
+def _registry_configs() -> list[Any]:
+    """Every company and group config this gateway serves (or the single config)."""
+    try:
+        from company_registry import load_registry
+        from config_loader import load_config
+
+        registry = load_registry()
+    except Exception:
+        registry = None
+    if not registry:
+        config = _load_config()
+        return [config] if config else []
+    out = []
+    for scope in [*registry.companies.values(), *registry.groups.values()]:
+        path = getattr(scope, "config_path", None)
+        if path:
+            try:
+                config = load_config(path, quiet=True)
+            except Exception:
+                config = None
+            if config:
+                out.append(config)
+    return out
+
+
+def _audit_refusal(config: Any, decision: str, action_id: str, platform: str, source: Any, detail: str) -> None:
+    try:
+        from workspace_audit import audit_workspace_action
+
+        audit_workspace_action(config, "hermes", f"cos.{decision}", "slash", target=action_id, status="blocked",
+                               extra={"reason": "slash_approval_refused", "detail": detail,
+                                      "platform": platform or "(unknown)",
+                                      "user_id": str(getattr(source, "user_id", "") or "")})
+    except Exception:
+        pass
+
+
+def _decide(config: Any, decision: str, action_id: str, approver: str, reason: str, command: str) -> str:
+    from state_db import approve_pending_action, dismiss_pending_action, get_pending_action
+
+    if _SIGNER is None:
+        return (f"Not {decision}d: approvals are made from your Hermes session with /{command} {decision}. "
+                f"This process has no gateway signer.")
+    action = get_pending_action(config, action_id)
+    if not action:
+        return f"No action {action_id} in the review queue."
+    _SIGNER.enrol(config)
+    signature = _SIGNER.sign_decision(action, decision, approver)
+    if decision == "approve":
+        done = approve_pending_action(config, action_id, approver=approver, reason=reason, signature=signature)
+    else:
+        done = dismiss_pending_action(config, action_id, reason=reason, approver=approver, signature=signature)
+    if done:
+        verb = "Approved" if decision == "approve" else "Dismissed"
+        return f"{verb} {action_id}: {action.get('summary') or action.get('type')}"
+    current = get_pending_action(config, action_id) or {}
+    return (f"Not {decision}d: {action_id} is {current.get('state', 'unknown')} "
+            f"(only requested actions can be {decision}d; an expired one needs a new proposal).")
 
 
 def cos_command(raw_args: str = "", *, platform: str = "", source: Any = None, session_id: str = "",
@@ -250,12 +340,11 @@ def cos_command(raw_args: str = "", *, platform: str = "", source: Any = None, s
             config = _load_config()
             approver, refusal = _approver(platform, source, config)
             if approver is None:
+                _audit_refusal(config, sub, action_id, platform, source, refusal)
                 return refusal
-            if sub == "dismiss":
-                return _text(run_script("review_queue.py", ["dismiss", "--action-id", action_id, "--reason", reason]))
-            reason = reason or f"Approved via /{command} on {platform}"
-            return _text(run_script("review_queue.py", ["approve", "--action-id", action_id,
-                                                        "--approver", approver, "--reason", reason]))
+            if sub == "approve":
+                reason = reason or f"Approved via /{command} on {platform}"
+            return _decide(config, sub, action_id, approver, reason, command)
         return _usage(command)
     except Exception as exc:  # handlers never raise
         return f"/{command} failed: {exc}"
@@ -293,3 +382,9 @@ def register(ctx: Any) -> None:
             register_command(name, make_command_handler(name),
                              description=f"/{name}: Chief of Staff briefing, review queue and approvals",
                              args_hint="[review|preview|approve|dismiss|help] [id] [reason]")
+        # This process is now the only one that can approve: enrol every store
+        # it serves for signed approvals (approval_signing).
+        try:
+            activate_gateway_signer(*_registry_configs())
+        except Exception as exc:  # never break plugin loading; doctor reports enrolment
+            print(f"[CoS] approval signing not enabled: {exc}", file=sys.stderr)

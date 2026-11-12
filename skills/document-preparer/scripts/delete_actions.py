@@ -307,6 +307,9 @@ def cmd_execute(args: argparse.Namespace) -> int:
     old_destructive = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
     os.environ["CHIEF_OF_STAFF_AUTO_APPROVE"] = "1"
     os.environ["CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE"] = "1"
+    from workspace_guardrails import execution_grant
+    _cos_grant = execution_grant(cfg, args.action_id)
+    _cos_grant.__enter__()
 
     try:
         method = getattr(client, method_name, None)
@@ -326,6 +329,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print(f"Execute failed: {exc}", file=sys.stderr)
         return 1
     finally:
+        _cos_grant.__exit__(None, None, None)
         if old_auto is None:
             os.environ.pop("CHIEF_OF_STAFF_AUTO_APPROVE", None)
         else:

@@ -13,6 +13,8 @@ Environment:
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import inspect
 import os
@@ -267,7 +269,65 @@ def _log_guardrail_blocked(action: str, reason: str) -> None:
         pass
 
 
-def confirm_action(action: str, **details: Any) -> bool:
+# ── Signed-approval execution grants (docs/SECURITY_MODEL.md) ──────────────
+#
+# For a store enrolled for signed approvals, the env break-glass flags and the
+# TTY prompt are not approval: an agent can set an env var for one command or
+# type "y" into a PTY. A guarded write passes only inside execution_grant(),
+# which is tied to ONE action that is executing with a valid signature, and
+# only for that action's own write type.
+
+_GRANT: contextvars.ContextVar[Any] = contextvars.ContextVar("cos_execution_grant", default=None)
+
+
+def _grant_aliases(action_type: str) -> frozenset[str]:
+    names = {action_type}
+    for a, b in (("gmail.", "mail."), ("drive.", "files.")):
+        for name in list(names):
+            if name.startswith(a):
+                names.add(b + name[len(a):])
+            elif name.startswith(b):
+                names.add(a + name[len(b):])
+    if action_type.endswith(".label") or action_type.endswith(".tag"):
+        names |= {"gmail.create_label", "mail.create_tag"}
+    return frozenset(names)
+
+
+@contextlib.contextmanager
+def execution_grant(config: Any, action_id: str):
+    """Allow the guarded writes of one approved, executing action."""
+    from approval_signing import enforced, verify_decision
+    from state_db import get_pending_action
+
+    action = get_pending_action(config, action_id)
+    if not action or action.get("state") != "executing":
+        raise PermissionError(f"no executing action {action_id}: claim or execute it first")
+    is_enforced = enforced(config)
+    if is_enforced:
+        reason = verify_decision(config, action, "approve", str(action.get("approver") or "").strip(),
+                                 action.get("approval_signature"))
+        if reason:
+            raise PermissionError(f"action {action_id}: {reason}")
+    token = _GRANT.set({"action_id": action_id, "allowed": _grant_aliases(str(action.get("type") or "")),
+                        "enforced": is_enforced})
+    try:
+        yield
+    finally:
+        _GRANT.reset(token)
+
+
+def _store_enforced(config: Any) -> bool:
+    if config is None:
+        return False
+    try:
+        from approval_signing import enforced
+
+        return enforced(config)
+    except Exception:
+        return False
+
+
+def confirm_action(action: str, *, config: Any = None, **details: Any) -> bool:
     """Check if an action should proceed.
 
     Returns True if:
@@ -290,6 +350,18 @@ def confirm_action(action: str, **details: Any) -> bool:
             file=sys.stderr,
         )
         _log_guardrail_blocked(action, "unknown_action")
+        return False
+
+    grant = _GRANT.get()
+    if grant is not None and action in grant["allowed"]:
+        return True
+    if (grant is not None and grant["enforced"]) or (grant is None and _store_enforced(config)):
+        print(
+            f"⚠️  '{action}' needs a signed approval: propose it, then the user approves with "
+            f"/<assistant name> approve <id> (or /cos approve <id>). Env flags and prompts do not count here.",
+            file=sys.stderr,
+        )
+        _log_guardrail_blocked(action, "signed_approval_required")
         return False
 
     if action in DESTRUCTIVE_ACTIONS:
@@ -438,7 +510,7 @@ def guarded(
             resolved_audit_tool = audit_tool(self) if callable(audit_tool) else audit_tool
             resolved_tool_slug = tool_slug(self) if callable(tool_slug) else tool_slug
 
-            if not confirm_action(action_id, **{target_arg: target}):
+            if not confirm_action(action_id, config=getattr(self, "config", None), **{target_arg: target}):
                 # confirm_action already emitted guardrail_blocked with the
                 # specific gate reason; emitting again here would duplicate the
                 # event, so the decorator's block path stays silent. On success
