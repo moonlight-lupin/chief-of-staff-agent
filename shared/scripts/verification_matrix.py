@@ -17,7 +17,8 @@ module says how far each supported action has been *proven*:
     Nothing at all. Should be rare; prefer turning the capability off.
 
 A ``live`` label is a claim about the outside world, so it is only added by a
-maintainer, in a reviewed change, from an evidence file. The opt-in harness
+maintainer, in a reviewed change, from an evidence file. Evidence files are
+plain, unsigned JSON: they are an input to that review, never a trust anchor. The opt-in harness
 (``connect_workspace.py --verify-writes --record-evidence``) writes that file
 under ``<project_root>/verify/evidence/``, and :func:`promotion_candidates`
 lists what it could justify. Nothing here edits the matrix by itself, and
@@ -50,7 +51,8 @@ PROVIDER_ALIASES = {
     "composio_microsoft:mcp": "composio_microsoft",
 }
 
-_GMAIL_CATALOG = "docs.composio.dev/toolkits/gmail (catalog check, v0.3.13)"
+_GMAIL_CATALOG = ("GMAIL_LIST_LABELS / GMAIL_BATCH_MODIFY_MESSAGES slugs from the Composio Gmail "
+                  "toolkit catalog (wired v0.7.9–v0.7.10); not executed live")
 
 
 def _live(date: str, evidence: str) -> dict[str, str]:
@@ -72,7 +74,7 @@ _ONEDRIVE = ("Composio OneDrive: throwaway file downloaded, then trashed to the 
 _UPLOAD = ("throwaway text and binary (.pdf) files uploaded with only the MCP key "
            "(remote-sandbox staging), then trashed (v0.3.16)")
 _CONTACTS = ("google_api.py contacts subcommands against a Google Workspace account; "
-             "an install whose script has the write subcommands (v0.6.x)")
+             "an install whose script has the write subcommands (v0.7.1)")
 
 EVIDENCE: dict[str, dict[str, dict[str, str]]] = {
     "google_api": {
@@ -105,7 +107,8 @@ EVIDENCE: dict[str, dict[str, dict[str, str]]] = {
                                         "(v0.3.7 acceptance test)"),
         "calendar.list": _live("2026-07", "OUTLOOK_GET_CALENDAR_VIEW against an active Outlook "
                                           "connection (v0.3.7 acceptance test)"),
-        "files.search": _live("2026-07", "ONE_DRIVE_SEARCH_ITEMS read against live OneDrive (v0.3.9)"),
+        "files.search": _catalog("ONE_DRIVE_SEARCH_ITEMS confirmed in the Composio catalog via "
+                                 "COMPOSIO_SEARCH_TOOLS (v0.3.7); no dated live run recorded"),
         "mail.draft": _live("2026-07-16", "OUTLOOK_CREATE_DRAFT; drafts used by the move cycle (v0.3.10)"),
         "mail.send": _live("2026-07-16", _OUTLOOK_P3),
         "mail.list_folders": _live("2026-07-16", _OUTLOOK_P3),
@@ -117,9 +120,9 @@ EVIDENCE: dict[str, dict[str, dict[str, str]]] = {
         "mail.list_tags": _live("2026-07-16", _OUTLOOK_P4),
         "mail.tag": _live("2026-07-16", _OUTLOOK_P4),
         "mail.create_tag": _live("2026-07-16", _OUTLOOK_P4),
-        "calendar.create": _live("2026-07-16", "OUTLOOK_CALENDAR_CREATE_EVENT on live Outlook (v0.3.10)"),
-        "calendar.update": _live("2026-07-16", "OUTLOOK_UPDATE_CALENDAR_EVENT on live Outlook (v0.3.10)"),
-        "calendar.delete": _live("2026-07-16", "OUTLOOK_DELETE_CALENDAR_EVENT on live Outlook (v0.3.10)"),
+        "calendar.create": _live("2026-07-16", "OUTLOOK_CALENDAR_CREATE_EVENT on live Outlook (v0.3.9)"),
+        "calendar.update": _live("2026-07-16", "OUTLOOK_UPDATE_CALENDAR_EVENT on live Outlook (v0.3.9)"),
+        "calendar.delete": _live("2026-07-16", "OUTLOOK_DELETE_CALENDAR_EVENT on live Outlook (v0.3.9)"),
         "files.download": _live("2026-07-16", _ONEDRIVE),
         "files.trash": _live("2026-07-16", _ONEDRIVE),
         "files.upload": _live("2026-07-17", "Composio OneDrive: " + _UPLOAD),
@@ -138,7 +141,8 @@ CHECK_ACTIONS: dict[str, tuple[str, ...]] = {
     "calendar_read": ("calendar.list",),
     "files_read": ("files.search",),
     "mail_draft": ("mail.draft",),
-    "mail_tag_write": ("mail.create_tag", "mail.tag"),
+    # Not mail.create_tag: the check passes when it reuses an existing label.
+    "mail_tag_write": ("mail.tag",),
     "mail_move_write": ("mail.archive", "mail.unarchive", "mail.trash", "mail.untrash"),
     "files_write": ("files.upload", "files.download", "files.trash"),
     "mail_send": (),
@@ -152,8 +156,9 @@ _AGENT_NOTE = (
 )
 _UNVERIFIED_NOTE = (
     "This provider has never been run against a live account: every action below is "
-    "proven only against a mocked transport. Treat it as unproven until "
-    "connect_workspace.py --verify --record-evidence passes on a real tenant."
+    "proven only against a mocked transport. Treat it as unproven. A passing "
+    "connect_workspace.py --verify --record-evidence run produces evidence that a "
+    "maintainer reviews and adds to the matrix; recording alone changes nothing here."
 )
 _DATE_RE = re.compile(r"^\d{4}-\d{2}(-\d{2})?$")
 
@@ -187,12 +192,20 @@ def level(provider: str, action: str) -> str:
     return entry["level"] if entry else "mocked"
 
 
-def provider_summary(provider: str) -> dict[str, Any]:
-    """Per-action levels, counts and a one-line verdict for one provider."""
+def provider_summary(provider: str, supported: list[str] | None = None) -> dict[str, Any]:
+    """Per-action levels, counts and a one-line verdict for one provider.
+
+    ``supported`` narrows the actions to what this install really supports
+    (e.g. google_api contacts writes depend on the installed script).
+    """
     evidence = EVIDENCE.get(canonical_provider(provider), {})
     actions: dict[str, dict[str, Any]] = {}
     counts = {name: 0 for name in LEVELS}
-    for action in _supported_actions(provider):
+    table = _supported_actions(provider)
+    if supported is not None:
+        allowed = {_caps._resolve_action(a) for a in supported}
+        table = [a for a in table if a in allowed]
+    for action in table:
         entry = dict(evidence.get(action) or {"level": "mocked"})
         actions[action] = entry
         counts[entry["level"]] += 1

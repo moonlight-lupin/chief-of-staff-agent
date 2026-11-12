@@ -52,11 +52,28 @@ APPROVED_EXPIRY_HOURS = 24
 MAX_RETRIES = 3
 # Actions that are not safe to repeat: a failure may have been a timeout after
 # the provider acted, so a retry could send or create twice. Their failure is
-# final — a retry is a new action and a new approval.
+# final — a retry is a new action and a new approval — unless the executor
+# says nothing was attempted (mark_failed(..., attempted=False)).
 NON_IDEMPOTENT_ACTIONS = frozenset({
     "gmail.send", "mail.send", "gmail.draft", "mail.draft",
     "calendar.create", "drive.upload", "files.upload", "contacts.create",
+    "notion.page.create", "notion.db.add_property",
 })
+_EXTERNAL_PREFIXES = ("gmail.", "mail.", "calendar.", "drive.", "files.", "contacts.", "notion.")
+_CREATING_VERBS = ("send", "create", "draft", "upload", "add_property")
+
+
+def final_on_failure(action_type: str) -> bool:
+    """True when a failed attempt must not return to approved.
+
+    The explicit list, plus any external type whose verb sends or creates, so a
+    new action type is safe by default.
+    """
+    action_type = str(action_type or "")
+    if action_type in NON_IDEMPOTENT_ACTIONS:
+        return True
+    verb = action_type.rsplit(".", 1)[-1]
+    return action_type.startswith(_EXTERNAL_PREFIXES) and verb in _CREATING_VERBS
 REPLAY_TTL_SECONDS = 3600 * 24
 PROCESSING_LEASE_SECONDS = 300
 MAX_BACKUPS = 20
@@ -1172,8 +1189,9 @@ class StateDB:
                 extra["last_error"] = fields["last_error"]
             elif "error" in fields:
                 extra["last_error"] = fields["error"]
+            attempted = fields.get("attempted", True) is not False
             if (retry_count >= MAX_RETRIES or self._signing_enforced()
-                    or current.get("type") in NON_IDEMPOTENT_ACTIONS):
+                    or (attempted and final_on_failure(current.get("type")))):
                 # Final: signed stores (a retry is a new signed approval) and
                 # actions that may already have happened (never silently re-run).
                 extra["failed_at"] = now
@@ -2168,10 +2186,16 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     )
 
 
-def mark_failed(config: Any, action_id: str, error: str) -> dict[str, Any] | None:
+def mark_failed(config: Any, action_id: str, error: str, *, attempted: bool = True) -> dict[str, Any] | None:
+    """Record a failed execution.
+
+    ``attempted=False`` means the executor refused before any provider call
+    (account mismatch, unsupported capability, missing grant): nothing can have
+    happened, so even a send may return to approved under the retry cap.
+    """
     return _call_db(
         config,
-        lambda db: db.transition_action(action_id, "failed", last_error=error),
+        lambda db: db.transition_action(action_id, "failed", last_error=error, attempted=attempted),
     )
 
 

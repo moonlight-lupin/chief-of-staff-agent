@@ -949,7 +949,8 @@ def _check_workspace_provider(fix: bool, data: dict[str, Any] | None, config_pat
 
 def _capability_provider_for_workspace(workspace: Mapping[str, Any]) -> str:
     provider = str(workspace.get("provider", "google_api") or "google_api")
-    mode = str(workspace.get("mode", "direct") or "direct")
+    # MCP is the only Composio mode (SDK/direct was removed); a missing mode means mcp.
+    mode = str(workspace.get("mode", "mcp") or "mcp")
     if provider != "composio":
         return provider
     try:

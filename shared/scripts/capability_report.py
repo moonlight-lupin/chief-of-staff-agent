@@ -160,7 +160,7 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         matrix_provider = _capability_provider_for_workspace(workspace)
     except Exception:  # pragma: no cover - doctor_base unavailable
         matrix_provider = provider
-    verification = verification_matrix.provider_summary(matrix_provider)
+    verification = verification_matrix.provider_summary(matrix_provider, supported=supported)
     verified = verification["provider_verified"]
     try:
         from company_registry import company_context

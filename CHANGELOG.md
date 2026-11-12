@@ -36,6 +36,24 @@
 - Corrected one claim: Composio Drive `files.download` was marked
   execution-verified, but the recorded 2026-07-16 run covered trash only. It is
   now `mocked`.
+- **Hardening from an adversarial review:**
+  - **Composio with no `mode`** now resolves to MCP, the only mode. It
+    previously resolved to a capability set that does not exist, so it
+    reported no supported actions and showed as unverified.
+  - **Failure finality is safe by default.** Any external send or create type
+    is final, including `notion.page.create` and `notion.db.add_property`.
+  - **A refusal before any provider call** (account mismatch, unsupported
+    capability, missing grant) is recorded with `attempted=False`, so the
+    action stays retryable.
+  - **The verification section** counts only the actions this install
+    supports.
+  - **A reused label** no longer counts as evidence for `mail.create_tag`.
+  - **Evidence labels corrected:**
+    - Outlook `files.search` is `catalog`.
+    - Contacts are recorded under v0.7.1.
+    - Outlook calendar writes are recorded under v0.3.9.
+  - **`APPROVAL_RUNBOOK.md`** and `send_email.py` describe final failures.
+    `list --state failed` now works.
 
 ### Untrusted content is data, not authority
 

@@ -388,3 +388,98 @@ class TestNoSilentRetry:
         failed = self._fail_once(tmp_path, "gmail.archive", target="msg-1", payload={"message_id": "msg-1"})
         assert failed["state"] == "approved"
         assert failed["retry_count"] == 1
+
+
+# ── adversarial review regressions ──────────────────────────────────────────
+
+class TestReviewRegressions:
+    def _report(self, **workspace):
+        import chief_of_staff
+
+        return chief_of_staff.build_capability_report({"integrations": {"workspace": workspace}})
+
+    @pytest.mark.parametrize("family, expected", [(None, "composio:mcp"), ("microsoft", "composio_microsoft:mcp")])
+    def test_composio_without_mode_is_mcp_and_verified(self, family, expected):
+        ws = {"provider": "composio"} | ({"family": family} if family else {})
+        report = self._report(**ws)
+        assert report["verification"]["provider"] == expected
+        assert report["provider_verified"] is True
+        assert report["verification"]["counts"]["live"] > 0
+        assert report["supported"]
+
+    def test_install_without_contacts_writes_does_not_count_them(self):
+        report = self._report(provider="google_api")
+        if "contacts.create" in report["unsupported"]:
+            assert "contacts.create" not in report["verification"]["actions"]
+        else:
+            assert report["verification"]["actions"]["contacts.create"]["level"] == "live"
+
+    def test_summary_honours_an_explicit_supported_list(self):
+        summary = vm.provider_summary("google_api", supported=["gmail.draft", "mail.search"])
+        assert set(summary["actions"]) == {"mail.draft", "mail.search"}
+        assert summary["counts"]["live"] == 1
+
+    def test_label_reuse_cannot_promote_create_tag(self):
+        assert "mail.create_tag" not in vm.CHECK_ACTIONS["mail_tag_write"]
+
+    def test_files_search_on_outlook_is_catalog_not_live(self):
+        assert vm.level("composio_microsoft", "files.search") == "catalog"
+
+    def test_unverified_note_says_a_maintainer_promotes(self):
+        assert "maintainer" in vm.provider_summary("m365")["note"]
+
+
+class TestFailureFinality:
+    def _fail(self, tmp_path, action_type, attempted=True, target="x@example.com", payload=None):
+        import state_db
+
+        config = {"paths": {"project_root": str(tmp_path)}}
+        with state_db._open_db(config) as db:
+            action_id = db.create_action(action_type, "google_api", target, payload or {"to": target})["id"]
+        state_db.approve_pending_action(config, action_id, approver="op")
+        state_db.mark_executing(config, action_id)
+        return state_db.mark_failed(config, action_id, "boom", attempted=attempted)
+
+    @pytest.mark.parametrize("action_type", ["notion.page.create", "notion.db.add_property",
+                                             "calendar.create", "files.create"])
+    def test_creates_are_final_including_unknown_future_types(self, tmp_path, action_type):
+        import state_db
+
+        assert state_db.final_on_failure(action_type)
+        assert self._fail(tmp_path, action_type)["state"] == "failed"
+
+    def test_local_actions_keep_the_manual_retry(self):
+        import state_db
+
+        assert not state_db.final_on_failure("pipeline.deal.add")
+        assert not state_db.final_on_failure("gmail.archive")
+        assert not state_db.final_on_failure("calendar.update")
+
+    def test_refusal_before_any_call_is_not_final(self, tmp_path):
+        """Account mismatch etc.: nothing was sent, so the send can still run."""
+        failed = self._fail(tmp_path, "gmail.send", attempted=False)
+        assert failed["state"] == "approved"
+
+    def test_executor_preflight_refusal_leaves_a_send_retryable(self, tmp_path):
+        import state_db
+        import webhook_events
+
+        config = {"paths": {"project_root": str(tmp_path)}}
+        with state_db._open_db(config) as db:
+            action_id = db.create_action("gmail.send", "google_api", "x@example.com",
+                                         {"to": "x@example.com", "subject": "s", "body": "b"})["id"]
+        state_db.approve_pending_action(config, action_id, approver="op")
+        client = MagicMock(provider_name="google_api")
+        client.supports.side_effect = lambda a: False
+        with patch("webhook_events.load_config", return_value=config), \
+             patch("workspace_client.get_workspace_client", return_value=client), \
+             patch("company_registry.preflight", return_value=(None, None)):
+            assert webhook_events.main(["execute", "--action-id", action_id]) == 1
+        client.mail_send.assert_not_called()
+        with state_db._open_db(config) as db:
+            assert db.get_action(action_id)["state"] == "approved"
+
+    def test_send_email_list_offers_failed(self):
+        import send_email
+
+        assert send_email.build_parser().parse_args(["list", "--state", "failed"]).state == "failed"

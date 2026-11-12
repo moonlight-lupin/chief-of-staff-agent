@@ -77,9 +77,10 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
     # mail.list_folders → GMAIL_LIST_LABELS (label records; same data as list_tags).
     # mail.move → GMAIL_BATCH_MODIFY_MESSAGES (label id destination).
     # calendar.cancel → GOOGLECALENDAR_UPDATE_EVENT status=cancelled (soft, reversible).
-    # files.download / files.trash: execution-verified 2026-07-16 — a throwaway
-    # file created via GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (MCP-native text create,
-    # no key) was trashed via GOOGLEDRIVE_TRASH_FILE and confirmed in Drive Trash.
+    # files.trash: execution-verified 2026-07-16 — a throwaway file created via
+    # GOOGLEDRIVE_CREATE_FILE_FROM_TEXT (MCP-native text create, no key) was
+    # trashed via GOOGLEDRIVE_TRASH_FILE and confirmed in Drive Trash.
+    # files.download has no recorded live run (verification_matrix: mocked).
     # files.upload: execution-verified 2026-07-17 for BOTH text and binary with
     # ONLY the MCP key. Text → GOOGLEDRIVE_CREATE_FILE_FROM_TEXT. Binary
     # (.pdf/.docx) → GOOGLEDRIVE_UPLOAD_FILE with a FileUploadable staged over

@@ -315,13 +315,13 @@ def cmd_execute(args: argparse.Namespace) -> int:
     from company_registry import preflight
     _account_error, _account_check = preflight(action, client, cfg)
     if _account_error:
-        mark_failed(cfg, args.action_id, _account_error)
+        mark_failed(cfg, args.action_id, _account_error, attempted=False)
         print(f"❌ {_account_error}", file=sys.stderr)
         return 1
 
     unsupported = require_capability(client, action_type, target=action.get("target", ""))
     if unsupported:
-        mark_failed(cfg, args.action_id, unsupported["error"])
+        mark_failed(cfg, args.action_id, unsupported["error"], attempted=False)
         print(f"❌ {unsupported['error']}", file=sys.stderr)
         return 1
 
@@ -333,7 +333,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         _cos_grant = execution_grant(cfg, args.action_id)
         _cos_grant.__enter__()
     except PermissionError as exc:
-        mark_failed(cfg, args.action_id, str(exc))
+        mark_failed(cfg, args.action_id, str(exc), attempted=False)
         print(f"❌ {exc}", file=sys.stderr)
         return 1
     old_auto = os.environ.get("CHIEF_OF_STAFF_AUTO_APPROVE")

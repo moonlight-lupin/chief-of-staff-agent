@@ -183,7 +183,8 @@ def cmd_execute(args: argparse.Namespace) -> int:
 
     Uses mark_executing() BEFORE the provider call to prevent the race where
     a provider action succeeds but the approval has lapsed. The state machine
-    is: approved → executing → executed | failed (back to approved for retry).
+    is: approved → executing → executed | failed. A failed send is final: it may
+    have gone out, so check Sent mail and queue a new action to retry.
 
     The explicit approve step IS the user confirmation. For the provider
     guardrail we set both CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE=1 and
@@ -221,7 +222,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     from company_registry import preflight
     _account_error, _account_check = preflight(action, client, cfg)
     if _account_error:
-        mark_failed(cfg, args.action_id, _account_error)
+        mark_failed(cfg, args.action_id, _account_error, attempted=False)
         print(f"❌ {_account_error}", file=sys.stderr)
         return 1
     payload = action["payload"]
@@ -233,7 +234,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
         _cos_grant = execution_grant(cfg, args.action_id)
         _cos_grant.__enter__()
     except PermissionError as exc:
-        mark_failed(cfg, args.action_id, str(exc))
+        mark_failed(cfg, args.action_id, str(exc), attempted=False)
         print(f"❌ {exc}", file=sys.stderr)
         return 1
     prev_destr = os.environ.get("CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
@@ -312,7 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--cc")
 
     list_cmd = sub.add_parser("list", help="List pending actions")
-    list_cmd.add_argument("--state", choices=["requested", "approved", "executed", "cancelled", "expired"])
+    list_cmd.add_argument("--state", choices=["requested", "approved", "executed", "failed", "cancelled", "expired"])
 
     preview = sub.add_parser("preview", help="Preview a pending action")
     preview.add_argument("--action-id", required=True)
