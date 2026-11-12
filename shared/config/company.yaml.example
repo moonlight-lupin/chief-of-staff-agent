@@ -39,6 +39,20 @@ user:
 assistant:
   name: "Chief of Staff"
 
+# Under Hermes, the assistant's name is also its slash command: "Ada" -> /ada,
+# "Ada Lovelace" -> /ada_lovelace. /cos always works too. So the name must start
+# with a letter and use only letters, digits, spaces, - or _ (at most 32
+# characters); bootstrap refuses anything else. After renaming, restart Hermes
+# (or reload the plugin) to register the new command. Until then the old one
+# only says it is retired.
+
+# Who may approve from a chat app with /<name> approve. Your own CLI, TUI and
+# Desktop sessions can always approve. Anyone else in a chat is refused unless
+# listed here as "<platform>:<user id>": "<name recorded on the approval>".
+# approvals:
+#   chat_approvers:
+#     "telegram:123456789": "Alicia Tan"
+
 # Google Workspace integration.
 # Actual Google auth is performed by the external google-workspace skill via google_api.py.
 # Chief-of-Staff calls google_api.py through GoogleWorkspaceClient with --account and --as flags.

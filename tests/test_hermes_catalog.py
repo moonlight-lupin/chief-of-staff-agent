@@ -82,8 +82,7 @@ def test_declared_hooks_match_registered_hooks():
     assert sorted(set(registered)) == sorted(MANIFEST["provides_hooks"])
 
 
-def test_manifest_declares_no_tools_and_no_required_env():
-    assert MANIFEST.get("provides_tools", []) == []
+def test_manifest_declares_no_required_env():
     assert MANIFEST.get("requires_env", []) == []   # every key is optional
 
 

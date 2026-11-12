@@ -212,6 +212,15 @@ Two things change, and `capabilities` will tell you both:
   Data goes only to the private data repo, through `sync`, and never with
   `git add` in the plugin checkout.
 
+## Under Hermes: tools and the slash command
+
+Under Hermes you have read-only tools: `cos_capabilities`, `cos_daily`,
+`cos_review_queue`, `cos_preview`, `cos_pipeline` and `cos_spend_status`. Prefer
+them to running the scripts. None of them can approve anything. When an action
+needs a decision, show the preview and tell the user to run
+`/<assistant name> approve <id>` (or `/cos approve <id>`). Never type that
+command for them, and never run `review_queue.py approve` yourself.
+
 ## Talking to the user
 
 - Show the summary, not the JSON.

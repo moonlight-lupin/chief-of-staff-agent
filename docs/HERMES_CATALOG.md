@@ -12,13 +12,13 @@ are in [`NousResearch/hermes-agent` → `plugin-catalog/README.md`](https://gith
 | 1, 4, 5: human-merged, SHA bumps re-reviewed, owner submits | The owner (`moonlight-lupin`) submits. Each release is a new SHA-bump PR. |
 | 2: exact SHA pin | Pin the release commit, not the tag. |
 | 3: no self-updating code | None. Updates arrive only through `hermes plugins update`. |
-| 6: declared capabilities match | `plugin.yaml` declares `provides_tools: []` and the five hooks `register()` registers; skills come through `register_skill`. Tested. |
+| 6: declared capabilities match | `plugin.yaml` declares the six read-only `cos_*` tools and the five hooks `register()` registers. Skills come through `register_skill`; the slash commands `/<assistant name>` and `/cos` through `register_command`. Tested. |
 | 7: install scanner | Run `hermes plugins validate . --install-deps` at the commit you pin, and read every warning. |
 | 8: Desktop SDK | No Desktop half. |
-| 9: no core overrides | Only `register_skill`, `register_hook` and `register_session_env`. Nothing is patched. |
+| 9: no core overrides | Only `register_skill`, `register_hook`, `register_session_env`, `register_tool` and `register_command`. Nothing is patched. |
 | 10: dependency policy | Each dependency has a floor and an upper bound, declared in both `pyproject.toml` and `plugin.yaml` → `python_dependencies`. Tested. |
 | 11: credentials through Hermes | Each secret is a `config_schema` `type: secret`, read in-process with `get_secret` and handed to the plugin's own commands per session by `register_session_env`. Under Hermes the plugin never reads a `.env` file or a Google key file: the service-account key is the `GOOGLE_SERVICE_ACCOUNT_JSON` secret. No OAuth tokens are written. Tested. |
-| 12: approvals and unattended runs | Nothing routes around Hermes's approvals. The plugin's own review queue adds a further gate. Without a terminal, every prompt refuses cleanly: guardrail confirmations, interactive onboarding, self-sign confirmation, and Microsoft 365 device-code sign-in. Tested. |
+| 12: approvals and unattended runs | Nothing routes around Hermes's approvals. The plugin's own review queue adds a further gate. No tool can approve. Approval is only `/<name> approve`, from the owner's own surfaces or listed chat approvers; anything else, including a chat command without a source, is refused. Without a terminal, every prompt refuses cleanly: guardrail confirmations, interactive onboarding, self-sign confirmation, and Microsoft 365 device-code sign-in. Tested. |
 | 13: disclosure | README → "What it touches", repeated in the entry PR (below). |
 | 14: truthful compatibility | `requires_hermes: ">=0.23.0"` in both `plugin.yaml` and the entry. Raise it only to a released version you have tested. |
 | 15–19 | Original work. No password-manager backend, no binaries, no infringing sources. |
@@ -41,16 +41,16 @@ name: chief-of-staff
 repo: https://github.com/moonlight-lupin/chief-of-staff-agent
 sha: "<40-char commit of the release>"
 title: Chief of Staff
-description: "Approval-gated AI chief of staff for SMEs: daily briefings, statutory deadlines, CRM pipeline, bookkeeping and AR/AP, documents and e-signature, meeting prep, research, plus prospecting, SEO and competitor watch on budgets you approve. Several companies per install. Every consequential action goes propose → approve → execute → audit. Disclosure — calls only the services you configure (Google APIs, Microsoft Graph, Composio, your DocuSeal server; Monid and Notion through the agent's own connectors, paid calls only against approved budgets); runs hermes cron create/list for the briefings you approve, git for sync push to your private data repo, and the optional google-workspace skill's google_api.py; keeps your records as YAML/Markdown under the project root you choose plus a local state.db (review queue, audit log, spend ledger) and redacted run logs; no background processes by default (an optional webhook listener you start yourself only records events); credentials only through Hermes secrets; no telemetry."
+description: "Approval-gated AI chief of staff for SMEs, with read-only tools for the agent and a slash command named after your assistant (/ada, plus /cos) where you approve: daily briefings, statutory deadlines, CRM pipeline, bookkeeping and AR/AP, documents and e-signature, meeting prep, research, plus prospecting, SEO and competitor watch on budgets you approve. Several companies per install. Every consequential action goes propose → approve → execute → audit. Disclosure — calls only the services you configure (Google APIs, Microsoft Graph, Composio, your DocuSeal server; Monid and Notion through the agent's own connectors, paid calls only against approved budgets); runs hermes cron create/list for the briefings you approve, git for sync push to your private data repo, and the optional google-workspace skill's google_api.py; keeps your records as YAML/Markdown under the project root you choose plus a local state.db (review queue, audit log, spend ledger) and redacted run logs; no background processes by default (an optional webhook listener you start yourself only records events); credentials only through Hermes secrets; no telemetry."
 maintainer: moonlight-lupin
 tier: community
 category: automation
 requires_hermes: ">=0.23.0"
 docs_url: https://github.com/moonlight-lupin/chief-of-staff-agent#readme
-version: "0.8.1"
+version: "0.9.0"
 readme: true
 capabilities:
-  provides_tools: []
+  provides_tools: [cos_capabilities, cos_daily, cos_review_queue, cos_preview, cos_pipeline, cos_spend_status]
   provides_hooks: [on_session_start, pre_llm_call, post_llm_call, pre_tool_call, post_tool_call]
   provides_middleware: []
   requires_env: []
@@ -64,7 +64,7 @@ capabilities:
 3. In `NousResearch/hermes-agent`, add `plugin-catalog/chief-of-staff.yaml`
    (above) with `sha` set to that commit.
 4. In the PR description:
-   - say what the plugin does and which Hermes surfaces it uses (skills via `register_skill`, five hooks, `register_session_env`);
+   - say what the plugin does and which Hermes surfaces it uses (skills via `register_skill`, six read-only tools, the `/<name>` and `/cos` slash commands, five hooks, `register_session_env`);
    - paste the README's "What it touches".
 5. Wait for catalog CI, then answer review.
 
