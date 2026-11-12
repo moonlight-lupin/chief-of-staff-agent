@@ -49,7 +49,6 @@ LOW_RISK_TYPES: set[str] = {
     "contacts.list",
     "drive.search",
     "gmail.search",
-    "drive.download",
     "pipeline.deal.add_note",
     "pipeline.deal.link_document",
     # Mirrors the operator's own records into their own Notion; Notion keeps

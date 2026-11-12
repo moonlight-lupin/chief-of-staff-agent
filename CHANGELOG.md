@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Untrusted content is data, not authority
+
+- **New `shared/scripts/payload_policy.py`.** `drive.download` writes only
+  inside the project root. `drive.upload` reads only from the project root or
+  `paths.upload_roots`, and never from `.env`, keys, `~/.ssh`, `~/.hermes` or
+  `state.db`. Symlinks are resolved. Paths are checked when the action is
+  proposed and again at execution.
+- **`drive.download` is now medium risk** and can no longer be bulk-approved.
+- **Wiki context injected into the model** is a labelled data block,
+  sanitised to one line per note. Pages curated from external events give
+  only their title.
+- **Workflows.**
+  - Step text that approves, dismisses or turns on break-glass is refused.
+  - `bind_action` requires an existing action of the step's declared type.
+  - A command signal counts only when the command actually runs, not when it
+    is echoed or grepped.
+- **Redaction** covers prefixed secret names (`COMPOSIO_API_KEY=`,
+  `M365_CLIENT_SECRET=`, `*_TOKEN=`, `GOOGLE_SERVICE_ACCOUNT_JSON=`). Tool
+  errors returned to the model are redacted.
+- **Notion pulls** refuse a `contact_email` that is not a plain address.
+- **`docs/SECURITY_MODEL.md`** gains the trust-boundary table. The adversarial
+  fixtures are in `tests/test_untrusted_content.py`.
+
+
 ### Account binding: refuse the wrong account before the write
 
 - **Workspace actions are bound when they are created.** This covers mail,

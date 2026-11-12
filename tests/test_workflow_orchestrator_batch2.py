@@ -34,6 +34,20 @@ ACTIVE_STATES = frozenset({"running", "awaiting-approval"})
 STORE_NAME = "workflow_runs"
 
 
+
+_REAL_ACTIONS: dict[tuple[int, str], str] = {}
+
+
+def _pending(config, label: str) -> str:
+    """A real gmail.send action for this test (bind_action requires one, P0.3)."""
+    import state_db
+
+    key = (id(config), label)
+    if key not in _REAL_ACTIONS:
+        _REAL_ACTIONS[key] = state_db.create_pending_action(config, "gmail.send", "google_api",
+                                                            "x@example.com", {"label": label})["id"]
+    return _REAL_ACTIONS[key]
+
 def _runs():
     """Import the run-store module or fail with an explicit RED message."""
     try:
@@ -503,10 +517,10 @@ def test_bind_action_writes_action_id_and_parks_awaiting_approval(temp_project):
         ]
     )
     run = _start(mod, config, workflow=workflow, now=FROZEN)
-    mod.bind_action(run["workflow_run_id"], "propose-send", "act-pending-1", config=config)
+    mod.bind_action(run["workflow_run_id"], "propose-send", _pending(config, "act-pending-1"), config=config)
     fetched = mod.get_run(run["workflow_run_id"], config=config)
     bound = next(s for s in fetched["definition"]["steps"] if s["id"] == "propose-send")
-    assert bound["action_id"] == "act-pending-1"
+    assert bound["action_id"] == _pending(config, "act-pending-1")
     assert fetched["state"] == "awaiting-approval"
     assert fetched["step_status"][0] == "awaiting-approval"
 
@@ -525,12 +539,12 @@ def test_bind_action_refuses_overwrite(temp_project):
         ]
     )
     run = _start(mod, config, workflow=workflow, now=FROZEN)
-    mod.bind_action(run["workflow_run_id"], "propose-send", "act-pending-1", config=config)
+    mod.bind_action(run["workflow_run_id"], "propose-send", _pending(config, "act-pending-1"), config=config)
     with pytest.raises(mod.WorkflowRunError):
-        mod.bind_action(run["workflow_run_id"], "propose-send", "act-pending-2", config=config)
+        mod.bind_action(run["workflow_run_id"], "propose-send", _pending(config, "act-pending-2"), config=config)
     fetched = mod.get_run(run["workflow_run_id"], config=config)
     bound = next(s for s in fetched["definition"]["steps"] if s["id"] == "propose-send")
-    assert bound["action_id"] == "act-pending-1"
+    assert bound["action_id"] == _pending(config, "act-pending-1")
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +627,7 @@ def test_abort_run_from_running_and_awaiting_approval(temp_project):
         session_id="sess-park",
         now=FROZEN + timedelta(minutes=2),
     )
-    mod.bind_action(parked["workflow_run_id"], "propose-send", "act-1", config=config)
+    mod.bind_action(parked["workflow_run_id"], "propose-send", _pending(config, "act-1"), config=config)
     assert mod.get_run(parked["workflow_run_id"], config=config)["state"] == "awaiting-approval"
     mod.abort_run(parked["workflow_run_id"], config=config, now=FROZEN + timedelta(minutes=3))
     assert mod.get_run(parked["workflow_run_id"], config=config)["state"] == "aborted"

@@ -280,13 +280,48 @@ def _command_matches(
     raw = step.get("command")
     if isinstance(raw, Mapping):
         pattern = str(raw.get("pattern") or "")
-    if not pattern or pattern not in command:
+    if not pattern or not command_runs_pattern(command, pattern):
         return False
     started = _parse_dt(run.get("started_at"))
     event_time = _aware(now)
     if started is not None and event_time < started:
         return False
     return True
+
+
+_NOT_RUNNING = frozenset({"echo", "printf", "true", "false", ":", "cat", "grep", "egrep", "rg", "test", "[",
+                          "ls", "less", "more", "head", "tail", "wc", "which", "type", "man", "#"})
+_SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
+
+
+def command_runs_pattern(command: str, pattern: str) -> bool:
+    """True when some segment of ``command`` actually runs ``pattern``: its
+    tokens appear contiguously in a segment that is not just printing or
+    searching for them (``echo <pattern>`` must not advance a step)."""
+    import shlex
+
+    try:
+        tokens = shlex.split(command, posix=True)
+        want = shlex.split(pattern, posix=True)
+    except ValueError:
+        return False
+    if not want:
+        return False
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in _SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    for seg in segments:
+        while seg and "=" in seg[0] and not seg[0].startswith(("/", ".")):
+            seg = seg[1:]   # leading VAR=value assignments
+        if not seg or Path(seg[0]).name in _NOT_RUNNING:
+            continue
+        for i in range(len(seg) - len(want) + 1):
+            if seg[i:i + len(want)] == want:
+                return True
+    return False
 
 
 def _command_succeeded(result: Any, exit_code: Any) -> bool:

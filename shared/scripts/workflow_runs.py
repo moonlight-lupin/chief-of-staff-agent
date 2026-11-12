@@ -525,6 +525,12 @@ def bind_action(
     step_id = _require_non_empty_str(step_id, "step_id")
     action_id = _require_non_empty_str(action_id, "action_id")
 
+    from state_db import get_pending_action
+
+    bound_action = get_pending_action(config, action_id) if config is not None else None
+    if config is not None and not bound_action:
+        raise WorkflowRunError(f"no action {action_id} in the review queue; propose it first")
+
     def _bind(data: dict[str, Any]) -> dict[str, Any]:
         runs = _runs_map(data)
         run = _get_existing(runs, run_id)
@@ -539,6 +545,12 @@ def bind_action(
                 break
         if found_index is None or step is None:
             raise WorkflowRunError(f"step {step_id!r} is not in run {run_id}")
+        expected_type = ((step.get("review_queue") or {}).get("action_type")
+                         if isinstance(step.get("review_queue"), Mapping) else None)
+        if expected_type and bound_action and bound_action.get("type") != expected_type:
+            raise WorkflowRunError(
+                f"step {step_id} expects a {expected_type} action, not {bound_action.get('type')} ({action_id})"
+            )
         existing = step.get("action_id")
         if existing and existing != action_id:
             raise WorkflowRunError(

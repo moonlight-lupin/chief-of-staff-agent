@@ -21,6 +21,8 @@ start in ``requested``; nothing reaches Notion or the store without approval.
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import json
 import sys
@@ -208,6 +210,9 @@ def _hash(props: Mapping[str, Any]) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}")
+
+
 def _validate_changes(config: Any, domain: str, changes: Mapping[str, Any]) -> str | None:
     """Why these Notion values cannot go into the store, or None."""
     from schemas import TODO_PRIORITIES, TODO_STATUSES
@@ -220,6 +225,10 @@ def _validate_changes(config: Any, domain: str, changes: Mapping[str, Any]) -> s
             return f"value {changes['value']!r} is not a number"
         if "client_name" in changes and not changes["client_name"]:
             return "a new deal needs a Name"
+        email = changes.get("contact_email")
+        if email not in (None, "") and not _EMAIL_RE.fullmatch(str(email)):
+            # Pulled values can later become a recipient: only a plain address.
+            return f"contact_email {email!r} is not a plain email address"
     if domain == "todos":
         if "status" in changes and changes["status"] not in TODO_STATUSES:
             return f"status {changes['status']!r} must be one of {sorted(TODO_STATUSES)}"

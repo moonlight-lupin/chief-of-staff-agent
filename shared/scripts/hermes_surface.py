@@ -56,7 +56,17 @@ def run_script(script: str, args: list[str], timeout: int = DEFAULT_TIMEOUT) -> 
     proc = subprocess.run([sys.executable, str(SCRIPTS / script), *args], capture_output=True, text=True,
                           timeout=timeout, env=env, cwd=str(PLUGIN_ROOT), check=False)
     return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
-            "stdout": proc.stdout or "", "stderr": (proc.stderr or "")[-2000:]}
+            "stdout": proc.stdout or "", "stderr": _redact((proc.stderr or "")[-2000:])}
+
+
+def _redact(text: str) -> str:
+    """Error text goes to the model: never with a secret in it."""
+    try:
+        from runtime_log import redact
+
+        return str(redact(text))
+    except Exception:
+        return text
 
 
 def _cap(text: str) -> str:

@@ -85,6 +85,25 @@ class WorkflowNameConflict(WorkflowError):
     """Workflow name collides with a bundled or local skill directory."""
 
 
+# A workflow becomes a registered skill, i.e. standing instructions. Its text
+# may be agent-written from untrusted content, so it must never tell the agent
+# to approve, to set the break-glass switches, or to run an approve command
+# (P0.3, docs/SECURITY_MODEL.md). Approval is the user's step.
+_SELF_APPROVAL_RE = re.compile(
+    r"(?i)(review_queue\.py\s+(?:approve|dismiss)|send_email\.py\s+approve|delete_actions\.py\s+approve"
+    r"|webhook_events\.py\s+approve|approve\s+--all|chief_of_staff_(?:auto_approve|allow_destructive)"
+    r"|/[a-z0-9_]{1,32}\s+(?:approve|dismiss)\b)"
+)
+
+
+def _refuse_self_approval(text: Any, field: str) -> None:
+    if isinstance(text, str) and _SELF_APPROVAL_RE.search(text):
+        raise WorkflowValidationError(
+            f"{field}: workflow text must not approve, dismiss or enable break-glass; "
+            f"propose the action and let the user approve it"
+        )
+
+
 def validate_workflow(data: Mapping[str, Any]) -> dict[str, Any]:
     """Validate ``data`` and return a normalized copy. Does not mutate input."""
     if not isinstance(data, Mapping):
@@ -213,6 +232,8 @@ def _normalize_step(raw_step: Any, index: int, seen_ids: set[str]) -> dict[str, 
 
     step_name = _require_bounded_str(raw_step.get("name"), f"{prefix}.name", STEP_NAME_MAX)
     description = _require_non_empty_str(raw_step.get("description"), f"{prefix}.description")
+    _refuse_self_approval(description, f"{prefix}.description")
+    _refuse_self_approval(step_name, f"{prefix}.name")
 
     present_signals = [key for key in SIGNAL_KEYS if key in raw_step]
     if len(present_signals) != 1:

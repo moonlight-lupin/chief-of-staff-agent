@@ -259,7 +259,12 @@ _RESERVED_KEYS = {"timestamp", "level", "run_id", "command", "component", "event
 
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+\S+")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
-_KV_SECRET_RE = re.compile(r"(?i)\b(client_secret|password|api_key|access_token|refresh_token|id_token|assertion|client_assertion)=\S+")
+# Also prefixed names (COMPOSIO_API_KEY=, M365_CLIENT_SECRET=, *_TOKEN=, *_SECRET=,
+# GOOGLE_SERVICE_ACCOUNT_JSON=): the plugin's own secrets are named that way.
+_KV_SECRET_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*?(?:client_secret|password|api_key|apikey|access_token|refresh_token|id_token"
+    r"|client_assertion|assertion|secret|token|private_key|service_account_json|mcp_key))=\S+"
+)
 _JSON_SECRET_RE = re.compile(
     r"(?i)(['\"](?:access_token|refresh_token|id_token|client_secret|client_assertion|assertion|password|api_key)['\"]\s*:\s*['\"])[^'\"]+(['\"])",
 )
