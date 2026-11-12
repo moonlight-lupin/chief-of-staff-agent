@@ -170,6 +170,8 @@ Under Hermes the plugin adds two kinds of commands. The agent gets tools to look
 /ada dismiss <id> <reason>  dismiss it
 ```
 
+The command follows `assistant.name`. The name must start with a letter and use only letters, digits, spaces, `-` or `_`, at most 32 characters, so it always makes a valid command. To rename, run `bootstrap.py --assistant-name Bea` and restart Hermes: `/bea` appears, and `/ada` only replies that it has been retired.
+
 Approving works from your own CLI, TUI or Desktop session. From a chat app (Telegram, Discord…), only people listed in `approvals.chat_approvers` can approve, so nobody else in a shared chat can approve anything. Execution stays where it was: an approved action is claimed and run, then audited.
 
 ---

@@ -70,7 +70,7 @@ def calls(monkeypatch):
 
 @pytest.fixture
 def owner_config(monkeypatch):
-    cfg = {"user": {"name": "Alicia Tan"},
+    cfg = {"user": {"name": "Alicia Tan"}, "assistant": {"name": "Ada"},
            "approvals": {"chat_approvers": {"telegram:4242": "Alicia Tan"}}}
     monkeypatch.setattr(hs, "_load_config", lambda: cfg)
     return cfg
@@ -250,8 +250,8 @@ def test_owner_without_a_configured_name_is_recorded_as_operator(calls, monkeypa
     ("  JARVIS-2 ", ["jarvis_2", "cos"]),
     ("Chief of Staff", ["cos"]),          # default name: /cos only
     ("", ["cos"]),
-    ("小助", ["cos"]),                     # nothing usable for a chat command
-    ("a" * 40, ["a" * 32, "cos"]),         # Telegram's 32-character limit
+    ("小助", ["cos"]),                     # disallowed: never a command
+    ("a" * 40, ["cos"]),                   # over 32 characters: disallowed
 ])
 def test_command_names_follow_the_assistant_name(name, expected):
     assert hs.command_names({"assistant": {"name": name}}) == expected
@@ -276,3 +276,30 @@ def test_named_handler_forwards_session_context(calls, owner_config):
     handler("approve act-7", platform="cli", session_id="s1", source=None)
     ((_, argv),) = calls
     assert argv[:3] == ["approve", "--action-id", "act-7"]
+
+
+# --------------------------------------------------------------- renaming
+
+
+def test_renaming_retires_the_old_command(calls, monkeypatch):
+    cfg = {"assistant": {"name": "Ada"}, "user": {"name": "Alicia Tan"}}
+    monkeypatch.setattr(hs, "_load_config", lambda: cfg)
+    old = hs.make_command_handler("ada")
+    cfg["assistant"]["name"] = "Bea"                       # user renamed the assistant
+    out = old("approve act-1", platform="cli")
+    assert calls == [] and "/bea" in out and "restart" in out.lower()
+
+
+def test_cos_keeps_working_after_a_rename(calls, monkeypatch):
+    cfg = {"assistant": {"name": "Bea"}, "user": {"name": "Alicia Tan"}}
+    monkeypatch.setattr(hs, "_load_config", lambda: cfg)
+    hs.make_command_handler("cos")("approve act-1", platform="cli")
+    assert calls and calls[0][0] == "review_queue.py"
+
+
+def test_the_new_name_is_registered_on_the_next_load(monkeypatch):
+    plugin = _load_plugin_package("cos_surface_rename")
+    monkeypatch.setattr(hs, "_load_config", lambda: {"assistant": {"name": "Bea"}})
+    ctx = Ctx()
+    plugin.register(ctx)
+    assert {"bea", "cos"} == set(ctx.commands)

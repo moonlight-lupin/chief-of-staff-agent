@@ -39,9 +39,12 @@ user:
 assistant:
   name: "Chief of Staff"
 
-# Under Hermes, the assistant's name is also its slash command: "Ada" -> /ada
-# (lower case; spaces and symbols become _; at most 32 characters). /cos always
-# works too. Restart Hermes after renaming.
+# Under Hermes, the assistant's name is also its slash command: "Ada" -> /ada,
+# "Ada Lovelace" -> /ada_lovelace. /cos always works too. So the name must start
+# with a letter and use only letters, digits, spaces, - or _ (at most 32
+# characters); bootstrap refuses anything else. After renaming, restart Hermes
+# (or reload the plugin) to register the new command. Until then the old one
+# only says it is retired.
 
 # Who may approve from a chat app with /<name> approve. Your own CLI, TUI and
 # Desktop sessions can always approve. Anyone else in a chat is refused unless

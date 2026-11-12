@@ -170,13 +170,17 @@ def _load_config() -> Mapping[str, Any]:
 
 def command_names(config: Mapping[str, Any] | None) -> list[str]:
     """``[<assistant name>, "cos"]``, or ``["cos"]`` for a default or unusable name."""
-    from config_loader import is_default_assistant_name
+    from config_loader import is_default_assistant_name, validate_assistant_name
 
     raw = str(((config or {}).get("assistant") or {}).get("name") or "")
     names: list[str] = []
     if not is_default_assistant_name(raw):
-        slug = re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")[:32].strip("_")
-        if slug and slug != "cos":
+        try:
+            name = validate_assistant_name(raw)
+        except ValueError:
+            return ["cos"]          # doctor warns; /cos keeps working
+        slug = re.sub(r"[ _-]+", "_", name.lower())
+        if slug != "cos":
             names.append(slug)
     return names + ["cos"]
 
@@ -253,6 +257,14 @@ def cos_command(raw_args: str = "", *, platform: str = "", source: Any = None, s
 
 def make_command_handler(command: str) -> Callable[..., str]:
     def handler(raw_args: str = "", *, session_id: str = "", platform: str = "", source: Any = None) -> str:
+        if command != "cos":
+            # Hermes cannot un-register a command, so a renamed assistant's old
+            # command stays wired until restart. It must do nothing but redirect.
+            current = command_names(_load_config())
+            if command not in current:
+                return (f"/{command} is retired: the assistant is now /{current[0]}. "
+                        f"/cos always works. Restart Hermes (or reload the plugin) to register "
+                        f"/{current[0]}.")
         return cos_command(raw_args, platform=platform, source=source, session_id=session_id, command=command)
 
     handler.__name__ = f"{command}_command"

@@ -35,7 +35,13 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for doctor.py") from exc
 
-from config_loader import get_hermes_home, is_default_assistant_name, load_config, load_dotenv_file
+from config_loader import (
+    get_hermes_home,
+    is_default_assistant_name,
+    load_config,
+    load_dotenv_file,
+    validate_assistant_name,
+)
 from state_db import EMPTY_TEMPLATES
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -487,6 +493,17 @@ def _check_assistant_name(fix: bool, data: dict[str, Any] | None, config_path: P
             "(\"Ask <name> to check my email\") will not route to CoS skills. "
             "Set assistant.name (e.g. via bootstrap --assistant-name Ada).",
         )
+
+    if not is_default_assistant_name(name):
+        try:
+            validate_assistant_name(name)
+        except ValueError as exc:
+            return CheckResult(
+                "assistant_name",
+                "warn",
+                f"{exc}. Until it is fixed, the Hermes slash command is /cos only. "
+                "Rename with bootstrap --assistant-name <Name>.",
+            )
 
     if is_default_assistant_name(name):
         return CheckResult(

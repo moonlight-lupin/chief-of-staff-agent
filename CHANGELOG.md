@@ -20,6 +20,18 @@ makes the plugin's invariant structural: no tool can approve.
     32 characters. A default or unusable name registers `/cos` only.
   - Hermes drops a name that clashes with a built-in command; `/cos` still
     works then.
+- **The name is restricted, because it is also the command.** The new
+  `config_loader.validate_assistant_name` rule: start with a letter; then
+  letters, digits, spaces, `-` or `_`; at most 32 characters.
+  `bootstrap --assistant-name` and skill-name rendering refuse anything else
+  (this replaces the looser routing-name rule for `assistant.name`; `company.name`
+  is unchanged). An existing invalid name only makes `doctor` warn, and the
+  command falls back to `/cos`.
+- **Renaming.** Change `assistant.name` (e.g. `bootstrap --assistant-name Bea`)
+  and restart Hermes or reload the plugin: `/bea` is registered. Hermes cannot
+  un-register a command, so the old `/ada` stays wired until restart. It reads
+  the current name on every call and only replies that it is retired, never
+  acting.
 - **Who may approve.** `approve` and `dismiss` run only from the owner's own
   surfaces (`cli`, `tui`, `desktop`, `local`), recorded under `user.name`, or
   for chat users listed in `approvals.chat_approvers`

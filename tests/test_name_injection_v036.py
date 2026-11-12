@@ -152,14 +152,14 @@ class TestInjectionIdempotency:
     def test_name_with_quotes_rejected_or_escaped(self, tmp_path):
         skills = _skills_copy(tmp_path)
         cfg = _write_config(tmp_path, 'Ada "Root"')
-        with pytest.raises(bootstrap.BootstrapError, match="double quotes"):
+        with pytest.raises(bootstrap.BootstrapError, match="assistant.name"):
             bootstrap._inject_assistant_name_into_skills(cfg, skills_dir=skills)
         assert not (tmp_path / "skills.local").exists()
 
     def test_name_with_newline_rejected(self, tmp_path):
         skills = _skills_copy(tmp_path)
         cfg = _write_config(tmp_path, "Ada\nRoot")
-        with pytest.raises(bootstrap.BootstrapError, match="newlines"):
+        with pytest.raises(bootstrap.BootstrapError, match="assistant.name"):
             bootstrap._inject_assistant_name_into_skills(cfg, skills_dir=skills)
         assert not (tmp_path / "skills.local").exists()
 

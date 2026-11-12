@@ -22,7 +22,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("PyYAML is required for bootstrap.py") from exc
 
-from config_loader import is_default_assistant_name
+from config_loader import is_default_assistant_name, validate_assistant_name
 from doctor import run_checks
 from state_db import EMPTY_TEMPLATES
 import state_sync
@@ -72,6 +72,10 @@ def _merge_preset(args: argparse.Namespace) -> dict[str, Any]:
     # existing custom assistant name must survive re-bootstrap.
     assistant_name = getattr(args, "assistant_name", None)
     if assistant_name:
+        try:
+            assistant_name = validate_assistant_name(assistant_name)
+        except ValueError as exc:
+            raise BootstrapError(str(exc)) from exc
         preset.setdefault("assistant", {})["name"] = assistant_name
     return preset
 
@@ -813,7 +817,10 @@ def _inject_assistant_name_into_skills(
         if overlay.exists():
             _cleanup_routing_overlays(overlay)
         return []  # nothing to inject — still using the default
-    assistant_name = _validate_routing_name(assistant_name, "assistant.name")
+    try:
+        assistant_name = validate_assistant_name(assistant_name)
+    except ValueError as exc:
+        raise BootstrapError(str(exc)) from exc
     company_name = _validate_routing_name(company_name, "company.name") if company_name else "your organization"
 
     messages: list[str] = []

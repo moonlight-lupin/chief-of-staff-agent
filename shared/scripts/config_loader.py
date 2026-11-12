@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -541,6 +542,22 @@ def get_project_root(config: Mapping[str, Any] | Config | None) -> Path | None:
 # name-injection into skill descriptions or the company_context_primer identity
 # prefix. Kept case-insensitive and shared across bootstrap / doctor / hooks.
 _DEFAULT_ASSISTANT_NAMES = frozenset({"chief of staff", "chief-of-staff", "cos"})
+
+
+# assistant.name is also the Hermes slash command (/ada), so it must map cleanly
+# onto a chat command: Telegram allows a-z, 0-9 and _ only, up to 32 characters.
+ASSISTANT_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9 _-]{0,31}")
+
+
+def validate_assistant_name(name: Any) -> str:
+    """Return the stripped name, or raise ValueError naming the rule."""
+    text = str(name or "").strip()
+    if not ASSISTANT_NAME_RE.fullmatch(text):
+        raise ValueError(
+            "assistant.name must start with a letter and use only letters, digits, "
+            f"spaces, '-' or '_', at most 32 characters (got {text!r})"
+        )
+    return text
 
 
 def is_default_assistant_name(name: Any) -> bool:
