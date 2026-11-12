@@ -74,12 +74,15 @@ class TestPluginStructure:
             pyproject_version = tomllib.load(f)["project"]["version"]
 
         import sys
-        sys.path.insert(0, str(PLUGIN_ROOT / "shared" / "scripts"))
+        shared = str(PLUGIN_ROOT / "shared" / "scripts")
+        sys.path.insert(0, shared)
         try:
             import chief_of_staff
             entrypoint_version = chief_of_staff.VERSION
         finally:
-            sys.path.pop(0)
+            # Remove exactly what was added: importing the entrypoint may put
+            # other script dirs at the front of sys.path, so pop(0) is unsafe.
+            sys.path.remove(shared)
 
         assert plugin_version == pyproject_version == entrypoint_version, (
             f"version drift: plugin.yaml={plugin_version} "
