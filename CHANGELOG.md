@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Catalog readiness
+
+- `task-brief` is now registered in the default and enterprise profiles.
+  Since v0.7.12 it shipped but never loaded. Its SKILL.md is replaced with the
+  clean 1.3.0 from moonlight-lupin/agent-skills (the plugin copy had a second
+  frontmatter block spliced into its body). Only the frontmatter was adapted
+  to the plugin's top-level `version` convention.
+- The `plugin.yaml`, `plugin.json` and `marketplace.json` descriptions now
+  list prospecting, SEO and AI-search visibility, competitor watch, spend
+  budgets, multiple companies and Notion sync.
+- New `tests/test_skill_registration.py`:
+  - every skill directory is registered and every registered skill exists;
+  - each SKILL.md has a single frontmatter block;
+  - the manifest descriptions mention the current features.
+
 ## v0.8.0 (beta) — Multi-company phases 1 and 2, Notion mirror, prospecting v2
 
 ### Prospecting v2: signals, written verdicts, replies
