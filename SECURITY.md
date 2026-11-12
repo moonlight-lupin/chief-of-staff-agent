@@ -27,6 +27,9 @@ Expect an acknowledgement within 7 days and an assessment within 30.
 
 ## Scope
 
+The threat model, and the guarantees and limits it rests on, are in
+[`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md).
+
 In scope, and treated as high severity:
 
 - **Approval-gate bypass** — any path that mutates a workspace without passing

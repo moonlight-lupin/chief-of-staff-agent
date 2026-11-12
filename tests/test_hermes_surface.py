@@ -65,6 +65,17 @@ def calls(monkeypatch):
         return {"ok": True, "exit_code": 0, "stdout": json.dumps({"fake": script}), "stderr": ""}
 
     monkeypatch.setattr(hs, "run_script", fake_run)
+
+    # approve/dismiss are signed in-process (approval_signing), not run as a
+    # child process. Record each decision in the same (script, argv) shape so
+    # the authorization assertions below stay about who and what, not how.
+    def fake_decide(config, decision, action_id, approver, reason, command):
+        argv = [decision, "--action-id", action_id]
+        argv += ["--approver", approver, "--reason", reason] if decision == "approve" else ["--reason", reason]
+        seen.append(("review_queue.py", argv))
+        return f"{decision}d {action_id}"
+
+    monkeypatch.setattr(hs, "_decide", fake_decide)
     return seen
 
 

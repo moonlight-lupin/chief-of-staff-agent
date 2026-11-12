@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+### Signed approvals: only the user approves (Hermes)
+
+- **New `shared/scripts/approval_signing.py`.**
+  - When the Hermes gateway loads the plugin, it creates an Ed25519 key in
+    its own memory, never on disk or in any environment, and enrols every
+    company store it serves.
+  - For an enrolled store, `requested → approved/dismissed` needs a signature
+    from that key over the action, its approval fingerprint, its company, the
+    decision and the approver. `approved → executing` re-verifies it.
+  - Refusals are audited (`approval_unsigned`, `approval_signature_invalid`).
+  - Every approve command is covered, because all of them go through
+    `state_db.transition_action`: `review_queue.py approve` (single and bulk),
+    `send_email.py`, `delete_actions.py` and `webhook_events.py`.
+  - Approvals made before enrolment must be re-approved.
+- **`/cos approve` and `/cos dismiss`** now sign in-process instead of
+  running a child process. A copy of the module imported anywhere else has no
+  key and cannot decide anything. Refused slash attempts are audited
+  (`slash_approval_refused`).
+- **Break-glass.** For an enrolled store, `CHIEF_OF_STAFF_AUTO_APPROVE`,
+  `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` and a typed "y" no longer approve a write.
+  The new `workspace_guardrails.execution_grant` allows only the guarded
+  writes of one signed, executing action, and only of its own type. The
+  executors use it.
+- **Hardening from an adversarial review**, each fix with a regression test:
+  - An executing or finished action can no longer be re-approved. On a
+    signed store, a failure is final; a retry needs a new proposal.
+  - Enrolment is recorded for the whole install
+    (`<Hermes home>/chief-of-staff/approval-signing.json`), so a new or
+    copied store is enforced too. A store that can't be read fails closed.
+  - Execution grants are bound to the approved target, used once, and end
+    when the action leaves `executing`.
+  - Spend envelopes need a signed approval.
+  - No store API can switch enforcement off. Every enrolment is audited
+    with its process.
+  - An executor whose grant is refused marks the action failed instead of
+    leaving it stuck in `executing`.
+- **Standalone and Claude Code installs** never enrol and are unchanged.
+- **New `doctor` check `approval_signing`.** It reports the enrolment state
+  and the recommended Hermes `approvals.deny` rules.
+- **Docs.** New `docs/SECURITY_MODEL.md` (who we defend against, guarantees,
+  limits). CLAUDE.md, the workflow pointer and the README now say approval is
+  the user's step.
+
 ## v0.9.0 (beta) — Hermes tools and your own slash command
 
 The agent gets tools to look; you get a slash command to decide. The split

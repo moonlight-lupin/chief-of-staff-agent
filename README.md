@@ -275,7 +275,7 @@ Read this before installing. Nothing below happens without your configuration, a
   `sync push` commits and pushes that data to the private git repo you named, never to this repository.
 - **Background processes:** none by default. `webhook_receiver.py` is an optional HTTP listener you start yourself for push notifications. It only records events and never acts.
 - **Credentials:** all optional, one per provider: `COMPOSIO_MCP_KEY`, `M365_CLIENT_SECRET`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `DOCUSEAL_API_KEY`, `DOCUSEAL_MCP_TOKEN` and the two webhook secrets. Under Hermes they are read only through Hermes (`get_secret`, and per session for the plugin's own commands). The plugin stores no tokens of its own.
-- **Approvals:** sending, moving, deleting, filing, signing and paid data calls all go through the review queue: propose, approve, execute, audit. `CHIEF_OF_STAFF_AUTO_APPROVE` and `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` are operator break-glass switches that are off by default. Without a terminal, any confirmation that needs one is refused, never left waiting.
+- **Approvals:** sending, moving, deleting, filing, signing and paid data calls all go through the review queue: propose, approve, execute, audit. Under Hermes, approvals are signed in the gateway, so only you, through `/<name> approve`, can approve. The agent can't, even from its terminal ([security model](docs/SECURITY_MODEL.md)). `CHIEF_OF_STAFF_AUTO_APPROVE` and `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` are operator break-glass switches that are off by default. Without a terminal, any confirmation that needs one is refused, never left waiting.
 - **Telemetry:** none.
 
 ---
@@ -290,6 +290,7 @@ Read this before installing. Nothing below happens without your configuration, a
 | [`docs/REVIEW_QUEUE.md`](docs/REVIEW_QUEUE.md) | Review, approve, execute, audit |
 | [`docs/BETA_DAILY_LOOP.md`](docs/BETA_DAILY_LOOP.md) | The daily operating loop |
 | [`docs/PIPELINE_MANAGER.md`](docs/PIPELINE_MANAGER.md) | CRM operations |
+| [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md) | What is guaranteed, against whom, and where it ends |
 | [`docs/HERMES_CATALOG.md`](docs/HERMES_CATALOG.md) | Hermes plugin-catalog entry, rule-by-rule compliance, submission steps |
 | [`docs/MULTI_COMPANY.md`](docs/MULTI_COMPANY.md) | Several companies on one install: registry, isolation, group roll-up |
 | [`docs/BOOKKEEPER_INGESTION.md`](docs/BOOKKEEPER_INGESTION.md) | Invoice ingestion |

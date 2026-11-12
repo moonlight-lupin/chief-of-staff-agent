@@ -1365,6 +1365,42 @@ def _check_break_glass(fix: bool, data: dict[str, Any] | None, config_path: Path
     return CheckResult("break_glass", "pass", "approval-gate break-glass switches are off")
 
 
+DENY_RULES_HINT = ("approvals.deny: ['*review_queue.py*approve*', '*review_queue.py*dismiss*', "
+                   "'*send_email.py*approve*', '*delete_actions.py*approve*', '*webhook_events.py*approve*']")
+
+
+def _check_approval_signing(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Signed approvals (approval_signing): enforced once the Hermes gateway enrols the store."""
+    try:
+        from approval_signing import STORE, signing_state
+        from plugin_secrets import under_hermes
+        from state_db import _open_db
+
+        config = load_config(config_path, quiet=True)
+        if config is None:
+            return CheckResult("approval_signing", "pass", "not checked: no config")
+        with _open_db(config) as db:
+            is_enforced, keys = signing_state(db.get_kv(STORE))
+    except Exception as exc:
+        return CheckResult("approval_signing", "pass", f"not checked: {exc}")
+    if is_enforced:
+        return CheckResult(
+            "approval_signing", "pass",
+            f"signed approvals enforced ({len(keys)} gateway key(s)): only /<name> or /cos in a Hermes "
+            f"session can approve or dismiss. Belt and braces: add to Hermes config.yaml {DENY_RULES_HINT}",
+        )
+    if under_hermes():
+        return CheckResult(
+            "approval_signing", "warn",
+            "running under Hermes but this store is not enrolled for signed approvals: load the plugin in "
+            "the Hermes gateway (it enrols on load) and approve with /cos approve <id>",
+        )
+    return CheckResult(
+        "approval_signing", "pass",
+        "not enrolled: standalone install, approvals are made by the operator at their own terminal",
+    )
+
+
 def _check_company_registry(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     """Multi-company registry is valid and a scope is selected (docs/MULTI_COMPANY.md)."""
     try:
@@ -1443,7 +1479,7 @@ def _check_spend_reservations(fix: bool, data: dict[str, Any] | None, config_pat
 
 
 CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
-    _check_break_glass, _check_company_registry, _check_executor_accounts, _check_spend_reservations,
+    _check_break_glass, _check_approval_signing, _check_company_registry, _check_executor_accounts, _check_spend_reservations,
     _check_plugin_root, _check_skills, _check_company_yaml, _check_required_sections,
     _check_assistant_name,
     _check_project_root, _check_yaml_stores, _check_google_workspace, _check_google_auth,

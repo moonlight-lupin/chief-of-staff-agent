@@ -525,7 +525,7 @@ def _next_action_text(step: Mapping[str, Any] | None) -> str:
         if action_id:
             return (
                 f"action {action_id} bound — await operator approval; "
-                f"operator: {APPROVE_CMD_PREFIX} {action_id}"
+                f"operator: /cos approve {action_id} (Hermes) or {APPROVE_CMD_PREFIX} {action_id}"
             )
         return f"{label} {GATE_PHRASE} propose bind-action"
     return label
