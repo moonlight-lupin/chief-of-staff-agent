@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SEO audit CLI: analyse an agent-fetched crawl and SERP results."""
+"""SEO tracker CLI: built-in checks, rankings and history over an agent-fetched crawl and SERP results."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         data = json.loads(Path(args.input).read_text(encoding="utf-8"))
         report = seo.analyze(data.get("pages") or [], data.get("serp") or [], site=str(data["site"]))
     except (OSError, ValueError, KeyError) as exc:
-        print(f"seo-audit: cannot read input: {exc}", file=sys.stderr)
+        print(f"seo-tracker: cannot read input: {exc}", file=sys.stderr)
         return 1
     delta = seo.compare(config, report)
     if args.record:

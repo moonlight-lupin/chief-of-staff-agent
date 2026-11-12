@@ -267,7 +267,7 @@ def test_cli_entrypoints(config, tmp_path, capsys):
 
     crawl = tmp_path / "crawl.json"
     crawl.write_text(json.dumps({"site": "acme.example", "pages": PAGES, "serp": SERP}))
-    assert _load("skills/seo-audit/scripts/seo_audit_cli.py", "seo_cli").main(
+    assert _load("skills/seo-tracker/scripts/seo_tracker.py", "seo_cli").main(
         ["--config", cfg, "analyze", "--input", str(crawl), "--markdown"]) == 0
     assert capsys.readouterr().out.startswith("# SEO audit")
 
@@ -283,8 +283,8 @@ def test_prospecting_hidden_without_a_spend_provider(tmp_path, monkeypatch):
 
     plain = _config(tmp_path, notion="")
     monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(plain.source_path))
-    names = ["seo-audit", "competitor-watch", "prospecting"]
-    assert doctor_base._filter_configured_skills(names) == ["seo-audit", "competitor-watch"]
+    names = ["seo-tracker", "competitor-watch", "prospecting"]
+    assert doctor_base._filter_configured_skills(names) == ["seo-tracker", "competitor-watch"]
     with_spend = _config(tmp_path, notion=ICP)
     monkeypatch.setenv("CHIEF_OF_STAFF_CONFIG", str(with_spend.source_path))
     assert doctor_base._filter_configured_skills(names) == names

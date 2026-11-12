@@ -76,7 +76,7 @@ Every call is audited along with its cost.
 | 2 | Group store and queue, `share:` read policy, `daily --group` roll-up, expected-account declaration and executing-account audit. |
 | 3 | Done. `shared/scripts/notion_mirror.py` with action types `notion.db.upsert` (low), `notion.page.create/update` (medium), `notion.pull` (medium) and `notion.page.archive` (high), plus skills `notion-sync` (pipeline and todos; new Notion tasks come in through it, so no separate capture skill is needed) and `notion-wiki`. |
 | 3b | Done. Notion as an input to existing skills: an optional `notion` block in the workspace envelope (`shared/scripts/notion_inputs.py`), used by daily briefing, weekly review and meeting prep. Read-only. |
-| 4 | Done. `shared/scripts/spend.py` (spend envelopes), then the skills `prospecting`, `seo-audit` and `competitor-watch`. Covers PDPA data minimisation, a source record for every lead, a Do Not Call block before any phone or SMS contact, and a permanent opt-out suppression list. |
+| 4 | Done. `shared/scripts/spend.py` (spend envelopes), then the skills `prospecting`, `seo-tracker` and `competitor-watch`. Covers PDPA data minimisation, a source record for every lead, a Do Not Call block before any phone or SMS contact, and a permanent opt-out suppression list. |
 
 ## Registry format
 

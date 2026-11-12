@@ -7,7 +7,7 @@ license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, competitors, pricing, monitoring, monid]
-    related_skills: [seo-audit, news-monitoring, entity-research]
+    related_skills: [seo-tracker, news-monitoring, entity-research]
 ---
 
 # Competitor Watch
@@ -38,6 +38,11 @@ are stored. Page text is never kept.
 4. **Report** price changes first, then new pages, then title and content
    changes. Suggest follow-ups such as a pricing review or a `deep-research`
    brief, but do not act on them.
+
+**Search competition is a different question.** For who outranks the site and
+why, use OpenSEO's `competitive-landscape` or `competitor-analysis` skills
+through `seo-tracker`. This skill watches what competitors change on their
+own pages.
 
 Scheduled weekly runs fit well. Use one envelope per month (topic e.g.
 `competitor-watch-2026-11`), so the budget stays bounded.

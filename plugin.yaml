@@ -42,7 +42,7 @@ skill_profiles:
       - notion-sync
       - notion-wiki
       - prospecting
-      - seo-audit
+      - seo-tracker
       - competitor-watch
   enterprise:
     registered:
@@ -69,5 +69,5 @@ skill_profiles:
       - notion-sync
       - notion-wiki
       - prospecting
-      - seo-audit
+      - seo-tracker
       - competitor-watch

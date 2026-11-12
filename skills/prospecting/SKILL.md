@@ -7,7 +7,7 @@ license: Apache-2.0
 metadata:
   hermes:
     tags: [chief-of-staff, prospecting, leads, monid, sales, pdpa]
-    related_skills: [pipeline-manager, entity-research, seo-audit, competitor-watch]
+    related_skills: [pipeline-manager, entity-research, seo-tracker, competitor-watch]
 ---
 
 # Prospecting
@@ -104,6 +104,9 @@ The skill appears only when `spend:` has a provider section.
   is suppressed permanently, even after purges.
 - Retention: `prospects.py purge --older-than-days 180` shows what would be
   deleted. Pass `--confirm` only when the user asks for it.
+
+Backlink outreach found by OpenSEO's `link-prospecting` (through
+`seo-tracker`) follows the same outreach rules.
 
 ## Confidentiality
 

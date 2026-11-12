@@ -19,7 +19,7 @@ ALL_SKILLS = [
     "email-organisation", "self-sign", "esign-connector",
     "news-monitoring", "workflow-architect",
     "notion-sync", "notion-wiki",
-    "prospecting", "seo-audit", "competitor-watch",
+    "prospecting", "seo-tracker", "competitor-watch",
 ]
 
 

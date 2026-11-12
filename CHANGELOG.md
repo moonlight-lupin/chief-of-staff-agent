@@ -16,11 +16,18 @@
   - Chosen prospects become queued `pipeline.deal.add` actions.
   - Retention purge is a dry run unless confirmed.
   - The skill is registered only when `spend:` names a provider.
-- `seo-audit` skill and `shared/scripts/seo_audit.py`: on-page checks in
-  three severity levels, a prioritised fix list, keyword rankings,
-  opportunities, the domains that outrank the site, and rank and issue
-  changes since the last recorded audit. The Markdown report keeps no page
-  content.
+- `seo-tracker` skill and `shared/scripts/seo_audit.py`. When OpenSEO
+  (every-app/open-seo, MIT) is connected, it routes SEO work to OpenSEO's
+  skills: `seo-coach`, `seo-project-setup`, `seo-audit`, `keyword-research`,
+  `keyword-clustering`, `competitive-landscape`, `competitor-analysis`,
+  `local-seo`, `link-prospecting`, `ai-prompt-research`,
+  `ai-visibility-audit` and `seo-report`. It adds a spend envelope around
+  OpenSEO credits, and records rankings and issue counts after each audit to
+  show what moved. Without OpenSEO it falls back to built-in on-page checks
+  in three severity levels, with a prioritised fix list, keyword rankings,
+  opportunities and the domains that outrank the site. It is named
+  `seo-tracker`, not `seo-audit`, to avoid clashing with OpenSEO's own
+  `seo-audit` skill.
 - `competitor-watch` skill and `shared/scripts/competitor_watch.py`: snapshot
   diffs showing new and removed pages, title, content and price changes.
   Only titles, hashes and the prices found are stored.
