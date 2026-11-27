@@ -124,6 +124,17 @@ def cmd_status(config: dict[str, Any]) -> int:
         except Exception as exc:
             result["healthy"] = False
             result["error"] = str(exc)
+    elif provider == "google_mcp":
+        google = config.get("google", {}) if isinstance(config, Mapping) else {}
+        result["delegate_email"] = google.get("delegate_email", "") if isinstance(google, Mapping) else ""
+        try:
+            from workspace_client import get_workspace_client
+            client = get_workspace_client(config)
+            result["class"] = client.__class__.__name__
+            result["healthy"] = client.health_check()
+        except Exception as exc:
+            result["healthy"] = False
+            result["error"] = str(exc)
     elif provider == "m365":
         m365 = config.get("m365", {}) if isinstance(config, Mapping) else {}
         auth_mode = str(m365.get("auth", "client_credentials") or "client_credentials")
@@ -226,6 +237,56 @@ def cmd_provider_google_api(config: dict[str, Any]) -> int:
         else:
             print("\n❌ Auth test failed")
             return 1
+    except Exception as exc:
+        print(f"\n❌ Auth test error: {exc}")
+        return 1
+
+
+def cmd_provider_google_mcp(config: dict[str, Any]) -> int:
+    """Verify google_mcp setup: the google: block, the key source, one read."""
+    from providers.google_contacts import service_account_settings
+    from google_mcp_transport import ENDPOINTS
+
+    google = config.get("google", {}) if isinstance(config, Mapping) else {}
+    google = google if isinstance(google, Mapping) else {}
+    print("=== Google Workspace MCP Provider Setup ===\n")
+    for name, url in ENDPOINTS.items():
+        print(f"   {name}: {url}")
+    print()
+
+    delegate = str(google.get("delegate_email") or "").strip()
+    if delegate:
+        print(f"✅ Delegate email: {delegate}")
+    else:
+        print("❌ google.delegate_email is not set (the user the service account acts as)")
+        return 1
+
+    sa_source, _ = service_account_settings(config)
+    if sa_source == plugin_secrets.SA_SECRET_SOURCE:
+        print(f"✅ Service-account key: {plugin_secrets.SA_JSON_ENV} secret")
+    elif sa_source:
+        sa = Path(sa_source).expanduser()
+        if plugin_secrets.under_hermes():
+            print(f"❌ Under Hermes the key must come from the {plugin_secrets.SA_JSON_ENV} secret, not a file")
+            return 1
+        if not sa.is_file():
+            print(f"❌ Service account not found at: {sa}")
+            return 1
+        print(f"✅ Service account found: {sa}")
+    else:
+        print("❌ No google.service_account_path and no GOOGLE_SERVICE_ACCOUNT_JSON secret")
+        return 1
+    print("   Domain-wide delegation must grant: gmail.modify, calendar.events, drive")
+    print("   Google may still ask the user to approve a call (user-review policies).")
+
+    try:
+        from workspace_client import get_workspace_client
+        client = get_workspace_client(config)
+        if client.health_check():
+            print("\n✅ Auth test passed — Gmail list_labels succeeded")
+            return 0
+        print("\n❌ Auth test failed")
+        return 1
     except Exception as exc:
         print(f"\n❌ Auth test error: {exc}")
         return 1
@@ -871,7 +932,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record-evidence", action="store_true",
                         help="With --verify*: save the check statuses to "
                              "<project_root>/verify/evidence/ for the verification matrix")
-    parser.add_argument("--provider", choices=["google_api", "composio", "m365"],
+    parser.add_argument("--provider", choices=["google_api", "google_mcp", "composio", "m365"],
                         help="Verify or set up a specific provider")
     parser.add_argument("--connect-m365", action="store_true",
                         help="Print Microsoft 365 connect guidance")
@@ -925,6 +986,8 @@ def _main() -> int:
         return cmd_capabilities(config, provider_override=args.provider)
     elif args.provider == "google_api":
         return cmd_provider_google_api(config)
+    elif args.provider == "google_mcp":
+        return cmd_provider_google_mcp(config)
     elif args.provider == "m365":
         connect = bool(args.connect_m365 or args.connect)
         return cmd_provider_m365(config, connect)

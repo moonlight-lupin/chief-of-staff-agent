@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased (v0.10.0) — `google_mcp` workspace provider
+
+Touches a provider's write path, the `@guarded` decorator and the shared
+execution path.
+
+- **New provider `google_mcp`.** It talks to Google's own Workspace MCP servers
+  (Gmail, Calendar and Drive at `*mcp.googleapis.com/mcp/v1`). Google's
+  Workspace AI Tools Addendum requires these, or the Workspace CLI, for AI
+  agents from 2027-02-01.
+  - Auth is a service account with domain-wide delegation. It reuses the
+    `google:` block and the `GOOGLE_SERVICE_ACCOUNT_JSON` route under Hermes.
+  - The scopes are `gmail.modify`, `calendar.events` and `drive` (full Drive,
+    as google_api's REST path already uses). The delegation must grant all
+    three. `calendar.events` is narrower than google_api's `calendar`.
+  - The token is cached in memory only.
+  - The transport is a stateless JSON-RPC client (`google_mcp_transport.py`)
+    that parses JSON and SSE. Writes are never re-sent automatically; reads
+    retry once on 429/503.
+- **Google's approval prompt is never answered by the client.** An
+  `input_required` result raises `GoogleConfirmationRequired`, unless the
+  caller passes a `confirmer`. The confirmer may answer only with a choice
+  Google offered. `UserDeniedAction`, `AdminPolicyBlock` and
+  MissingRequiredClientCapability (-32021) surface as named failures.
+- **`run_approved` records a confirmation prompt as not attempted.** It uses
+  stage `confirm`, and the action stays approved. The prompt is returned on
+  `Execution.prompt`. `@guarded` lets a `ConfirmationRequired` through and
+  audits it as `confirmation_required`.
+- The provider is wired into the registry, the capability table, the
+  hosted-session refusal, `doctor`, `connect_workspace.py --provider
+  google_mcp` and `bootstrap.py --workspace-provider google_mcp`.
+- It does not support calendar cancel/uncancel, Drive untrash or contacts.
+- The verification matrix lists every supported action at `catalog` (Google's
+  tool reference, retrieved 2026-11-27). Nothing has run against a live account.
+
 ## v0.9.1 (beta) — v1.0 readiness hardening
 
 A hardening release. It ships the v1.0 readiness work (#40–#45, #49, #50):

@@ -289,6 +289,16 @@ def _workspace_routing(config: dict) -> Optional[str]:
                     f"delegate={delegate}")
         return None
 
+    elif provider == "google_mcp":
+        google_cfg = config.get("google", {})
+        if not isinstance(google_cfg, _Mapping):
+            return None
+        delegate = str(google_cfg.get("delegate_email", "")).strip()
+        if delegate:
+            return (f"Workspace(google_mcp): for {scope_label}, Google Workspace MCP "
+                    f"servers as delegate={delegate}")
+        return None
+
     elif provider == "composio":
         try:
             from composio_family import _resolve_composio_family

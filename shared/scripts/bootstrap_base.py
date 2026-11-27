@@ -325,6 +325,13 @@ def _next_steps(provider: str | None) -> list[str]:
     provider = provider or "google_api"
     if provider == "google_api":
         cred = "Set up Google service account/OAuth credentials in company.yaml."
+    elif provider == "google_mcp":
+        cred = (
+            "Authorize the service account's domain-wide delegation for gmail.modify, "
+            "calendar.events and drive, then check it: "
+            "python shared/scripts/connect_workspace.py --provider google_mcp "
+            "(Google Workspace MCP servers)"
+        )
     elif provider == "composio":
         cred = (
             "Connect your Composio workspace: "
@@ -345,7 +352,7 @@ def _next_steps(provider: str | None) -> list[str]:
     ]
 
 
-WORKSPACE_PROVIDERS = ("google_api", "composio", "m365")
+WORKSPACE_PROVIDERS = ("google_api", "google_mcp", "composio", "m365")
 M365_AUTH_MODES = ("client_credentials", "device_code")
 
 # Placeholder values written when the operator omits an identifier. They mirror
@@ -423,6 +430,28 @@ def _provider_overlay(
 
     # Default / google_api: leave integrations untouched (back-compat).
     if not provider or provider == "google_api":
+        return overlay, required_env, notices, next_commands
+
+    if provider == "google_mcp":
+        # Same google: block as google_api (delegate_email, service_account_path),
+        # which the identity step already writes; only the provider changes.
+        overlay["integrations"] = {"workspace": {"provider": "google_mcp"}}
+        notices.append(
+            "google_mcp reuses google.delegate_email and google.service_account_path "
+            "(or the GOOGLE_SERVICE_ACCOUNT_JSON secret under Hermes). Domain-wide "
+            "delegation must grant gmail.modify, calendar.events and drive. Google may "
+            "still ask the user to approve individual calls."
+        )
+        if not getattr(args, "operator", None):
+            notices.append(
+                "No --operator given: set google.delegate_email to the Workspace user "
+                "the service account acts as."
+            )
+        next_commands = [
+            "python shared/scripts/doctor.py",
+            "python shared/scripts/connect_workspace.py --provider google_mcp",
+            "python shared/scripts/connect_workspace.py --provider google_mcp --verify",
+        ]
         return overlay, required_env, notices, next_commands
 
     if provider == "composio":

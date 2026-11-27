@@ -76,6 +76,31 @@ _UPLOAD = ("throwaway text and binary (.pdf) files uploaded with only the MCP ke
 _CONTACTS = ("google_api.py contacts subcommands against a Google Workspace account; "
              "an install whose script has the write subcommands (v0.7.1)")
 
+_GOOGLE_MCP_CATALOG = ("Google Workspace MCP tool reference (developers.google.com/workspace, "
+                       "retrieved 2026-11-27) lists {tool} with the arguments we send; not executed live")
+_GOOGLE_MCP_TOOLS = {
+    "mail.search": "gmail search_threads / get_thread",
+    "mail.draft": "gmail create_draft",
+    "mail.send": "gmail send_message",
+    "mail.list_folders": "gmail list_labels",
+    "mail.move": "gmail update_message_labels",
+    "mail.archive": "gmail update_message_labels",
+    "mail.unarchive": "gmail update_message_labels",
+    "mail.trash": "gmail trash_message",
+    "mail.untrash": "gmail untrash_message",
+    "mail.list_tags": "gmail list_labels",
+    "mail.tag": "gmail label_message",
+    "mail.create_tag": "gmail create_label",
+    "calendar.list": "calendar list_events",
+    "calendar.create": "calendar create_event",
+    "calendar.update": "calendar update_event",
+    "calendar.delete": "calendar delete_event",
+    "files.search": "drive search_files",
+    "files.upload": "drive create_file",
+    "files.download": "drive download_file_content",
+    "files.trash": "drive trash_file",
+}
+
 EVIDENCE: dict[str, dict[str, dict[str, str]]] = {
     "google_api": {
         "mail.draft": _live("2026-07-16", "Gmail users.drafts.create via the service account; "
@@ -129,6 +154,10 @@ EVIDENCE: dict[str, dict[str, dict[str, str]]] = {
     },
     # Native Graph: code-complete, never run against a real Entra tenant.
     "m365": {},
+    # Google's own Workspace MCP servers (v0.10.0): mapped from the published
+    # tool reference, never executed against a real account.
+    "google_mcp": {action: _catalog(_GOOGLE_MCP_CATALOG.format(tool=tool))
+                   for action, tool in _GOOGLE_MCP_TOOLS.items()},
 }
 
 # workspace_verify check → the actions a *pass* exercised. mail_send is never

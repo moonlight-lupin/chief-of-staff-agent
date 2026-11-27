@@ -201,12 +201,21 @@ backup:
 
 integrations:
   workspace:
-    provider: google_api        # google_api | composio | m365 | agent
+    provider: google_api        # google_api | google_mcp | composio | m365 | agent
     mode: direct                # direct | sdk | mcp
+    # provider: google_mcp — Google's own Workspace MCP servers (Gmail, Calendar,
+    # Drive at *mcp.googleapis.com/mcp/v1), required for AI agents under Google's
+    # Workspace AI Tools Addendum from 2027-02-01. Reuses the google: block above:
+    # delegate_email is the user acted as; service_account_path (or, under Hermes,
+    # the GOOGLE_SERVICE_ACCOUNT_JSON secret) is a key with domain-wide delegation
+    # for gmail.modify, calendar.events and drive. Google may pause a call for the
+    # user's own approval; Chief of Staff never answers that prompt by itself.
+    # Not supported there: calendar cancel/uncancel, Drive untrash, contacts.
+    # Refused in hosted cloud sessions (it holds a key). Never live-verified yet.
     # provider: agent — Python client is a no-op. Hermes (or another host)
     # fetches *reads* with its own connectors / already-authed Composio MCP,
     # writes a schemas.py envelope, and passes --input to compute scripts.
-    # Keep provider: composio|m365|google_api for guarded *writes*.
+    # Keep provider: composio|m365|google_api|google_mcp for guarded *writes*.
     # Composio toolkit family (only used when provider: composio):
     #   google    -> Gmail / Google Calendar / Google Drive
     #   microsoft -> Outlook mail / Outlook calendar / OneDrive

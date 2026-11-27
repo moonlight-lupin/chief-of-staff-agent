@@ -17,7 +17,10 @@ same sequence, and it lives here so a safety fix lands once:
 
 A refusal in steps 2–4, or a :class:`NotAttempted` raised by the call before
 any provider I/O, is recorded with ``attempted=False``: nothing can have
-happened, so even a send stays retryable. Anything after the provider was
+happened, so even a send stays retryable. So is a :class:`ConfirmationRequired`
+— the workspace server paused the tool to ask the user and ran nothing; the
+prompt comes back on ``Execution.prompt`` for the caller to show (stage
+``confirm``). Anything after the provider was
 called is a real attempt, and a failed send or create is final
 (``state_db.final_on_failure``). The caller validates lookup, state and type
 before calling, and prints the outcome its own way.
@@ -29,6 +32,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
+from workspace_guardrails import ConfirmationRequired
+
+__all__ = ["ConfirmationRequired", "Execution", "NotAttempted", "run_approved"]
+
 _BREAK_GLASS = ("CHIEF_OF_STAFF_AUTO_APPROVE", "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
 
 
@@ -39,10 +46,11 @@ class NotAttempted(Exception):
 @dataclass
 class Execution:
     ok: bool
-    stage: str                 # claim | preflight | capability | grant | refused | call | provider | done
+    stage: str                 # claim | preflight | capability | grant | refused | confirm | call | provider | done
     result: Any = None
     error: str = ""
     account_check: Any = None
+    prompt: ConfirmationRequired | None = None   # stage "confirm": the server's question, unanswered
 
 
 @contextmanager
@@ -111,6 +119,13 @@ def run_approved(
     try:
         with _approved_env():
             result = call(client, action)
+    except ConfirmationRequired as exc:
+        # The server asked the user and ran nothing: not an attempt, so the
+        # action returns to approved. The error names the product and tool
+        # only — never the arguments, which may hold a message body.
+        error = f"{exc.summary()}; the action was not attempted and stays approved"
+        mark_failed(cfg, action_id, error, attempted=False)
+        return Execution(False, "confirm", error=error, account_check=account_check, prompt=exc)
     except NotAttempted as exc:
         return refuse("refused", str(exc))
     except Exception as exc:  # noqa: BLE001 — every provider error is recorded, never swallowed

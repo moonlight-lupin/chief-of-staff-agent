@@ -168,6 +168,7 @@ CREDENTIAL_PROVIDERS: frozenset[str] = frozenset({
     "composio",
     "composio_microsoft",
     "composio_google",
+    "google_mcp",        # service-account key with domain-wide delegation
 })
 
 # Set by Claude Code / Cowork in an Anthropic-hosted cloud session.
@@ -459,6 +460,61 @@ def confirm_action(action: str, *, config: Any = None, **details: Any) -> bool:
     return False
 
 
+class ConfirmationRequired(Exception):
+    """The workspace server paused a tool call to ask the user, and nothing ran.
+
+    Google's Workspace MCP servers (and potentially others) answer some calls
+    with their own approval prompt instead of executing them. The provider
+    raises this rather than answering: only an explicit confirmer supplied by
+    the caller may choose, and only one of ``choices``. Executors record it as
+    *not attempted* (``action_execution.run_approved``), so the action stays
+    approved.
+
+    ``arguments`` (which may hold a message body) and ``request_state`` (the
+    server's binding for the retry) are kept off ``str()`` and out of
+    ``to_dict()`` unless asked for, so a log line or a chat message never
+    carries them by accident.
+    """
+
+    def __init__(self, *, server: str, product: str, tool: str, message: str = "", title: str = "",
+                 choices: list[tuple[str, str]] | None = None, request_state: Any = None,
+                 arguments: Mapping[str, Any] | None = None, request_key: str = "approval_choice",
+                 field_key: str = "approval_choice") -> None:
+        self.server = server
+        self.product = product
+        self.tool = tool
+        self.message = message
+        self.title = title
+        self.choices = [(str(cid), str(label)) for cid, label in (choices or [])]
+        self.request_state = request_state
+        self.arguments = dict(arguments or {})
+        self.request_key = request_key
+        self.field_key = field_key
+        super().__init__(self.summary())
+
+    @property
+    def choice_ids(self) -> list[str]:
+        return [cid for cid, _ in self.choices]
+
+    def summary(self) -> str:
+        return (f"{self.product} asked for the user's confirmation before running {self.tool}; "
+                "nothing was executed")
+
+    def to_dict(self, *, include_private: bool = False) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "server": self.server,
+            "product": self.product,
+            "tool": self.tool,
+            "message": self.message,
+            "title": self.title,
+            "choices": [{"id": cid, "label": label} for cid, label in self.choices],
+        }
+        if include_private:
+            out["arguments"] = dict(self.arguments)
+            out["request_state"] = self.request_state
+        return out
+
+
 @dataclass
 class ActionResult:
     """Standardized result object for all workspace write actions.
@@ -594,6 +650,18 @@ def guarded(
 
             try:
                 data = fn(self, *args, **kwargs)
+            except ConfirmationRequired:
+                # The server paused for the user's answer and ran nothing. This
+                # is not a provider failure: let it reach the executor, which
+                # records it as not attempted and can show the prompt.
+                try:
+                    audit_workspace_action(
+                        self.config, audit_provider, operation, str(resolved_audit_tool),
+                        target=target, status="confirmation_required",
+                    )
+                except Exception:  # pragma: no cover - audit must never mask the prompt
+                    pass
+                raise
             except Exception as exc:  # noqa: BLE001 — provider errors become ActionResult
                 audit_workspace_action(
                     self.config, audit_provider, operation, str(resolved_audit_tool),
