@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
@@ -205,7 +206,6 @@ def cmd_execute(args: argparse.Namespace) -> int:
         return 1
 
     action_type = action.get("type", "")
-    payload = action.get("payload", {})
 
     # Reject unsupported action types BEFORE mark_executing
     if action_type == "gmail.draft":
@@ -304,68 +304,27 @@ def cmd_execute(args: argparse.Namespace) -> int:
     # ─── Workspace (Gmail/Calendar/Drive) actions ────────────────
     # Claim → account pre-flight → capability → grant → call → record
     # (shared/scripts/action_execution.py). The approval IS the confirmation.
-    from action_execution import NotAttempted, run_approved
-    from workspace_client import get_workspace_client
+    # Google's own prompt (google_mcp) is answered only by the human at this
+    # terminal; without one the next step is printed instead.
+    from google_confirmation import default_confirmer, next_step
 
-    def dispatch(client, _action):
-        if action_type == "gmail.send":
-            return client.mail_send(
-                to=payload.get("to", ""),
-                subject=payload.get("subject", ""),
-                body=payload.get("body", ""),
-                cc=payload.get("cc"),
-            )
-        if action_type == "gmail.label":
-            return client.mail_tag(message_id=payload.get("message_id", ""), tag_id=payload.get("label_id", ""))
-        if action_type == "gmail.archive":
-            return client.mail_archive(message_id=payload.get("message_id", ""))
-        if action_type == "gmail.create_label":
-            return client.mail_create_tag(name=payload.get("label", ""))
-        if action_type == "gmail.trash":
-            return client.mail_trash(message_id=payload.get("message_id", ""))
-        if action_type == "calendar.create":
-            return client.calendar_create(
-                title=payload.get("summary", payload.get("title", "")),
-                start=payload.get("start", ""),
-                end=payload.get("end", ""),
-            )
-        if action_type == "calendar.update":
-            return client.calendar_update(
-                event_id=payload.get("event_id", ""),
-                summary=payload.get("summary"),
-                start=payload.get("start"),
-                end=payload.get("end"),
-            )
-        if action_type == "calendar.cancel":
-            return client.calendar_cancel(event_id=payload.get("event_id", ""))
-        if action_type in ("drive.upload", "drive.download"):
-            refusal = _payload_refusal(cfg, action_type, payload)
-            if refusal:
-                raise NotAttempted(refusal)
-        if action_type == "drive.upload":
-            return client.files_upload(
-                file_path=payload.get("file_path", payload.get("path", "")),
-                parent_id=payload.get("parent_id"),
-            )
-        if action_type == "drive.download":
-            return client.files_download(
-                file_id=payload.get("file_id", ""),
-                output_path=payload.get("output_path", payload.get("path", "")),
-            )
-        if action_type == "drive.trash":
-            return client.files_trash(file_id=payload.get("file_id", ""))
-        if action_type == "contacts.create":
-            return client.contacts_create(**{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)})
-        if action_type == "contacts.update":
-            return client.contacts_update(
-                person_id=payload.get("person_id") or action.get("target", ""),
-                **{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)},
-            )
-        if action_type == "contacts.delete":
-            return client.contacts_delete(person_id=payload.get("person_id") or action.get("target", ""))
-        raise NotAttempted(f"Unknown action type: {action_type}")
-
-    out = run_approved(cfg, action, get_workspace_client(cfg), dispatch, accept_non_dict=True)
+    out = execute_action(cfg, args.action_id, confirmer=default_confirmer(cfg))
+    if out.stage == "lookup":
+        # Refused before the claim (unknown type, not approved): stays as it was.
+        if args.summary:
+            print(f"❌ Refused before any provider call: {out.error}")
+        else:
+            print_json({"success": False, "error": out.error, "attempted": False})
+        return 1
+    if out.stage == "confirm":
+        if args.summary:
+            print(f"⏸ {out.error}")
+        else:
+            print_json({"success": False, "error": out.error, "attempted": False,
+                        "confirmation_required": True,
+                        "prompt": out.prompt.to_dict() if out.prompt is not None else None})
+        print(next_step(args.action_id, cfg), file=sys.stderr)
+        return 1
     if out.stage == "claim":
         print(f"Cannot execute (state={state}). Approval may have expired.", file=sys.stderr)
         return 1
@@ -399,6 +358,113 @@ def cmd_execute(args: argparse.Namespace) -> int:
         print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
                     "result": result if isinstance(result, dict) else str(result)})
     return 0
+
+
+# The workspace types execute_action dispatches, by their legacy key. Internal
+# types (bookkeeper., notion., pipeline., cron.) and drafts are routed
+# elsewhere by cmd_execute and are never run here.
+DISPATCHABLE_TYPES = frozenset({
+    "gmail.send", "gmail.label", "gmail.archive", "gmail.create_label", "gmail.trash",
+    "calendar.create", "calendar.update", "calendar.cancel",
+    "drive.upload", "drive.download", "drive.trash",
+    "contacts.create", "contacts.update", "contacts.delete",
+})
+
+
+def dispatch_key(action_type: str) -> str:
+    """The legacy dispatch key for a queued type: neutral aliases (``mail.send``,
+    ``files.trash``, …) map back through ``LEGACY_ACTION_ALIASES``."""
+    from workspace_capabilities import LEGACY_ACTION_ALIASES
+
+    neutral_to_legacy = {neutral: legacy for legacy, neutral in LEGACY_ACTION_ALIASES.items()}
+    return neutral_to_legacy.get(action_type, action_type)
+
+
+def execute_action(cfg: Any, action_id: str, *, confirmer: Any = None) -> Any:
+    """Run one approved workspace action in-process and return its ``Execution``.
+
+    The programmatic entry behind ``cmd_execute``'s workspace branch and Hermes
+    ``/cos confirm``. ``confirmer`` answers the workspace server's own prompt
+    (Google's ``input_required``) — the caller passes one only for a human's
+    explicit choice. Stage ``lookup`` means nothing was claimed.
+    """
+    from action_execution import Execution, NotAttempted, run_approved
+    from state_db import get_pending_action
+    from workspace_client import get_workspace_client
+
+    action = get_pending_action(cfg, action_id)
+    if not action:
+        return Execution(False, "lookup", error=f"Action not found: {action_id}")
+    if action.get("state") != "approved":
+        return Execution(False, "lookup", error=f"Action {action_id} is not approved (state={action.get('state')})")
+    action_type = str(action.get("type") or "")
+    kind = dispatch_key(action_type)
+    if kind not in DISPATCHABLE_TYPES:
+        # Refused BEFORE the claim: an action this entry cannot run is never
+        # moved to executing, so it is never burned (final on signed stores).
+        return Execution(False, "lookup", error=f"{action_type} is not a workspace action this entry executes")
+    payload = action.get("payload") or {}
+
+    def dispatch(client, _action):
+        if kind == "gmail.send":
+            return client.mail_send(
+                to=payload.get("to", ""),
+                subject=payload.get("subject", ""),
+                body=payload.get("body", ""),
+                cc=payload.get("cc"),
+            )
+        if kind == "gmail.label":
+            return client.mail_tag(message_id=payload.get("message_id") or action.get("target", ""), tag_id=payload.get("label_id", ""))
+        if kind == "gmail.archive":
+            return client.mail_archive(message_id=payload.get("message_id") or action.get("target", ""))
+        if kind == "gmail.create_label":
+            return client.mail_create_tag(name=payload.get("label", ""))
+        if kind == "gmail.trash":
+            return client.mail_trash(message_id=payload.get("message_id") or action.get("target", ""))
+        if kind == "calendar.create":
+            return client.calendar_create(
+                title=payload.get("summary", payload.get("title", "")),
+                start=payload.get("start", ""),
+                end=payload.get("end", ""),
+            )
+        if kind == "calendar.update":
+            return client.calendar_update(
+                event_id=payload.get("event_id") or action.get("target", ""),
+                summary=payload.get("summary"),
+                start=payload.get("start"),
+                end=payload.get("end"),
+            )
+        if kind == "calendar.cancel":
+            return client.calendar_cancel(event_id=payload.get("event_id") or action.get("target", ""))
+        if kind in ("drive.upload", "drive.download"):
+            refusal = _payload_refusal(cfg, action_type, payload)
+            if refusal:
+                raise NotAttempted(refusal)
+        if kind == "drive.upload":
+            return client.files_upload(
+                file_path=payload.get("file_path", payload.get("path", "")),
+                parent_id=payload.get("parent_id"),
+            )
+        if kind == "drive.download":
+            return client.files_download(
+                file_id=payload.get("file_id") or action.get("target", ""),
+                output_path=payload.get("output_path", payload.get("path", "")),
+            )
+        if kind == "drive.trash":
+            return client.files_trash(file_id=payload.get("file_id") or action.get("target", ""))
+        if kind == "contacts.create":
+            return client.contacts_create(**{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)})
+        if kind == "contacts.update":
+            return client.contacts_update(
+                person_id=payload.get("person_id") or action.get("target", ""),
+                **{k: payload[k] for k in _CONTACT_FIELDS if payload.get(k)},
+            )
+        if kind == "contacts.delete":
+            return client.contacts_delete(person_id=payload.get("person_id") or action.get("target", ""))
+        raise NotAttempted(f"Unknown action type: {action_type}")  # unreachable: refused before the claim
+
+    return run_approved(cfg, action, get_workspace_client(cfg), dispatch, accept_non_dict=True,
+                        confirmer=confirmer)
 
 
 def _payload_refusal(cfg, action_type, payload):

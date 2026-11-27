@@ -277,6 +277,9 @@ class WorkspaceClient(abc.ABC):
 _PROVIDER_REGISTRY: dict[str, tuple[str, str]] = {
     "google_api": ("providers.google_workspace", "GoogleWorkspaceClient"),
     "composio": ("providers.composio_mcp_workspace", "get_composio_client"),
+    # Google's own Workspace MCP servers (Gmail, Calendar, Drive), as a
+    # domain-wide-delegated service account.
+    "google_mcp": ("providers.google_mcp_workspace", "GoogleMCPWorkspaceClient"),
     # Pre-registered; modules authored by later phases.
     "m365": ("providers.m365_graph", "M365GraphClient"),
     "agent": ("providers.agent_workspace", "AgentWorkspaceClient"),

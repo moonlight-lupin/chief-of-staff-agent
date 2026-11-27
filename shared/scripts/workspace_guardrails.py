@@ -168,6 +168,7 @@ CREDENTIAL_PROVIDERS: frozenset[str] = frozenset({
     "composio",
     "composio_microsoft",
     "composio_google",
+    "google_mcp",        # service-account key with domain-wide delegation
 })
 
 # Set by Claude Code / Cowork in an Anthropic-hosted cloud session.
@@ -459,6 +460,106 @@ def confirm_action(action: str, *, config: Any = None, **details: Any) -> bool:
     return False
 
 
+class NotAttempted(Exception):
+    """Nothing ran: refused before any provider I/O, or the server certainly ran nothing.
+
+    Executors record it with ``attempted=False`` (``action_execution``), so even
+    a send stays approved. Re-exported as ``action_execution.NotAttempted``.
+    """
+
+
+class FinalFailure(Exception):
+    """A failure that must never be retried, whatever the action type.
+
+    Google's ``UserDeniedAction`` (the user said no) and ``AdminPolicyBlock``
+    (an administrator forbids it) are final: Google's guide says not to retry
+    after a denial, so the action goes to ``failed`` even for a trash or an
+    archive that would otherwise return to approved.
+    """
+
+
+PERSISTENT_CHOICE_SUFFIX = "_ALWAYS"
+
+
+def is_persistent_choice(choice_id: Any) -> bool:
+    """``ALLOW_TOOL_ALWAYS`` and friends: a saved approval for future calls."""
+    return str(choice_id or "").upper().endswith(PERSISTENT_CHOICE_SUFFIX)
+
+
+class ConfirmationRequired(Exception):
+    """The workspace server paused a tool call to ask the user, and nothing ran.
+
+    Google's Workspace MCP servers (and potentially others) answer some calls
+    with their own approval prompt instead of executing them. The provider
+    raises this rather than answering: only an explicit confirmer supplied by
+    the caller may choose, and only one of ``offered``. Executors record it as
+    *not attempted* (``action_execution.run_approved``), so the action stays
+    approved and the pause is not counted as a retry.
+
+    ``choices`` is everything the server sent; ``offered`` is what may be put
+    to the human — by default only the one-off choices (``ALLOW_ONCE``,
+    ``DENY_ONCE``): a persistent ``*_ALWAYS`` choice needs the operator's
+    opt-in (``integrations.workspace.google_mcp.allow_persistent_choices``).
+
+    ``message`` (recipients, body excerpts), ``arguments`` (which may hold a
+    message body) and ``request_state`` (the server's binding for the retry)
+    are kept off ``str()`` and out of ``to_dict()`` unless asked for, so a log
+    line, an audit record or a chat message never carries them by accident.
+    """
+
+    def __init__(self, *, server: str, product: str, tool: str, message: str = "", title: str = "",
+                 choices: list[tuple[str, str]] | None = None, request_state: Any = None,
+                 arguments: Mapping[str, Any] | None = None, request_key: str = "approval_choice",
+                 field_key: str = "approval_choice",
+                 offered: list[tuple[str, str]] | None = None) -> None:
+        self.server = server
+        self.product = product
+        self.tool = tool
+        self.message = message
+        self.title = title
+        self.choices = [(str(cid), str(label)) for cid, label in (choices or [])]
+        if offered is None:
+            offered = [(cid, label) for cid, label in self.choices if not is_persistent_choice(cid)]
+        self.offered = [(str(cid), str(label)) for cid, label in offered]
+        self.request_state = request_state
+        self.arguments = dict(arguments or {})
+        self.request_key = request_key
+        self.field_key = field_key
+        super().__init__(self.summary())
+
+    @property
+    def choice_ids(self) -> list[str]:
+        return [cid for cid, _ in self.choices]
+
+    @property
+    def offered_ids(self) -> list[str]:
+        return [cid for cid, _ in self.offered]
+
+    def summary(self) -> str:
+        return (f"{self.product} asked for the user's confirmation before running {self.tool}; "
+                "nothing was executed")
+
+    def fingerprint(self) -> dict[str, Any]:
+        """What makes two prompts the same question: server, tool, title, message, offered ids."""
+        return {"server": self.server, "tool": self.tool, "title": self.title,
+                "message": self.message, "choice_ids": list(self.offered_ids)}
+
+    def to_dict(self, *, include_private: bool = False) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "server": self.server,
+            "product": self.product,
+            "tool": self.tool,
+            "title": self.title,
+            "choices": [{"id": cid, "label": label} for cid, label in self.choices],
+            "offered": [{"id": cid, "label": label} for cid, label in self.offered],
+        }
+        if include_private:
+            out["message"] = self.message
+            out["arguments"] = dict(self.arguments)
+            out["request_state"] = self.request_state
+        return out
+
+
 @dataclass
 class ActionResult:
     """Standardized result object for all workspace write actions.
@@ -594,15 +695,34 @@ def guarded(
 
             try:
                 data = fn(self, *args, **kwargs)
+            except ConfirmationRequired:
+                # The server paused for the user's answer and ran nothing. This
+                # is not a provider failure: let it reach the executor, which
+                # records it as not attempted and can show the prompt.
+                try:
+                    audit_workspace_action(
+                        self.config, audit_provider, operation, str(resolved_audit_tool),
+                        target=target, status="confirmation_required",
+                    )
+                except Exception:  # pragma: no cover - audit must never mask the prompt
+                    pass
+                raise
             except Exception as exc:  # noqa: BLE001 — provider errors become ActionResult
                 audit_workspace_action(
                     self.config, audit_provider, operation, str(resolved_audit_tool),
                     target=target, status="failed",
                 )
-                return ActionResult(
+                out = ActionResult(
                     success=False, action=action_id, provider=provider,
                     tool_slug=str(resolved_tool_slug), target=target, error=str(exc), audited=True,
                 ).to_dict()
+                # Carry the provider's certainty to the executor (run_approved):
+                # nothing ran (stays approved) or never retry (final).
+                if isinstance(exc, NotAttempted):
+                    out["not_attempted"] = True
+                if isinstance(exc, FinalFailure):
+                    out["final"] = True
+                return out
 
             # Audit the success — failure here must NOT mask the mutation.
             audit_ok = True

@@ -128,6 +128,10 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 0
 
     attendees = [a.strip() for a in args.attendees.split(",")] if args.attendees else None
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)      # a human at this terminal may answer Google's prompt
     try:
         result = client.calendar_create(
             title=args.title,
@@ -136,6 +140,10 @@ def cmd_create(args: argparse.Namespace) -> int:
             attendees=attendees,
             description=args.description,
         )
+    except ConfirmationRequired as prompt:
+        print_result(paused_result(prompt, action="calendar.create", provider=client.provider_name,
+                                   target=args.title), args.summary, "Calendar event created")
+        return 1
     except RuntimeError as exc:
         result = {
             "success": False,
@@ -197,7 +205,16 @@ def cmd_update(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Calendar event would be updated")
         return 0
 
-    result = client.calendar_update(args.event_id, **fields)
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)
+    try:
+        result = client.calendar_update(args.event_id, **fields)
+    except ConfirmationRequired as prompt:
+        print_result(paused_result(prompt, action="calendar.update", provider=client.provider_name,
+                                   target=args.event_id), args.summary, "Calendar event updated")
+        return 1
     print_result(result, args.summary, "Calendar event updated")
     return 0 if result.get("success") else 1
 

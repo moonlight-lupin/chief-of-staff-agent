@@ -121,6 +121,76 @@ def test_refusal_inside_the_call_is_not_an_attempt(cfg):
     assert out.stage == "refused" and _state(cfg, action) == "approved"
 
 
+def _prompt(**kw):
+    fields = dict(server="gmailmcp.googleapis.com", product="Gmail", tool="send_message",
+                  message="**Hi** to bob@x.example", title="Allow?",
+                  choices=[("ALLOW_ONCE", "Allow once"), ("DENY_ONCE", "Don't allow")],
+                  request_state="opaque", arguments={"to": ["bob@x.example"], "body": "secret body"})
+    fields.update(kw)
+    return ax.ConfirmationRequired(**fields)
+
+
+def test_confirmation_required_is_not_an_attempt(cfg):
+    """The server paused before running the tool: nothing happened, so even a send stays approved."""
+    action = _approved(cfg)
+    prompt = _prompt()
+
+    def call(client, a):
+        raise prompt
+    out = ax.run_approved(cfg, action, _client(), call)
+    assert not out.ok and out.stage == "confirm"
+    assert out.prompt is prompt
+    assert _state(cfg, action) == "approved"
+    assert "send_message" in out.error and "Gmail" in out.error
+    assert "secret body" not in out.error
+    stored = state_db.get_pending_action(cfg, action["id"])
+    assert "secret body" not in str(stored.get("last_error") or "")
+
+
+def test_confirmation_required_releases_the_grant_and_env(cfg, monkeypatch):
+    monkeypatch.delenv("CHIEF_OF_STAFF_AUTO_APPROVE", raising=False)
+    grant = MagicMock()
+
+    def call(client, a):
+        raise _prompt()
+    with patch("workspace_guardrails.execution_grant", return_value=grant):
+        ax.run_approved(cfg, _approved(cfg), _client(), call)
+    grant.__exit__.assert_called_once()
+    assert "CHIEF_OF_STAFF_AUTO_APPROVE" not in os.environ
+
+
+def test_other_outcomes_carry_no_prompt(cfg):
+    out = ax.run_approved(cfg, _approved(cfg), _client(), lambda c, a: {"success": True})
+    assert out.prompt is None
+
+
+def test_confirmation_required_is_shared_with_the_guardrail():
+    import workspace_guardrails
+
+    assert ax.ConfirmationRequired is workspace_guardrails.ConfirmationRequired
+    prompt = _prompt()
+    assert prompt.choice_ids == ["ALLOW_ONCE", "DENY_ONCE"]
+    assert "secret body" not in str(prompt)
+    assert "arguments" not in prompt.to_dict()
+
+
+def test_guarded_write_lets_a_confirmation_prompt_through(cfg):
+    """@guarded turns provider errors into results, but not a pause for confirmation."""
+    import workspace_guardrails
+
+    class Client:
+        config = cfg
+        provider_name = "fake"
+
+        @workspace_guardrails.guarded("mail.archive", target_arg="message_id", audit_provider="fake")
+        def mail_archive(self, message_id):
+            raise _prompt()
+
+    with patch("workspace_guardrails.confirm_action", return_value=True):
+        with pytest.raises(ax.ConfirmationRequired):
+            Client().mail_archive("m-1")
+
+
 def test_exception_in_the_call_is_a_final_failure_for_a_send(cfg):
     action = _approved(cfg)
 
@@ -262,7 +332,9 @@ def test_delete_executor_missing_method_is_not_an_attempt(cfg):
 def test_webhook_unknown_type_is_refused_with_json_and_stays_approved(cfg, capsys):
     import webhook_events
 
-    action = _approved(cfg, "mail.send", payload={"to": "x@example.com", "subject": "s", "body": "b"})
+    # mail.send is dispatchable now (send_email.py prepare queues it); a type
+    # no branch handles is refused before the claim, never after.
+    action = _approved(cfg, "made.up", payload={"to": "x@example.com", "subject": "s", "body": "b"})
     client = _client()
     with patch("webhook_events.load_config", return_value=cfg), \
          patch("workspace_client.get_workspace_client", return_value=client):
@@ -273,6 +345,7 @@ def test_webhook_unknown_type_is_refused_with_json_and_stays_approved(cfg, capsy
     assert json.loads(capsys.readouterr().out)["attempted"] is False
     client.mail_send.assert_not_called()
     assert _state(cfg, action) == "approved"
+    assert not state_db.get_pending_action(cfg, action["id"]).get("executing_at")
 
 
 def test_webhook_payload_refusal_keeps_an_upload_approved(cfg, tmp_path, capsys):

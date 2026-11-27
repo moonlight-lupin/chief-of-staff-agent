@@ -288,6 +288,41 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "contacts.update": False,
         "contacts.delete": False,
     },
+    # Google's own Workspace MCP servers (gmailmcp / calendarmcp / drivemcp
+    # .googleapis.com/mcp/v1) — providers.google_mcp_workspace. v0.10.0, for
+    # the Workspace AI Tools Addendum (2027-02-01). Mapped from Google's tool
+    # reference (retrieved 2026-11-27); none of it has run against a real
+    # account (verification_matrix: catalog). Google may pause any call for
+    # the user's own approval (GoogleConfirmationRequired).
+    "google_mcp": {
+        "mail.search": True,        # search_threads (+ get_thread for id-only threads)
+        "mail.draft": True,         # create_draft
+        "mail.send": True,          # send_message — destructive / approval-gated
+        "mail.list_folders": True,  # list_labels (Gmail labels as destinations)
+        "mail.move": True,          # update_message_labels add destination, remove INBOX
+        "mail.archive": True,       # update_message_labels remove INBOX
+        "mail.unarchive": True,     # update_message_labels add INBOX
+        "mail.trash": True,         # trash_message
+        "mail.untrash": True,       # untrash_message (out of Trash; not back to INBOX)
+        "mail.list_tags": True,     # list_labels
+        "mail.tag": True,           # label_message
+        "mail.create_tag": True,    # create_label
+        "calendar.list": True,      # list_events (calendarId primary)
+        "calendar.create": True,    # create_event (+ Meet link)
+        "calendar.update": True,    # update_event
+        "calendar.cancel": False,   # update_event has no status field
+        "calendar.uncancel": False,
+        "calendar.delete": True,    # delete_event — destructive / approval-gated
+        "files.search": True,       # search_files
+        "files.upload": True,       # create_file (base64Content)
+        "files.download": True,     # download_file_content (base64)
+        "files.trash": True,        # trash_file
+        "files.untrash": False,     # the Drive MCP server has no untrash tool
+        "contacts.list": False,     # contacts are not on the Gmail/Calendar/Drive servers
+        "contacts.create": False,
+        "contacts.update": False,
+        "contacts.delete": False,
+    },
     # Claude-native agent provider — actions are performed by the agent/tools,
     # not by script-callable provider methods, so every script-callable action
     # is False here.
@@ -365,7 +400,18 @@ _CONTACTS_REASONS = {
                           "contacts tools mapped) — use provider google_api for contacts",
     "agent": "The agent provider has no contacts reads or writes wired — use provider "
              "google_api for contacts, or manage them with your own connector",
+    "google_mcp": "Contacts are not on Google's Gmail, Calendar or Drive MCP servers, and the "
+                  "People API MCP server is not wired — use provider google_api for contacts",
 }
+
+_GOOGLE_MCP_CANCEL_REASON = (
+    "Google's Calendar MCP update_event tool has no status field, so an event cannot be "
+    "soft-cancelled or restored — use calendar.delete (permanent) or cancel it in Google Calendar"
+)
+_GOOGLE_MCP_UNTRASH_REASON = (
+    "Google's Drive MCP server has no untrash tool — restore the file from Drive Trash in the "
+    "Drive web UI (it stays there for 30 days), or use provider google_api"
+)
 
 UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("m365", "calendar.cancel"): "Microsoft Graph has no uncancel/restore path and the "
@@ -378,9 +424,13 @@ UNSUPPORTED_REASONS: dict[tuple[str, str], str] = {
     ("composio_microsoft:mcp", "drive.untrash"): _COMPOSIO_MS_UNTRASH_REASON,
     ("m365", "files.untrash"): _M365_UNTRASH_REASON,
     ("m365", "drive.untrash"): _M365_UNTRASH_REASON,
+    ("google_mcp", "calendar.cancel"): _GOOGLE_MCP_CANCEL_REASON,
+    ("google_mcp", "calendar.uncancel"): _GOOGLE_MCP_CANCEL_REASON,
+    ("google_mcp", "files.untrash"): _GOOGLE_MCP_UNTRASH_REASON,
+    ("google_mcp", "drive.untrash"): _GOOGLE_MCP_UNTRASH_REASON,
     **{(provider, f"contacts.{op}"): _CONTACTS_REASONS[provider.split(":")[0]]
        for provider in ("composio", "composio:mcp", "composio_microsoft",
-                        "composio_microsoft:mcp", "m365", "agent")
+                        "composio_microsoft:mcp", "m365", "agent", "google_mcp")
        for op in ("list", "create", "update", "delete")},
 }
 

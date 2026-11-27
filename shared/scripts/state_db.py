@@ -59,6 +59,10 @@ NON_IDEMPOTENT_ACTIONS = frozenset({
     "calendar.create", "drive.upload", "files.upload", "contacts.create",
     "notion.page.create", "notion.db.add_property",
 })
+# The workspace server's own pending prompts (google_confirmation), keyed by
+# action id. Cleared when the action leaves the queue for good.
+CONFIRMATIONS_STORE = "google_confirmations"
+_PROMPT_CLEARING_STATES = frozenset({"executed", "failed", "cancelled", "dismissed", "expired"})
 _EXTERNAL_PREFIXES = ("gmail.", "mail.", "calendar.", "drive.", "files.", "contacts.", "notion.")
 _CREATING_VERBS = ("send", "create", "draft", "upload", "add_property")
 
@@ -1190,7 +1194,7 @@ class StateDB:
             elif "error" in fields:
                 extra["last_error"] = fields["error"]
             attempted = fields.get("attempted", True) is not False
-            if (retry_count >= MAX_RETRIES or self._signing_enforced()
+            if (retry_count >= MAX_RETRIES or self._signing_enforced() or fields.get("final")
                     or (attempted and final_on_failure(current.get("type")))):
                 # Final: signed stores (a retry is a new signed approval) and
                 # actions that may already have happened (never silently re-run).
@@ -1281,6 +1285,42 @@ class StateDB:
             )
         return updated
 
+    def await_confirmation(self, action_id: str, note: str) -> dict | None:
+        """``executing`` → ``approved`` because the server paused to ask the user.
+
+        Not a failure and not a retry: ``retry_count``, ``approved_at``, the
+        approval signature and hash are untouched, so it is allowed on signed
+        stores too (nothing ran). It is not an approval either — it never goes
+        through the approve path, so the re-arm refusal stands. The next
+        ``executing`` re-verifies expiry, integrity, signature and binding, and
+        the next run needs its own single-use execution grant.
+        """
+        current = self.get_action(action_id)
+        if current is None or current.get("state") != "executing":
+            return None
+        updated = self._cas_update(action_id, "executing", "approved", executing_at=None,
+                                   last_error=f"awaiting confirmation: {note}"[:500])
+        if updated is None:
+            return None
+        _audit_action(self.config, updated, "awaiting_confirmation", {"prompt": note[:300]})
+        _log_event("action_awaiting_confirmation", level="info", component="pending_actions",
+                   action_id=action_id, action_type=updated.get("type"))
+        return updated
+
+    def clear_confirmation(self, action_id: str) -> None:
+        """Forget a stored server prompt for this action (best-effort)."""
+        try:
+            data = self.get_kv(CONFIRMATIONS_STORE)
+            if not data or action_id not in (data.get("prompts") or {}):
+                return
+
+            def drop(d: dict[str, Any]) -> None:
+                (d.get("prompts") or {}).pop(action_id, None)
+
+            self.mutate_kv(CONFIRMATIONS_STORE, drop)
+        except Exception:  # pragma: no cover - a stale record must never block a transition
+            pass
+
     def _cas_update(self, action_id: str, expected_state: str, new_state: str, **fields: Any) -> dict | None:
         json_fields = {"payload", "risk", "result"}
         sets = ["state=?"]
@@ -1300,6 +1340,10 @@ class StateDB:
             if cur.rowcount == 0:
                 return None
             self._bump_meta("pending_actions_version")
+        if new_state in _PROMPT_CLEARING_STATES:
+            # Every terminal transition — including the direct ones (lapsed at
+            # claim, stale claim) — forgets a stored server prompt.
+            self.clear_confirmation(action_id)
         return self.get_action(action_id)
 
     # ── Events ──
@@ -1512,7 +1556,30 @@ class StateDB:
                 """,
                 (cutoff, cutoff, cutoff, cutoff, cutoff),
             )
-            return int(cur.rowcount or 0)
+            removed = int(cur.rowcount or 0)
+        if removed:
+            self._prune_confirmations()
+        return removed
+
+    def _prune_confirmations(self) -> None:
+        """Drop stored server prompts whose action is gone (best-effort)."""
+        try:
+            data = self.get_kv(CONFIRMATIONS_STORE)
+            ids = set((data or {}).get("prompts") or {})
+            if not ids:
+                return
+            live = {r[0] for r in self.conn.execute("SELECT id FROM pending_actions").fetchall()}
+            stale = ids - live
+            if not stale:
+                return
+
+            def drop(d: dict[str, Any]) -> None:
+                for action_id in stale:
+                    (d.get("prompts") or {}).pop(action_id, None)
+
+            self.mutate_kv(CONFIRMATIONS_STORE, drop)
+        except Exception:  # pragma: no cover - a stale record must never break a purge
+            pass
 
     # ── Migration ──
 
@@ -2186,17 +2253,30 @@ def mark_executed(config: Any, action_id: str, result: dict[str, Any]) -> dict[s
     )
 
 
-def mark_failed(config: Any, action_id: str, error: str, *, attempted: bool = True) -> dict[str, Any] | None:
+def mark_failed(config: Any, action_id: str, error: str, *, attempted: bool = True,
+                final: bool = False) -> dict[str, Any] | None:
     """Record a failed execution.
 
     ``attempted=False`` means the executor refused before any provider call
     (account mismatch, unsupported capability, missing grant): nothing can have
     happened, so even a send may return to approved under the retry cap.
+    ``final=True`` means never retry, whatever the type (the user denied it, or
+    an administrator policy blocks it).
     """
     return _call_db(
         config,
-        lambda db: db.transition_action(action_id, "failed", last_error=error, attempted=attempted),
+        lambda db: db.transition_action(action_id, "failed", last_error=error, attempted=attempted,
+                                        final=final),
     )
+
+
+def mark_awaiting_confirmation(config: Any, action_id: str, prompt_summary: str) -> dict[str, Any] | None:
+    """The workspace server paused to ask the user: back to approved, not a retry.
+
+    See :meth:`StateDB.await_confirmation`. Returns None unless the action was
+    ``executing``.
+    """
+    return _call_db(config, lambda db: db.await_confirmation(action_id, prompt_summary))
 
 
 def find_stuck_actions(config: Any, max_minutes: int = 15) -> list[dict[str, Any]]:

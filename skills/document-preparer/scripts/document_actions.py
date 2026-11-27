@@ -66,7 +66,16 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Drive file would be uploaded")
         return 0
 
-    result = client.files_upload(args.file, parent_id=args.parent)
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)      # a human at this terminal may answer Google's prompt
+    try:
+        result = client.files_upload(args.file, parent_id=args.parent)
+    except ConfirmationRequired as prompt:
+        print_result(paused_result(prompt, action="drive.upload", provider=client.provider_name,
+                                   target=args.file), args.summary, "Drive file uploaded")
+        return 1
     print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
@@ -105,7 +114,16 @@ def cmd_draft_email(args: argparse.Namespace) -> int:
         }
         print_result(plan, args.summary, "Gmail draft would be created")
         return 0
-    result = client.mail_create_draft(args.to, args.subject, args.body, cc=args.cc)
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)
+    try:
+        result = client.mail_create_draft(args.to, args.subject, args.body, cc=args.cc)
+    except ConfirmationRequired as prompt:
+        print_result(paused_result(prompt, action="gmail.draft", provider=client.provider_name,
+                                   target=args.to), args.summary, "Gmail draft created")
+        return 1
     print_result(result, args.summary, "Gmail draft created")
     return 0 if result.get("success") else 1
 
@@ -257,7 +275,20 @@ def cmd_handoff(args: argparse.Namespace) -> int:
         return 1
 
     # Step 1: Upload to Drive / OneDrive
-    upload_result = client.files_upload(args.file, parent_id=args.parent)
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)      # a human at this terminal may answer Google's prompt
+    try:
+        upload_result = client.files_upload(args.file, parent_id=args.parent)
+    except ConfirmationRequired as prompt:
+        paused = paused_result(prompt, action="drive.upload", provider=client.provider_name,
+                               target=args.file, note="Nothing was uploaded and no draft was created.")
+        combined = {"success": False, "action": "document.handoff", "provider": client.provider_name,
+                    "steps": {"drive_upload": paused, "gmail_draft": None}, "error": paused["error"],
+                    "confirmation_required": True}
+        print_result(combined, args.summary, "Document handoff waiting on Google")
+        return 1
     if not upload_result.get("success"):
         combined = {
             "success": False,
@@ -299,7 +330,19 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     body_with_link = args.body
     if drive_link:
         body_with_link = f"{args.body}\n\nFile link: {drive_link}"
-    draft_result = client.mail_create_draft(args.to, args.subject, body_with_link, cc=args.cc)
+    try:
+        draft_result = client.mail_create_draft(args.to, args.subject, body_with_link, cc=args.cc)
+    except ConfirmationRequired as prompt:
+        # The upload already happened: say so, so nobody uploads it twice.
+        file_ref = upload_data.get("id") or drive_link or args.file
+        paused = paused_result(prompt, action="gmail.draft", provider=client.provider_name, target=args.to,
+                               note=f"The file was already uploaded ({file_ref}); only the draft is waiting.")
+        combined = {"success": False, "action": "document.handoff",
+                    "provider": upload_result.get("provider", "?"),
+                    "steps": {"drive_upload": upload_result, "gmail_draft": paused},
+                    "error": paused["error"], "confirmation_required": True}
+        print_result(combined, args.summary, "Document handoff partial (draft waiting on Google)")
+        return 1
 
     combined = {
         "success": draft_result.get("success", False),

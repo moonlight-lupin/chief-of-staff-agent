@@ -517,7 +517,7 @@ def configured_identity(config: Any, provider: str | None) -> str:
     delegate, the M365 client-credentials mailbox, or (Composio) a digest of
     the routing that selects the connected account. "" when not configured."""
     try:
-        if provider == "google_api":
+        if provider in ("google_api", "google_mcp"):
             return str(((config.get("google") or {}).get("delegate_email")) or "").strip()
         if provider == "m365":
             m365 = config.get("m365") or {}

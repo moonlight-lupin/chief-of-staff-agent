@@ -8,7 +8,7 @@ Your inbox, calendar, deadlines, pipeline, invoices, tasks, documents, and notes
 
 It watches, prioritises, prepares, and proposes. **You approve. It executes. Everything is audited.**
 
-> **Status:** v0.9.1 (beta)
+> **Status:** v0.10.0 (beta)
 > **Runtime:** Python 3.11+ · runs as a [Hermes](docs/SETUP.md) agent plugin  
 > **License:** Apache License 2.0
 
@@ -241,10 +241,13 @@ One config line selects the backend; every skill works unchanged:
 
 | Provider | Auth | Best for |
 |---|---|---|
-| `google_api` | Service account, domain-wide delegation | Self-hosted Google Workspace |
+| `google_mcp` | Service account, domain-wide delegation | Google Workspace through Google's own MCP servers (catalog level: not yet live-verified) |
+| `google_api` | Service account, domain-wide delegation | Self-hosted Google Workspace (REST APIs: deprecated for AI agents from 1 Feb 2027) |
 | `composio` | Managed OAuth (Composio MCP) | Google **or Microsoft 365** via managed OAuth (Connect Link, no admin) |
 | `m365` | Entra ID app (client credentials or device code) | Microsoft 365 / Outlook / OneDrive |
 | `agent` | Your AI agent's own connectors | Agent-native: fetch with connector tools, feed via `--input` |
+
+From 1 February 2027 Google's Workspace AI Tools Addendum requires AI agents to reach Workspace through Google's MCP servers or the Workspace CLI. `google_api` and `composio` (Google) call the REST APIs, so `capabilities` and `doctor` warn about them; move to `google_mcp` ([setup](docs/SETUP.md#google-workspace-mcp-google_mcp)). Under `google_mcp` Google may stop a call to ask you first. That prompt is yours alone: answer it with `/<name> confirm <id>` in Hermes (the only way on a signed install), or, on an unsigned standalone install, at a terminal with `review_queue.py execute` — a convenience, not proof that a human answered, since a pty can fake the terminal. The plugin never answers it, and offers only "Allow once" and "Don't allow" unless you opt in to persistent choices, which only `/<name> confirm` offers.
 
 Gmail-style queries are translated automatically for Microsoft Graph — the bundled search templates work on both stacks. Provider failures come back with permission-specific guidance (missing admin consent, unprovisioned OneDrive, expired secrets).
 
@@ -279,6 +282,7 @@ Read this before installing. Nothing below happens without your configuration, a
 
 - **Network:** only the services you configure:
   - Google APIs (`googleapis.com`, `gmail.googleapis.com`, `people.googleapis.com`);
+  - Google's Workspace MCP servers (`gmailmcp.googleapis.com`, `calendarmcp.googleapis.com`, `drivemcp.googleapis.com`) under the `google_mcp` provider;
   - Microsoft Graph and Entra sign-in (`graph.microsoft.com`, `login.microsoftonline.com`);
   - Composio (`backend.composio.dev`, `connect.composio.dev`);
   - your own DocuSeal server.

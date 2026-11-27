@@ -1101,6 +1101,81 @@ def _check_m365(fix: bool, data: dict[str, Any] | None, config_path: Path) -> Ch
     return CheckResult("m365", "pass" if all_pass else "warn", "; ".join(details))
 
 
+def _check_google_mcp(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Check the google_mcp provider's config (no network: doctor stays offline)."""
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    provider = workspace.get("provider", "google_api")
+    if provider != "google_mcp":
+        return CheckResult("google_mcp", "pass", "skipped: provider is not google_mcp")
+
+    google = (data or {}).get("google") if isinstance((data or {}).get("google"), dict) else {}
+    details: list[str] = []
+    all_pass = True
+    delegate = str((google or {}).get("delegate_email") or "").strip()
+    if delegate:
+        details.append(f"delegate_email: {delegate}")
+    else:
+        details.append("delegate_email: NOT set")
+        all_pass = False
+    try:
+        from providers.google_contacts import service_account_settings
+        sa_source, _ = service_account_settings(data or {})
+    except Exception as exc:  # pragma: no cover - import failure is reported, not raised
+        sa_source = ""
+        details.append(f"key source: unavailable ({exc})")
+    if sa_source == plugin_secrets.SA_SECRET_SOURCE:
+        details.append(f"key: {plugin_secrets.SA_JSON_ENV} secret")
+    elif sa_source:
+        if plugin_secrets.under_hermes():
+            details.append(f"key: a file under Hermes — use the {plugin_secrets.SA_JSON_ENV} secret")
+            all_pass = False
+        elif Path(sa_source).expanduser().is_file():
+            details.append("key: service_account_path found")
+        else:
+            details.append(f"key: service_account_path NOT found at {Path(sa_source).expanduser()}")
+            all_pass = False
+    else:
+        details.append("key: no google.service_account_path or GOOGLE_SERVICE_ACCOUNT_JSON secret")
+        all_pass = False
+    for module in ("requests", "google.oauth2"):
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except ModuleNotFoundError:
+            found = False
+        if not found:
+            details.append(f"{module}: NOT installed")
+            all_pass = False
+    details.append("scopes: gmail.modify, calendar.events, drive (domain-wide delegation)")
+    if _hosted_refusal("google_mcp"):
+        details.append("hosted cloud session: refused (holds a service-account key)")
+        all_pass = False
+    return CheckResult("google_mcp", "pass" if all_pass else "warn", "; ".join(details))
+
+
+def _check_google_rest_deprecation(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Warn (never fail) when Google is reached through its REST APIs (Workspace AI Tools Addendum)."""
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    try:
+        from capability_report import google_rest_deprecation
+
+        warning = google_rest_deprecation(workspace)
+    except Exception:  # pragma: no cover - the report module ships alongside
+        warning = ""
+    if warning:
+        return CheckResult("google_rest_deprecation", "warn", warning)
+    return CheckResult("google_rest_deprecation", "pass", "skipped: Google is not reached through its REST APIs")
+
+
+def _hosted_refusal(provider: str) -> str | None:
+    try:
+        from workspace_guardrails import hosted_session_refusal
+    except Exception:  # pragma: no cover
+        return None
+    return hosted_session_refusal(provider)
+
+
 def _check_webhook_config(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
     """Check webhook security configuration."""
     try:
@@ -1489,7 +1564,8 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_signature, _check_wiki, _check_docuseal, _check_cron, _check_cron_prompts, _check_compile,
     _check_packages, _check_audit_runs,
     _check_briefing_archive,
-    _check_workspace_provider, _check_composio, _check_m365,
+    _check_workspace_provider, _check_composio, _check_m365, _check_google_mcp,
+    _check_google_rest_deprecation,
     _check_webhook_config, _check_google_contacts, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,
     _check_cron_skill_files, _check_stale_run, _check_unhonored_advancement, _check_workflow_crons_doc,

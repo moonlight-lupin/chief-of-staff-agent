@@ -13,6 +13,11 @@ Audit) decides the split:
   ``approvals.chat_approvers`` (``{"telegram:<user id>": "<name>"}``).
   Everything else is refused: Hermes passes transport identity, not
   authorization, so a shared chat must never be able to approve.
+* ``confirm`` answers Google's own confirmation prompt (provider
+  ``google_mcp``) for an approved action that is waiting on it. It is
+  authorised exactly like ``approve``, runs only in the gateway process, and
+  sends the chosen answer only if Google asks the very question the user saw;
+  otherwise it shows the new question. The agent never answers it.
 
 Both run the plugin's existing scripts as child processes, which stay the
 single source of truth. Secrets are read through Hermes (``plugin_secrets``)
@@ -208,6 +213,8 @@ def _usage(command: str) -> str:
             f"{c} preview <id>          what an action will do, to whom, and how it is reversed\n"
             f"{c} approve <id> [reason] approve it (your own sessions or listed chat approvers)\n"
             f"{c} dismiss <id> <reason> dismiss it\n"
+            f"{c} confirm <id>          show Google's confirmation question for an approved action\n"
+            f"{c} confirm <id> <n>      answer it with choice n (same people as approve)\n"
             f"{c} help                  this list")
 
 
@@ -325,6 +332,82 @@ def _decide(config: Any, decision: str, action_id: str, approver: str, reason: s
             f"(only requested actions can be {decision}d; an expired one needs a new proposal).")
 
 
+def _execute_action(config: Any, action_id: str, confirmer: Any) -> Any:
+    """The programmatic execution entry (webhook_events.execute_action), in-process."""
+    doc_scripts = PLUGIN_ROOT / "skills" / "document-preparer" / "scripts"
+    if str(doc_scripts) not in sys.path:
+        sys.path.insert(0, str(doc_scripts))
+    from webhook_events import execute_action
+
+    return execute_action(config, action_id, confirmer=confirmer)
+
+
+def _audit_confirm(config: Any, action_id: str, approver: str, choice: str, answered: bool,
+                   outcome: str, platform: str) -> None:
+    try:
+        from workspace_audit import audit_workspace_action
+
+        audit_workspace_action(config, "hermes", "cos.confirm", "slash", target=action_id,
+                               status="success" if outcome == "done" else outcome,
+                               extra={"answered_by": approver, "choice": choice, "answered": answered,
+                                      "platform": platform or "(unknown)"})
+    except Exception:
+        pass
+
+
+def _confirm(config: Any, action_id: str, rest: list[str], approver: str, command: str, platform: str) -> str:
+    """Show, or answer with the user's numbered choice, Google's stored prompt for one action."""
+    from google_confirmation import clear_prompt, get_prompt, render, same_prompt
+    from state_db import get_pending_action
+
+    record = get_prompt(config, action_id)
+    if not record:
+        return (f"No Google confirmation is waiting for {action_id}. "
+                f"/{command} preview {action_id} shows the action.")
+    action = get_pending_action(config, action_id) or {}
+    if action.get("state") != "approved":
+        # Only an approved action can be waiting on Google: anything else is a
+        # stale record. Forget it, and show nothing from it.
+        try:
+            clear_prompt(config, action_id)
+        except Exception:
+            pass
+        return (f"{action_id} is no longer waiting on Google's confirmation "
+                f"(state={action.get('state', 'unknown')}).")
+    choices = [c for c in record.get("choices") or [] if isinstance(c, Mapping)]
+    footer = f"Answer with /{command} confirm {action_id} <n>"
+    if not rest:
+        return render(record, footer=footer)
+    raw = rest[0].strip()
+    if not raw.isdigit() or not 1 <= int(raw) <= len(choices):
+        return f"Choose a number from 1 to {len(choices)}: /{command} confirm {action_id} <n>"
+    if _SIGNER is None:
+        return (f"Not confirmed: Google's question is answered from your Hermes session with "
+                f"/{command} confirm. This process has no gateway signer.")
+    choice = choices[int(raw) - 1]
+    choice_id = str(choice.get("id"))
+    answered: list[str] = []
+
+    def confirmer(prompt: Any) -> str | None:
+        # Only the very question the user saw, and only once: any other
+        # prompt is stored and shown instead of answered.
+        if answered or not same_prompt(record, prompt):
+            return None
+        answered.append(choice_id)
+        return choice_id
+
+    out = _execute_action(config, action_id, confirmer)
+    _audit_confirm(config, action_id, approver, choice_id, bool(answered), out.stage, platform)
+    if out.ok:
+        return f"Done: {action_id} ran after you chose {choice.get('label')} ({choice_id})."
+    if out.stage == "confirm":
+        fresh = get_prompt(config, action_id)
+        lead = ("Google asked a different question, so your answer was not sent:" if not answered
+                else "Google asked again:")
+        return lead + "\n" + (render(fresh, footer=footer) if fresh else out.error)
+    return f"Not done: {out.error}"
+
+
 def cos_command(raw_args: str = "", *, platform: str = "", source: Any = None, session_id: str = "",
                 command: str = "cos", **_kwargs: Any) -> str:
     try:
@@ -338,6 +421,16 @@ def cos_command(raw_args: str = "", *, platform: str = "", source: Any = None, s
             return _text(run_script("chief_of_staff.py", ["daily", "--summary"]))
         if sub == "review":
             return _text(run_script("review_queue.py", ["summary"]))
+        if sub == "confirm":
+            action_id = _valid_id(rest[0]) if rest else None
+            if action_id is None:
+                return f"Give an action id (from /{command} review).\n\n" + _usage(command)
+            config = _load_config()
+            approver, refusal = _approver(platform, source, config)
+            if approver is None:
+                _audit_refusal(config, "confirm", action_id, platform, source, refusal)
+                return refusal
+            return _confirm(config, action_id, rest[1:], approver, command, platform)
         if sub in {"preview", "approve", "dismiss"}:
             action_id = _valid_id(rest[0]) if rest else None
             if action_id is None:
@@ -391,7 +484,7 @@ def register(ctx: Any) -> None:
         for name in names:
             register_command(name, make_command_handler(name),
                              description=f"/{name}: Chief of Staff briefing, review queue and approvals",
-                             args_hint="[review|preview|approve|dismiss|help] [id] [reason]")
+                             args_hint="[review|preview|approve|dismiss|confirm|help] [id] [reason|n]")
         # This process is now the only one that can approve: enrol every store
         # it serves for signed approvals (approval_signing).
         try:

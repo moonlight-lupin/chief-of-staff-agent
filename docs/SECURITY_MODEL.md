@@ -72,6 +72,61 @@ approvals:
     - '*webhook_events.py*approve*'
 ```
 
+## Google's confirmation prompt: a second gate
+
+Under the `google_mcp` provider, Google's Workspace MCP servers can stop a
+call and ask the user first (`input_required`), according to the user-review
+policies the administrator sets (Admin console → Agents → Settings → User
+review for external agents). That prompt is a second gate after the review
+queue's approval. Only the user answers it:
+
+- **The plugin never answers it.** The client raises the prompt. Only an
+  explicit confirmer passed by the caller may answer. There are two:
+  `/cos confirm <id> <n>` in the Hermes gateway, and a terminal prompt.
+- **On a store enrolled for signed approvals, `/cos confirm` is the only
+  answer path.** The terminal prompt is never offered there. A TTY can be
+  faked: a pty (`script -qec …`) and an unset `HERMES_SESSION_*` satisfy both
+  checks, so they prove nothing about who typed the number.
+- **On an unsigned standalone install the terminal prompt is a convenience,
+  not proof that a human answered.** It appears only with a TTY on stdin and
+  stdout, outside Hermes. An agent with a shell as your OS user can fake that
+  and type a number, the same as for every other TTY prompt (see "Not a
+  sandbox" below). The terminal path never offers or accepts a persistent
+  `*_ALWAYS` choice, even when they are opted in; those go only through
+  `/cos confirm`.
+- **`/cos confirm` is authorised like `approve`.** It runs only in the gateway
+  process, for your own surfaces or listed chat approvers. Refusals are
+  audited, and so is every answer (who, which choice). The answer is sent only
+  if Google asks the very same question (server, tool, title, message,
+  choices) the user saw. Otherwise the new question is stored and shown.
+- **Only what was offered.** The answer is checked against a snapshot of the
+  offered choices taken before anyone is asked. By default only `ALLOW_ONCE`
+  and `DENY_ONCE` are offered. Persistent `*_ALWAYS` choices save an approval
+  at Google, so they need the operator's opt-in
+  (`integrations.workspace.google_mcp.allow_persistent_choices: true`), and
+  even then are offered only through `/cos confirm`.
+- **A pause is not an attempt.** The action returns to approved without
+  counting a retry, also on signed stores, because nothing ran. It is not an
+  approval either: the re-arm refusal stands, the next run re-verifies the
+  approval signature and binding, and it needs its own single-use grant.
+- **A denial is final.** `UserDeniedAction` and `AdminPolicyBlock` end the
+  action as failed, whatever its type. Google's guide says not to retry, or to
+  reach for another write tool, after a denial.
+- **Where the message is kept.** Google's prompt text can hold recipients and
+  body excerpts. It is kept in the state store (`state.db`, kv
+  `google_confirmations`) for `/cos confirm` and preview, and cleared when the
+  action executes, fails finally, expires, is cancelled or dismissed, or is
+  purged. When the store is git-backed, `sync push` commits `state.db` to
+  your private data repo like the rest of the state, so the message goes
+  there too. It is never written to the audit log or run logs, and never into
+  an error string. `/cos confirm` shows nothing for an action that is no
+  longer approved.
+- **No break-glass flags in the gateway.** On an enrolled store the shared
+  execution path does not set `CHIEF_OF_STAFF_AUTO_APPROVE` /
+  `CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE` at all: the execution grant authorises
+  the write. `/cos confirm` runs in the long-lived gateway, so setting them
+  would leak them to every command it starts meanwhile.
+
 ## Untrusted content: trust boundaries
 
 External content (mail, attachments, calendar descriptions, Notion pages,
@@ -105,7 +160,10 @@ The adversarial fixtures for these boundaries are in
   enrolments in `doctor`. An agent with an unrestricted shell as the same
   OS user could still tamper with local files. It could also call a
   provider's API directly with credentials it can reach, which skips the
-  plugin entirely. For that boundary, use an isolated terminal backend.
+  plugin entirely. For that boundary, use an isolated terminal backend. The
+  same limit covers every TTY prompt, including the terminal answer to
+  Google's confirmation on an unsigned install: it is a convenience, not proof
+  that a human answered.
 - **Agent-native connectors.** When the agent writes through its own Gmail,
   Microsoft 365, Drive or Notion connector, the plugin cannot see which
   account that connector really acts as. `claim` names the account to use, and
