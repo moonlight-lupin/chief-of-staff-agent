@@ -75,7 +75,16 @@ def cmd_upload(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Drive file would be uploaded")
         return 0
 
-    result = client.files_upload(args.file, parent_id=args.parent)
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)      # a human at this terminal may answer Google's prompt
+    try:
+        result = client.files_upload(args.file, parent_id=args.parent)
+    except ConfirmationRequired as prompt:
+        print_result(paused_result(prompt, action="drive.upload", provider=client.provider_name,
+                                   target=args.file), args.summary, "Drive file uploaded")
+        return 1
     print_result(result, args.summary, "Drive file uploaded")
     return 0 if result.get("success") else 1
 
@@ -108,7 +117,16 @@ def cmd_download(args: argparse.Namespace) -> int:
         print_result(plan, args.summary, "Drive file would be downloaded")
         return 0
 
-    result = client.files_download(args.file_id, args.output)
+    from google_confirmation import attach_confirmer, paused_result
+    from workspace_guardrails import ConfirmationRequired
+
+    attach_confirmer(client, cfg)
+    try:
+        result = client.files_download(args.file_id, args.output)
+    except ConfirmationRequired as prompt:
+        print_result(paused_result(prompt, action="drive.download", provider=client.provider_name,
+                                   target=args.file_id), args.summary, "Drive file downloaded")
+        return 1
     print_result(result, args.summary, "Drive file downloaded")
     return 0 if result.get("success") else 1
 

@@ -112,6 +112,109 @@ python shared/scripts/doctor.py
 python shared/scripts/connect_workspace.py --provider google_api
 ```
 
+### Google Workspace MCP (`google_mcp`)
+
+From 1 February 2027 Google's Workspace AI Tools Addendum requires AI agents
+to reach Workspace data through Google's MCP servers or the Workspace CLI.
+`google_api` and `composio` (Google family) call the REST APIs, so
+`capabilities` and `doctor` warn about them. The warning is not a failure,
+and nothing is removed. `google_mcp` talks to Google's Gmail, Calendar and
+Drive MCP servers (`gmailmcp`, `calendarmcp` and `drivemcp.googleapis.com/mcp/v1`)
+as one user, through a service account with domain-wide delegation.
+
+**Status: catalog level.** Every action is mapped from Google's published tool
+reference and tested against a mocked transport. None of it has run against a
+live account yet. Run the verification below on your own machine first.
+
+1. **Enable the APIs and the MCP services** in the Cloud project that owns the
+   service account:
+
+   ```bash
+   gcloud services enable gmail.googleapis.com calendar-json.googleapis.com drive.googleapis.com --project=PROJECT_ID
+   gcloud services enable gmailmcp.googleapis.com calendarmcp.googleapis.com drivemcp.googleapis.com --project=PROJECT_ID
+   ```
+
+2. **Create the service account and its key** (Option 1 above, step 3).
+   Standalone, set `google.service_account_path`. Under Hermes, paste the key
+   JSON into the `GOOGLE_SERVICE_ACCOUNT_JSON` secret instead; a key file is
+   refused there.
+
+3. **Grant domain-wide delegation** (Admin console → Security → Access and data
+   control → API controls → Domain-wide delegation) to the service account's
+   client ID, with exactly these scopes, the ones the provider requests:
+
+   ```
+   https://www.googleapis.com/auth/gmail.modify
+   https://www.googleapis.com/auth/calendar.events
+   https://www.googleapis.com/auth/drive
+   ```
+
+4. **Configure**:
+
+   ```yaml
+   google:
+     delegate_email: you@company.com      # the user the agent acts as
+     service_account_path: ~/.config/chief-of-staff/sa.json   # standalone only
+   integrations:
+     workspace:
+       provider: google_mcp
+       google_mcp:
+         allow_persistent_choices: false  # the default; see below
+   ```
+
+5. **Verify** on your own machine (not a hosted cloud session: the provider
+   holds a key and is refused there):
+
+   ```bash
+   .venv/bin/python shared/scripts/connect_workspace.py --provider google_mcp --verify
+   .venv/bin/python shared/scripts/connect_workspace.py --provider google_mcp --verify-writes --record-evidence
+   ```
+
+Not supported on these servers: calendar cancel/uncancel (`update_event` has
+no status field), Drive untrash (no tool) and contacts. Use `google_api` for
+contacts.
+
+#### Google's own confirmation prompt
+
+Google applies its user-review policies to every call, including calls from a
+service account with domain-wide delegation. The administrator sets them in
+the Admin console, under **Agents → Settings → User review for external
+agents**. There are four categories: external collaboration, internal
+collaboration, external data access and internal data access. Each is set to
+Allow, Require user approval (with or without "Except when user always
+allows"), or Block. Trashing always asks, every time. Permanent deletion is
+blocked for third-party agents.
+
+When Google asks, the call stops and nothing runs. This is a second gate after
+your approval in the review queue, and only you answer it:
+
+- The action stays **approved**. A pause is not a failure and not a retry,
+  also on signed (Hermes) stores. The next run claims it afresh: approval,
+  signature and binding are re-checked, and it gets a new single-use grant.
+- `review_queue.py preview --action-id <id>` shows "Waiting on Google's
+  confirmation" with the commands to answer it.
+- **At your own terminal**, `review_queue.py execute --action-id <id>` shows
+  Google's question (product, tool, message) with numbered choices and sends
+  the number you type. Without a terminal it prints the next step instead.
+- **Under Hermes**, `/<assistant name> confirm <id>` (or `/cos confirm <id>`)
+  shows the stored question and `/cos confirm <id> <n>` answers it. The same
+  people as `approve` may answer: your own surfaces, or users listed in
+  `approvals.chat_approvers`. The answer is sent only if Google asks the very
+  same question again; otherwise you are shown the new one. Each answer is
+  audited with who answered and which choice.
+- **Don't allow** (`DENY_ONCE`) and an administrator **Block** end the action
+  as failed, whatever its type. Queue a new action if you change your mind.
+
+By default only **Allow once** and **Don't allow** are offered. Google may
+also offer persistent choices such as "Always allow this tool"
+(`ALLOW_TOOL_ALWAYS`). Those save an approval at Google that skips its prompt
+next time, so they are refused unless the operator sets
+`integrations.workspace.google_mcp.allow_persistent_choices: true`.
+
+**Unattended runs** (cron, webhooks, a headless agent) have nobody to answer
+the prompt. They can complete only what your administrator set to Allow.
+Everything else pauses and waits for you.
+
 ### Option 2: Composio MCP (easier onboarding, managed auth)
 
 1. Install the plugin:

@@ -18,11 +18,17 @@ HTTP (Google Workspace guide "MCP form elicitation", retrieved 2026-11-27):
 
 This module never answers that form. :func:`call_tool_confirmed` raises
 :class:`GoogleConfirmationRequired` unless the caller passed a ``confirmer``,
-and refuses any answer the server did not offer.
+and refuses any answer outside a snapshot of the choices offered to the human
+(persistent ``*_ALWAYS`` choices only when the operator opted in).
 
 Retries: a read may be re-sent once on HTTP 429/503 (the server refused
 before doing anything). A write is never re-sent automatically — after a
-timeout or a 5xx the outcome is unknown, and the error says so.
+timeout, a 408 or a 5xx the outcome is unknown, and the error says so. Where
+the server certainly ran nothing (any other 4xx including 429, a JSON-RPC
+error, a non-form elicitation, a "retry without inputResponses" refusal) the
+error is also a :class:`workspace_guardrails.NotAttempted`, so an executor
+keeps the action approved. ``UserDeniedAction`` and ``AdminPolicyBlock`` are
+:class:`workspace_guardrails.FinalFailure`: never retried.
 
 The access token comes from a callable on each request and is never stored
 here, logged, or written to disk.
@@ -46,7 +52,12 @@ try:
 except ImportError:  # pragma: no cover - requests is a declared dependency
     requests = None  # type: ignore
 
-from workspace_guardrails import ConfirmationRequired  # noqa: E402
+from workspace_guardrails import (  # noqa: E402
+    ConfirmationRequired,
+    FinalFailure,
+    NotAttempted,
+    is_persistent_choice,
+)
 
 PROTOCOL_VERSION = "2026-07-28"
 CLIENT_NAME = "Chief of Staff"
@@ -69,6 +80,7 @@ _ERROR_TEXT_LIMIT = 300
 
 _DENIED_TEXT = "declined the confirmation request"
 _BLOCKED_TEXT = "administrator has blocked"
+_REBIND_TEXT = "without inputresponses"
 
 
 # ── errors ──────────────────────────────────────────────────────────────────
@@ -92,8 +104,16 @@ class GoogleMCPTransportError(GoogleMCPError):
         self.outcome_unknown = outcome_unknown
 
 
-class GoogleMCPRPCError(GoogleMCPError):
-    """A top-level JSON-RPC ``error`` object."""
+class GoogleMCPRequestRefused(GoogleMCPTransportError, NotAttempted):
+    """HTTP 4xx (not 408): the server refused the request and ran nothing."""
+
+
+class GoogleMCPInputUnsupported(GoogleMCPError, NotAttempted):
+    """The server asked for input this client cannot show (not a form). Nothing ran."""
+
+
+class GoogleMCPRPCError(GoogleMCPError, NotAttempted):
+    """A top-level JSON-RPC ``error`` object: the call was refused, nothing ran."""
 
     def __init__(self, message: str, *, code: int | None = None, data: Any = None,
                  server: str = "", tool: str = "") -> None:
@@ -114,12 +134,16 @@ class GoogleMCPToolError(GoogleMCPError):
         self.reason = reason
 
 
-class UserDeniedAction(GoogleMCPToolError):
-    """The user chose Don't allow (DENY_ONCE), declined or cancelled the prompt."""
+class UserDeniedAction(GoogleMCPToolError, FinalFailure):
+    """The user chose Don't allow (DENY_ONCE), declined or cancelled the prompt. Final."""
 
 
-class AdminPolicyBlock(GoogleMCPToolError):
-    """An administrator policy blocks third-party agents from this action."""
+class AdminPolicyBlock(GoogleMCPToolError, FinalFailure):
+    """An administrator policy blocks third-party agents from this action. Final."""
+
+
+class ApprovalBindingRefused(GoogleMCPToolError, NotAttempted):
+    """The server refused the retry's approval binding ("retry without inputResponses")."""
 
 
 class GoogleConfirmationRequired(ConfirmationRequired):
@@ -129,15 +153,17 @@ class GoogleConfirmationRequired(ConfirmationRequired):
 class ConfirmationChoiceRefused(GoogleConfirmationRequired):
     """The confirmer answered with a choice the server did not offer. Nothing was sent."""
 
-    def __init__(self, prompt: GoogleConfirmationRequired, choice: Any) -> None:
+    def __init__(self, prompt: GoogleConfirmationRequired, choice: Any,
+                 offered: list[tuple[str, str]] | None = None) -> None:
         self.choice = choice
         super().__init__(server=prompt.server, product=prompt.product, tool=prompt.tool,
                          message=prompt.message, title=prompt.title, choices=prompt.choices,
                          request_state=prompt.request_state, arguments=prompt.arguments,
-                         request_key=prompt.request_key, field_key=prompt.field_key)
+                         request_key=prompt.request_key, field_key=prompt.field_key,
+                         offered=list(offered) if offered is not None else prompt.offered)
 
     def summary(self) -> str:
-        offered = ", ".join(self.choice_ids) or "none"
+        offered = ", ".join(self.offered_ids) or "none"
         return (f"confirmer answer {self.choice!r} is not one of the choices {self.product} offered "
                 f"for {self.tool} ({offered}); nothing was sent")
 
@@ -170,19 +196,25 @@ def _sse_messages(text: str) -> list[Any]:
 def parse_body(text: str, content_type: str = "", request_id: Any = None) -> dict[str, Any]:
     """The JSON-RPC response message in a JSON or SSE body.
 
-    For SSE, notifications and requests are skipped; the message answering
-    ``request_id`` (or the last response if no id matches) is returned.
+    For SSE, notifications and requests are skipped and the message answering
+    ``request_id`` is returned. A stream that never answers ``request_id`` is
+    an error: another message's result is never taken for ours. Without a
+    ``request_id`` only a stream with exactly one response is accepted.
     """
     body = text or ""
     if "text/event-stream" in (content_type or "").lower() or body.lstrip().startswith(("data:", "event:", ":")):
         candidates = [m for m in _sse_messages(body)
                       if isinstance(m, Mapping) and ("result" in m or "error" in m)]
-        if candidates:
-            for m in candidates:
-                if request_id is not None and m.get("id") == request_id:
-                    return dict(m)
-            return dict(candidates[-1])
-        raise GoogleMCPError("no JSON-RPC response in the event stream")
+        if not candidates:
+            raise GoogleMCPError("no JSON-RPC response in the event stream")
+        if request_id is None:
+            if len(candidates) == 1:
+                return dict(candidates[0])
+            raise GoogleMCPError("several JSON-RPC responses in the event stream and no request id")
+        for m in candidates:
+            if m.get("id") == request_id:
+                return dict(m)
+        raise GoogleMCPError(f"no JSON-RPC response for request {request_id} in the event stream")
     try:
         msg = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -234,13 +266,20 @@ def raise_for_tool_error(result: Mapping[str, Any], *, server: str, tool: str) -
     product = PRODUCTS.get(server, server)
     label = f" [{reason}]" if reason else ""
     message = f"{product} {tool} failed{label}: {text}"
-    cls = {"UserDeniedAction": UserDeniedAction, "AdminPolicyBlock": AdminPolicyBlock}.get(reason, GoogleMCPToolError)
+    cls = {"UserDeniedAction": UserDeniedAction, "AdminPolicyBlock": AdminPolicyBlock}.get(reason)
+    if cls is None:
+        cls = ApprovalBindingRefused if _REBIND_TEXT in lowered else GoogleMCPToolError
     raise cls(message, reason=reason, server=server, tool=tool)
 
 
 def prompt_from_result(result: Mapping[str, Any], *, server: str, tool: str,
-                       arguments: Mapping[str, Any], host: str = "") -> GoogleConfirmationRequired | None:
-    """Build the approval prompt from an ``input_required`` result, or None if it has no form."""
+                       arguments: Mapping[str, Any], host: str = "",
+                       allow_persistent: bool = False) -> GoogleConfirmationRequired | None:
+    """Build the approval prompt from an ``input_required`` result, or None if it has no form.
+
+    ``offered`` is what may be put to the human: every choice when
+    ``allow_persistent``, else only the one-off ones (ALLOW_ONCE, DENY_ONCE).
+    """
     requests_ = result.get("inputRequests")
     if not isinstance(requests_, Mapping):
         return None
@@ -273,6 +312,7 @@ def prompt_from_result(result: Mapping[str, Any], *, server: str, tool: str,
             title=str(field.get("title") or "Confirm this action?"),
             choices=choices, request_state=result.get("requestState"),
             arguments=copy.deepcopy(dict(arguments)), request_key=str(key), field_key=str(field_key),
+            offered=[c for c in choices if allow_persistent or not is_persistent_choice(c[0])],
         )
     return None
 
@@ -360,7 +400,14 @@ class GoogleMCPTransport:
             if read_only and status in READ_RETRY_STATUS and attempt + 1 < attempts:
                 continue
             body = str(getattr(resp, "text", "") or "")[:_ERROR_TEXT_LIMIT]
-            unknown = (not read_only) and status >= 500
+            # A 4xx (but not 408 Request Timeout) is a refusal: nothing ran.
+            # Anything else on a write — 408, 5xx, an unexpected status — may
+            # have run.
+            refused = 400 <= status < 500 and status != 408
+            if refused:
+                raise GoogleMCPRequestRefused(f"{what} refused (HTTP {status}): {body}; nothing was run",
+                                              status=status, outcome_unknown=False, server=server, tool=tool)
+            unknown = not read_only
             suffix = "; it may or may not have run — check before trying again" if unknown else ""
             raise GoogleMCPTransportError(f"{what} failed (HTTP {status}): {body}{suffix}",
                                           status=status, outcome_unknown=unknown, server=server, tool=tool)
@@ -395,12 +442,16 @@ Confirmer = Callable[[GoogleConfirmationRequired], Any]
 
 
 def call_tool_confirmed(transport: GoogleMCPTransport, server: str, name: str, arguments: Mapping[str, Any], *,
-                        read_only: bool, confirmer: Confirmer | None = None) -> Any:
+                        read_only: bool, confirmer: Confirmer | None = None,
+                        allow_persistent: bool = False) -> Any:
     """Call a tool, handle Google's approval form, and return the tool's data.
 
     The form is answered only by ``confirmer(prompt)``; with no confirmer, or a
-    ``None`` answer, :class:`GoogleConfirmationRequired` is raised. An answer
-    outside the offered choices raises :class:`ConfirmationChoiceRefused`. The
+    ``None`` answer, :class:`GoogleConfirmationRequired` is raised. The answer
+    is checked against a snapshot of the offered choice ids taken *before* the
+    confirmer runs, so a confirmer cannot widen them; a persistent
+    ``*_ALWAYS`` choice is offered only with ``allow_persistent``. Anything
+    else raises :class:`ConfirmationChoiceRefused` and nothing is sent. The
     retry is the identical name and arguments plus ``requestState`` and
     ``inputResponses``.
     """
@@ -410,17 +461,21 @@ def call_tool_confirmed(transport: GoogleMCPTransport, server: str, name: str, a
         if result.get("resultType") != "input_required":
             break
         prompt = prompt_from_result(result, server=server, tool=name, arguments=frozen,
-                                    host=transport.host(server))
+                                    host=transport.host(server), allow_persistent=allow_persistent)
         if prompt is None:
-            raise GoogleMCPError(f"{PRODUCTS.get(server, server)} {name} asked for input this client "
-                                 "cannot show", server=server, tool=name)
+            raise GoogleMCPInputUnsupported(f"{PRODUCTS.get(server, server)} {name} asked for input this "
+                                            "client cannot show (not a form); nothing was run",
+                                            server=server, tool=name)
         if confirmer is None or round_no == MAX_ELICITATION_ROUNDS:
             raise prompt
+        offered_snapshot = tuple(prompt.offered)
+        offered_ids = frozenset(cid for cid, _ in offered_snapshot)
         choice = confirmer(prompt)
         if choice is None:
             raise prompt
-        if not isinstance(choice, str) or choice not in prompt.choice_ids:
-            raise ConfirmationChoiceRefused(prompt, choice)
+        if (not isinstance(choice, str) or choice not in offered_ids
+                or (is_persistent_choice(choice) and not allow_persistent)):
+            raise ConfirmationChoiceRefused(prompt, choice, offered=list(offered_snapshot))
         responses = {prompt.request_key: {"action": "accept", "content": {prompt.field_key: choice}}}
         result = transport.call_tool(server, name, frozen, read_only=read_only,
                                      request_state=prompt.request_state, input_responses=responses)

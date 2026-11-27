@@ -72,6 +72,40 @@ approvals:
     - '*webhook_events.py*approve*'
 ```
 
+## Google's confirmation prompt: a second gate
+
+Under the `google_mcp` provider, Google's Workspace MCP servers can stop a
+call and ask the user first (`input_required`), according to the user-review
+policies the administrator sets (Admin console → Agents → Settings → User
+review for external agents). That prompt is a second gate after the review
+queue's approval. Only the user answers it:
+
+- **The plugin never answers it.** The client raises the prompt. Only an
+  explicit confirmer passed by the caller may answer, and the only confirmers
+  are a human at a real terminal (never under Hermes, never without a TTY)
+  and `/cos confirm <id> <n>`.
+- **`/cos confirm` is authorised like `approve`.** It runs only in the gateway
+  process, for your own surfaces or listed chat approvers. Refusals are
+  audited, and so is every answer (who, which choice). The answer is sent only
+  if Google asks the very same question (server, tool, title, message,
+  choices) the user saw. Otherwise the new question is stored and shown.
+- **Only what was offered.** The answer is checked against a snapshot of the
+  offered choices taken before anyone is asked. By default only `ALLOW_ONCE`
+  and `DENY_ONCE` are offered. Persistent `*_ALWAYS` choices save an approval
+  at Google, so they need the operator's opt-in
+  (`integrations.workspace.google_mcp.allow_persistent_choices: true`).
+- **A pause is not an attempt.** The action returns to approved without
+  counting a retry, also on signed stores, because nothing ran. It is not an
+  approval either: the re-arm refusal stands, the next run re-verifies the
+  approval signature and binding, and it needs its own single-use grant.
+- **A denial is final.** `UserDeniedAction` and `AdminPolicyBlock` end the
+  action as failed, whatever its type. Google's guide says not to retry, or to
+  reach for another write tool, after a denial.
+- **The message stays private.** Google's prompt text can hold recipients and
+  body excerpts. It is kept only in the user's local state store, for
+  `/cos confirm` and preview. It is never written to the audit log or run
+  logs, and never into an error string.
+
 ## Untrusted content: trust boundaries
 
 External content (mail, attachments, calendar descriptions, Notion pages,

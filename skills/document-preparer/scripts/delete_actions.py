@@ -291,7 +291,16 @@ def cmd_execute(args: argparse.Namespace) -> int:
             raise NotAttempted(f"Provider {client.provider_name} does not implement {method_name}")
         return method(action["target"])
 
-    out = run_approved(cfg, action, get_client(cfg), soft_delete, accept_non_dict=True)
+    # Google's own prompt (google_mcp) is answered only by the human at this
+    # terminal; with no terminal the next step is printed instead.
+    from google_confirmation import default_confirmer, next_step
+
+    out = run_approved(cfg, action, get_client(cfg), soft_delete, accept_non_dict=True,
+                       confirmer=default_confirmer(cfg))
+    if out.stage == "confirm":
+        print(f"⏸ {out.error}", file=sys.stderr)
+        print(next_step(args.action_id), file=sys.stderr)
+        return 1
     if out.stage == "claim":
         print(f"Action {args.action_id} cannot be executed (approval may have lapsed).", file=sys.stderr)
         return 1

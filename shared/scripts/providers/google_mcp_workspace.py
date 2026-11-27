@@ -16,8 +16,11 @@ with domain-wide delegation — the same ``google:`` block and key routes as
 * **Google's approval prompt** — a call may come back ``input_required``. The
   client never answers it: it raises :class:`GoogleConfirmationRequired`
   unless the caller set ``confirmer`` (``confirmer(prompt) -> choice | None``),
-  and refuses any choice the server did not offer. Under domain-wide
-  delegation the server applies the same user-review policies as for a human.
+  and refuses any choice that was not offered. Only ALLOW_ONCE / DENY_ONCE are
+  offered unless the operator set
+  ``integrations.workspace.google_mcp.allow_persistent_choices: true``. Under
+  domain-wide delegation the server applies the same user-review policies as
+  for a human. A denial or an administrator block is final.
 * **Unsupported** — calendar cancel/uncancel (the tools have no status field),
   Drive untrash (no tool) and contacts (not on these servers).
 
@@ -258,6 +261,11 @@ class GoogleMCPWorkspaceClient(WorkspaceClient):
         # Called with a GoogleConfirmationRequired; returns one of its choice
         # ids or None. Only the caller sets this — the client never answers.
         self.confirmer = confirmer
+        # Persistent "Always allow" answers save an approval at Google for
+        # future calls; the operator must opt in to ever offer them.
+        from google_confirmation import allow_persistent
+
+        self.allow_persistent_choices = allow_persistent(config)
         self._credentials: Any = None      # in memory only
         self._transport = transport or GoogleMCPTransport(self._access_token, client_version=_plugin_version())
 
@@ -290,7 +298,8 @@ class GoogleMCPWorkspaceClient(WorkspaceClient):
 
     def _call(self, server: str, tool: str, arguments: Mapping[str, Any], *, read_only: bool) -> Any:
         return transport_mod.call_tool_confirmed(
-            self._transport, server, tool, arguments, read_only=read_only, confirmer=self.confirmer)
+            self._transport, server, tool, arguments, read_only=read_only, confirmer=self.confirmer,
+            allow_persistent=self.allow_persistent_choices)
 
     @staticmethod
     def _reject_draft_id(message_id: str) -> str:
@@ -618,7 +627,9 @@ class GoogleMCPWorkspaceClient(WorkspaceClient):
             raise GoogleMCPError(f"download_file_content returned no content for {file_id}",
                                  server="drive", tool="download_file_content")
         try:
-            raw = base64.b64decode(encoded, validate=False)
+            # Strict: anything but the base64 alphabet (line breaks aside) is
+            # corrupt content, and corrupt content writes nothing.
+            raw = base64.b64decode("".join(encoded.split()), validate=True)
         except (ValueError, TypeError) as exc:
             raise GoogleMCPError("download_file_content returned content that is not base64",
                                  server="drive", tool="download_file_content") from exc

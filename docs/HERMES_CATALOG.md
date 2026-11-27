@@ -80,13 +80,13 @@ name: chief-of-staff
 repo: https://github.com/moonlight-lupin/chief-of-staff-agent
 sha: "<40-char commit of the release>"
 title: Chief of Staff
-description: "Approval-gated AI chief of staff for SMEs, with read-only tools for the agent and a slash command named after your assistant (/ada, plus /cos) where you approve: daily briefings, statutory deadlines, CRM pipeline, bookkeeping and AR/AP, documents and e-signature, meeting prep, research, plus prospecting, SEO and competitor watch on budgets you approve. Several companies per install. Every consequential action goes propose → approve → execute → audit. Disclosure — calls only the services you configure (Google APIs, Microsoft Graph, Composio, your DocuSeal server; Monid and Notion through the agent's own connectors, paid calls only against approved budgets); runs hermes cron create/list for the briefings you approve, git for sync push to your private data repo, and the optional google-workspace skill's google_api.py; keeps your records as YAML/Markdown under the project root you choose plus a local state.db (review queue, audit log, spend ledger) and redacted run logs; no background processes by default (an optional webhook listener you start yourself only records events); credentials only through Hermes secrets; no telemetry."
+description: "Approval-gated AI chief of staff for SMEs, with read-only tools for the agent and a slash command named after your assistant (/ada, plus /cos) where you approve and answer Google's own confirmation prompts: daily briefings, statutory deadlines, CRM pipeline, bookkeeping and AR/AP, documents and e-signature, meeting prep, research, plus prospecting, SEO and competitor watch on budgets you approve. Several companies per install. Every consequential action goes propose → approve → execute → audit. Disclosure — calls only the services you configure (Google APIs, Google's Workspace MCP servers for Gmail, Calendar and Drive, Microsoft Graph, Composio, your DocuSeal server; Monid and Notion through the agent's own connectors, paid calls only against approved budgets); runs hermes cron create/list for the briefings you approve, git for sync push to your private data repo, and the optional google-workspace skill's google_api.py; keeps your records as YAML/Markdown under the project root you choose plus a local state.db (review queue, audit log, spend ledger) and redacted run logs; no background processes by default (an optional webhook listener you start yourself only records events); credentials only through Hermes secrets; no telemetry."
 maintainer: moonlight-lupin
 tier: community
 category: automation
 requires_hermes: ">=0.23.0"
 docs_url: https://github.com/moonlight-lupin/chief-of-staff-agent#readme
-version: "0.9.1"
+version: "0.10.0"
 readme: true
 capabilities:
   provides_tools: [cos_capabilities, cos_daily, cos_review_queue, cos_preview, cos_pipeline, cos_spend_status]

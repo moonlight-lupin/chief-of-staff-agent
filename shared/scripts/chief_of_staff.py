@@ -37,7 +37,7 @@ for skill_dir in (
     if d.exists() and str(d) not in sys.path:
         sys.path.insert(0, str(d))
 
-VERSION = "0.9.1"
+VERSION = "0.10.0"
 
 # ---------------------------------------------------------------------------
 # Optional imports (graceful degradation)
@@ -1692,6 +1692,8 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
                   f"{company['registered_companies']} registered)")
             print(f"    ! {report['company_note']}")
         print(f"  Provider                  {report['provider']}")
+        for warning in report.get("warnings") or []:
+            print(f"    ! {warning}")
         print(f"  Live-verified             {'YES' if report['provider_verified'] else 'NO'}")
         if report["provider_verification_note"]:
             print(f"    ! {report['provider_verification_note']}")

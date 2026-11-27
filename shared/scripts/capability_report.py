@@ -66,6 +66,32 @@ def _notion_section(config: Any) -> dict[str, Any]:
     }
 
 
+GOOGLE_REST_DEPRECATION = (
+    "From 1 February 2027 Google's Workspace AI Tools Addendum requires AI agents to reach "
+    "Workspace through Google's MCP servers or the Workspace CLI; this provider calls the REST "
+    "APIs. Move to `google_mcp`."
+)
+
+
+def google_rest_deprecation(workspace: Any) -> str:
+    """The addendum warning for a provider that reaches Google through its REST APIs, else ""."""
+    if not isinstance(workspace, dict):
+        workspace = {}
+    provider = str(workspace.get("provider", "google_api") or "google_api")
+    if provider == "google_api":
+        return GOOGLE_REST_DEPRECATION
+    if provider == "composio":
+        try:
+            from composio_family import _resolve_composio_family
+
+            family = _resolve_composio_family(workspace, warn=False)
+        except Exception:
+            family = "google"
+        if family != "microsoft":
+            return GOOGLE_REST_DEPRECATION
+    return ""
+
+
 def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     """Describe this installation's operating envelope in one JSON object.
 
@@ -176,6 +202,8 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
         "spend": _spend_section(config),
         "company_note": _COMPANY_NOTE if company else "",
         "provider": provider,
+        # Warnings, not failures: nothing is removed or refused because of them.
+        "warnings": [w for w in (google_rest_deprecation(workspace),) if w],
         "provider_verified": verified,
         "provider_verification_note": "" if verified else verification["note"],
         "verification": verification,

@@ -1153,6 +1153,21 @@ def _check_google_mcp(fix: bool, data: dict[str, Any] | None, config_path: Path)
     return CheckResult("google_mcp", "pass" if all_pass else "warn", "; ".join(details))
 
 
+def _check_google_rest_deprecation(fix: bool, data: dict[str, Any] | None, config_path: Path) -> CheckResult:
+    """Warn (never fail) when Google is reached through its REST APIs (Workspace AI Tools Addendum)."""
+    integrations = (data or {}).get("integrations", {}) if isinstance((data or {}).get("integrations"), dict) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    try:
+        from capability_report import google_rest_deprecation
+
+        warning = google_rest_deprecation(workspace)
+    except Exception:  # pragma: no cover - the report module ships alongside
+        warning = ""
+    if warning:
+        return CheckResult("google_rest_deprecation", "warn", warning)
+    return CheckResult("google_rest_deprecation", "pass", "skipped: Google is not reached through its REST APIs")
+
+
 def _hosted_refusal(provider: str) -> str | None:
     try:
         from workspace_guardrails import hosted_session_refusal
@@ -1550,6 +1565,7 @@ CHECKS: list[Callable[[bool, dict[str, Any] | None, Path], CheckResult]] = [
     _check_packages, _check_audit_runs,
     _check_briefing_archive,
     _check_workspace_provider, _check_composio, _check_m365, _check_google_mcp,
+    _check_google_rest_deprecation,
     _check_webhook_config, _check_google_contacts, _check_state_files, _check_orphaned_executing,
     _check_capability_report, _check_smoke_test,
     _check_cron_skill_files, _check_stale_run, _check_unhonored_advancement, _check_workflow_crons_doc,

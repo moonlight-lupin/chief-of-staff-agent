@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 SHARED_SCRIPTS = PLUGIN_ROOT / "shared" / "scripts"
@@ -205,7 +206,6 @@ def cmd_execute(args: argparse.Namespace) -> int:
         return 1
 
     action_type = action.get("type", "")
-    payload = action.get("payload", {})
 
     # Reject unsupported action types BEFORE mark_executing
     if action_type == "gmail.draft":
@@ -304,8 +304,84 @@ def cmd_execute(args: argparse.Namespace) -> int:
     # ─── Workspace (Gmail/Calendar/Drive) actions ────────────────
     # Claim → account pre-flight → capability → grant → call → record
     # (shared/scripts/action_execution.py). The approval IS the confirmation.
-    from action_execution import NotAttempted, run_approved
+    # Google's own prompt (google_mcp) is answered only by the human at this
+    # terminal; without one the next step is printed instead.
+    from google_confirmation import default_confirmer, next_step
+
+    out = execute_action(cfg, args.action_id, confirmer=default_confirmer(cfg))
+    if out.stage == "lookup":
+        print(f"❌ {out.error}", file=sys.stderr)
+        return 1
+    if out.stage == "confirm":
+        if args.summary:
+            print(f"⏸ {out.error}")
+        else:
+            print_json({"success": False, "error": out.error, "attempted": False,
+                        "confirmation_required": True,
+                        "prompt": out.prompt.to_dict() if out.prompt is not None else None})
+        print(next_step(args.action_id), file=sys.stderr)
+        return 1
+    if out.stage == "claim":
+        print(f"Cannot execute (state={state}). Approval may have expired.", file=sys.stderr)
+        return 1
+    if out.stage == "call":
+        if args.summary:
+            print(f"❌ Execution failed: {out.error}")
+        else:
+            print_json({"success": False, "error": out.error})
+        return 1
+    if out.stage == "provider":
+        if args.summary:
+            print(f"❌ Provider returned error: {out.error}")
+        else:
+            print_json({"success": False, "error": out.error, "result": out.result})
+        return 1
+    if out.stage == "refused":
+        # Refused before any provider call (payload path, unknown type): the
+        # action stays approved. Same stdout shape as a provider error.
+        if args.summary:
+            print(f"❌ Refused before any provider call: {out.error}")
+        else:
+            print_json({"success": False, "error": out.error, "attempted": False})
+        return 1
+    if not out.ok:
+        print(f"❌ {out.error}", file=sys.stderr)
+        return 1
+    result = out.result
+    if args.summary:
+        print(f"✅ Executed: {action_type} ({args.action_id})")
+    else:
+        print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
+                    "result": result if isinstance(result, dict) else str(result)})
+    return 0
+
+
+# Types cmd_execute routes elsewhere (internal stores, agent-path Notion writes,
+# drafts): never run by the workspace execution entry.
+_NON_WORKSPACE_PREFIXES = ("bookkeeper.", "notion.", "pipeline.", "cron.")
+
+
+def execute_action(cfg: Any, action_id: str, *, confirmer: Any = None) -> Any:
+    """Run one approved workspace action in-process and return its ``Execution``.
+
+    The programmatic entry behind ``cmd_execute``'s workspace branch and Hermes
+    ``/cos confirm``. ``confirmer`` answers the workspace server's own prompt
+    (Google's ``input_required``) — the caller passes one only for a human's
+    explicit choice. Stage ``lookup`` means nothing was claimed.
+    """
+    from action_execution import Execution, NotAttempted, run_approved
+    from state_db import get_pending_action
     from workspace_client import get_workspace_client
+
+    action = get_pending_action(cfg, action_id)
+    if not action:
+        return Execution(False, "lookup", error=f"Action not found: {action_id}")
+    if action.get("state") != "approved":
+        return Execution(False, "lookup", error=f"Action {action_id} is not approved (state={action.get('state')})")
+    action_type = str(action.get("type") or "")
+    if action_type == "gmail.draft" or action_type.startswith(_NON_WORKSPACE_PREFIXES):
+        return Execution(False, "lookup", error=f"{action_type} is not a workspace action this entry executes")
+    payload = action.get("payload") or {}
 
     def dispatch(client, _action):
         if action_type == "gmail.send":
@@ -365,40 +441,8 @@ def cmd_execute(args: argparse.Namespace) -> int:
             return client.contacts_delete(person_id=payload.get("person_id") or action.get("target", ""))
         raise NotAttempted(f"Unknown action type: {action_type}")
 
-    out = run_approved(cfg, action, get_workspace_client(cfg), dispatch, accept_non_dict=True)
-    if out.stage == "claim":
-        print(f"Cannot execute (state={state}). Approval may have expired.", file=sys.stderr)
-        return 1
-    if out.stage == "call":
-        if args.summary:
-            print(f"❌ Execution failed: {out.error}")
-        else:
-            print_json({"success": False, "error": out.error})
-        return 1
-    if out.stage == "provider":
-        if args.summary:
-            print(f"❌ Provider returned error: {out.error}")
-        else:
-            print_json({"success": False, "error": out.error, "result": out.result})
-        return 1
-    if out.stage == "refused":
-        # Refused before any provider call (payload path, unknown type): the
-        # action stays approved. Same stdout shape as a provider error.
-        if args.summary:
-            print(f"❌ Refused before any provider call: {out.error}")
-        else:
-            print_json({"success": False, "error": out.error, "attempted": False})
-        return 1
-    if not out.ok:
-        print(f"❌ {out.error}", file=sys.stderr)
-        return 1
-    result = out.result
-    if args.summary:
-        print(f"✅ Executed: {action_type} ({args.action_id})")
-    else:
-        print_json({"success": True, "action_id": args.action_id, "action_type": action_type,
-                    "result": result if isinstance(result, dict) else str(result)})
-    return 0
+    return run_approved(cfg, action, get_workspace_client(cfg), dispatch, accept_non_dict=True,
+                        confirmer=confirmer)
 
 
 def _payload_refusal(cfg, action_type, payload):

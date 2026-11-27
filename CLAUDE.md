@@ -24,6 +24,14 @@ response is to explain the block to the user, not to route around it.
 **Never** invent an action ID. The guardrail is default-deny: an unknown ID is
 blocked, and inventing one to match an allowlist is a bypass attempt.
 
+**Never** answer Google's own confirmation prompt (provider `google_mcp`). It
+is a second gate after the user's approval, and only the user answers it: at
+their own terminal (`review_queue.py execute --action-id <id>`), or with
+`/<assistant name> confirm <id> <n>` in Hermes. Never type `/cos confirm` for
+the user, never pick a choice for them, and never turn on
+`allow_persistent_choices`. When an action is waiting on Google, show
+`review_queue.py preview --action-id <id>` and tell the user the next step.
+
 **Never** call your own connector write tools (Gmail send, Outlook move, Drive
 delete) for a Chief-of-Staff action without claiming it first. See "Executing"
 below. Reads with your own tools are expected and encouraged; writes are not.
@@ -96,7 +104,14 @@ chief_of_staff.py demo --flow      # the whole loop, simulated: propose → sign
 chief_of_staff.py logs diagnose --latest-failed
 chief_of_staff.py sync status      # git-backed project state (cloud sessions)
 chief_of_staff.py sync push        # checkpoint state.db, commit, push the data repo
+review_queue.py preview --action-id <id>   # shows "Waiting on Google's confirmation" when it is
 ```
+
+Under `google_mcp`, an approved action that Google paused stays `approved`
+(not a failure, not a retry). The user answers Google's question with
+`review_queue.py execute --action-id <id>` at their own terminal, or
+`/<assistant name> confirm <id>` in Hermes. Neither is yours to run for them.
+A "Don't allow" or an administrator block ends the action as `failed`.
 
 `daily` is externally read-only: it reports and recommends, it never acts. It
 writes one local `.last_briefing` timestamp to avoid duplicate briefings, and
@@ -233,7 +248,9 @@ signed in the Hermes gateway, so `review_queue.py approve` and the break-glass
 env flags do not work here: propose, preview, and ask. When an action
 needs a decision, show the preview and tell the user to run
 `/<assistant name> approve <id>` (or `/cos approve <id>`). Never type that
-command for them, and never run `review_queue.py approve` yourself.
+command for them, and never run `review_queue.py approve` yourself. The same
+holds for Google's prompt: the user answers it with `/<assistant name> confirm
+<id>`; you never type it.
 
 ## Talking to the user
 

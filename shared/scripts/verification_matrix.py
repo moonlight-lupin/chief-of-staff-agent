@@ -189,6 +189,13 @@ _UNVERIFIED_NOTE = (
     "connect_workspace.py --verify --record-evidence run produces evidence that a "
     "maintainer reviews and adds to the matrix; recording alone changes nothing here."
 )
+_CATALOG_NOTE = (
+    "This provider has never been run against a live account: its actions are mapped at catalog "
+    "level from the vendor's published tool reference, and the code is tested against a mocked "
+    "transport. Treat it as unproven until you run connect_workspace.py --provider {provider} "
+    "--verify-writes --record-evidence on your own machine; a maintainer reviews that evidence "
+    "and adds it to the matrix."
+)
 _DATE_RE = re.compile(r"^\d{4}-\d{2}(-\d{2})?$")
 
 
@@ -242,7 +249,12 @@ def provider_summary(provider: str, supported: list[str] | None = None) -> dict[
         verified, note = True, _AGENT_NOTE
     else:
         verified = counts["live"] > 0
-        note = "" if verified else _UNVERIFIED_NOTE
+        if verified:
+            note = ""
+        elif counts.get("catalog") and not counts.get("mocked"):
+            note = _CATALOG_NOTE.format(provider=canonical_provider(provider))
+        else:
+            note = _UNVERIFIED_NOTE
     return {
         "provider": provider,
         "provider_verified": verified,

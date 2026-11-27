@@ -222,7 +222,15 @@ def cmd_execute(args: argparse.Namespace) -> int:
             cc=payload.get("cc") or None,
         )
 
-    out = run_approved(cfg, action, get_client(cfg), send)
+    # Google's own prompt (google_mcp) is answered only by the human at this
+    # terminal; with no terminal the next step is printed instead.
+    from google_confirmation import default_confirmer, next_step
+
+    out = run_approved(cfg, action, get_client(cfg), send, confirmer=default_confirmer(cfg))
+    if out.stage == "confirm":
+        print(f"⏸ {out.error}", file=sys.stderr)
+        print(next_step(args.action_id), file=sys.stderr)
+        return 1
     if out.stage == "claim":
         print(f"Action {args.action_id} cannot be executed (approval may have lapsed). "
               f"Re-approve with: send_email.py approve --action-id {args.action_id}", file=sys.stderr)

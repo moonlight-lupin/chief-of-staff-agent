@@ -1,14 +1,27 @@
 # Changelog
 
-## Unreleased (v0.10.0) — `google_mcp` workspace provider
+## v0.10.0 (beta) — Google Workspace MCP
 
-Touches a provider's write path, the `@guarded` decorator and the shared
-execution path.
+From 1 February 2027 Google's Workspace AI Tools Addendum requires AI agents to
+reach Workspace data through Google's MCP servers or the Workspace CLI. The
+`google_api` provider (and `composio` with the Google family) calls the REST
+APIs, so this release adds a provider for Google's own MCP servers, handles
+Google's confirmation prompt as a second gate that only the user answers, and
+warns about the REST providers. Nothing is removed.
 
-- **New provider `google_mcp`.** It talks to Google's own Workspace MCP servers
-  (Gmail, Calendar and Drive at `*mcp.googleapis.com/mcp/v1`). Google's
-  Workspace AI Tools Addendum requires these, or the Workspace CLI, for AI
-  agents from 2027-02-01.
+**Nothing here has run against a live account yet.** The new provider is at
+catalog level: mapped from Google's published tool reference (retrieved
+2026-11-27) and tested against a mocked transport. Run
+`connect_workspace.py --provider google_mcp --verify-writes --record-evidence`
+on your own machine before you rely on it.
+
+Touches a provider's write path, the `@guarded` decorator, the shared
+execution path, the state machine and the Hermes slash command.
+
+### New provider `google_mcp`
+
+- It talks to Google's own Workspace MCP servers (Gmail, Calendar and Drive at
+  `*mcp.googleapis.com/mcp/v1`).
   - Auth is a service account with domain-wide delegation. It reuses the
     `google:` block and the `GOOGLE_SERVICE_ACCOUNT_JSON` route under Hermes.
   - The scopes are `gmail.modify`, `calendar.events` and `drive` (full Drive,
@@ -18,21 +31,79 @@ execution path.
   - The transport is a stateless JSON-RPC client (`google_mcp_transport.py`)
     that parses JSON and SSE. Writes are never re-sent automatically; reads
     retry once on 429/503.
-- **Google's approval prompt is never answered by the client.** An
-  `input_required` result raises `GoogleConfirmationRequired`, unless the
-  caller passes a `confirmer`. The confirmer may answer only with a choice
-  Google offered. `UserDeniedAction`, `AdminPolicyBlock` and
-  MissingRequiredClientCapability (-32021) surface as named failures.
-- **`run_approved` records a confirmation prompt as not attempted.** It uses
-  stage `confirm`, and the action stays approved. The prompt is returned on
-  `Execution.prompt`. `@guarded` lets a `ConfirmationRequired` through and
-  audits it as `confirmation_required`.
-- The provider is wired into the registry, the capability table, the
-  hosted-session refusal, `doctor`, `connect_workspace.py --provider
-  google_mcp` and `bootstrap.py --workspace-provider google_mcp`.
+- It is wired into the registry, the capability table, the hosted-session
+  refusal, `doctor`, `connect_workspace.py --provider google_mcp` and
+  `bootstrap.py --workspace-provider google_mcp`.
 - It does not support calendar cancel/uncancel, Drive untrash or contacts.
-- The verification matrix lists every supported action at `catalog` (Google's
-  tool reference, retrieved 2026-11-27). Nothing has run against a live account.
+- The verification matrix lists every supported action at `catalog`.
+  `capabilities` now says so ("catalog level"), instead of the generic
+  "mocked only" note.
+
+### Google's confirmation prompt
+
+- **The plugin never answers it.** An `input_required` result raises
+  `GoogleConfirmationRequired` unless the caller passes a `confirmer`. The only
+  confirmers are a human at a real terminal and `/cos confirm`.
+- **Choices.** The answer is checked against a snapshot of the offered choices,
+  taken before the confirmer runs. By default only `ALLOW_ONCE` and `DENY_ONCE`
+  are offered. Persistent `*_ALWAYS` choices need
+  `integrations.workspace.google_mcp.allow_persistent_choices: true`
+  (default false).
+- **A pause is not a retry.** New transition
+  `state_db.mark_awaiting_confirmation`: `executing` → `approved`, with
+  `retry_count` untouched and the reason recorded. It also applies on signed
+  stores, because nothing ran. The re-arm refusal, signature and binding
+  re-verification, and single-use execution grants are unchanged.
+- **The pending prompt is kept** in the local state store (kv
+  `google_confirmations`): server, tool, title, message, offered choices and
+  time. It is cleared when the action executes, fails finally or is
+  cancelled. `review_queue.py preview` and `summary` show "Waiting on Google's
+  confirmation" with the commands to answer it.
+- **Terminal confirmer.** `send_email.py`, `delete_actions.py`,
+  `webhook_events.py` and `review_queue.py execute` show Google's question
+  with numbered choices when stdin and stdout are a TTY and the process is
+  not under Hermes. Otherwise they print the next step. The direct CLIs
+  (`calendar_actions.py`, `document_actions.py`, `drive_file.py`, and label
+  creation in `email_label_policy.py`) report a pause instead of crashing.
+  `document_actions.py handoff` says when the upload already happened.
+- **Hermes `/cos confirm <id>`** shows the stored question.
+  `/cos confirm <id> <n>` answers it, authorised exactly like `approve`, in
+  the gateway process only, and audited (who answered, which choice). The
+  answer is sent only if Google asks the very same question. Otherwise the
+  new one is stored and shown. It runs through the new programmatic entry
+  `webhook_events.execute_action`.
+- **A denial is final.** `UserDeniedAction` and `AdminPolicyBlock` are
+  `FinalFailure`s, final for every action type (trash, delete, update,
+  archive and label too).
+- **Not attempted, where Google certainly ran nothing.** On a write, HTTP
+  4xx including 429 (not 408), JSON-RPC errors (including -32021 and "retry
+  without inputResponses") and a non-form elicitation are `NotAttempted`. A
+  throttled send stays approved. Timeouts, 408 and 5xx stay unknown, and
+  final for sends and creates.
+- **The message stays private.** `ConfirmationRequired.to_dict()` leaves out
+  Google's message unless `include_private=True`. Only the safe form reaches
+  audit and logs.
+- An SSE body with no response for our request id is now an error.
+- Drive downloads decode base64 strictly. Corrupt content raises and writes
+  nothing.
+
+### Deprecation warnings
+
+- `capabilities` (new `warnings` field and the summary) and `doctor` (new
+  `google_rest_deprecation` check) warn when the provider is `google_api`, or
+  `composio` with the Google family. The warning: "From 1 February 2027
+  Google's Workspace AI Tools Addendum requires AI agents to reach Workspace
+  through Google's MCP servers or the Workspace CLI; this provider calls the
+  REST APIs. Move to `google_mcp`." It is a warning, not a failure.
+
+### Docs
+
+- `docs/SETUP.md` has a new "Google Workspace MCP (`google_mcp`)" section:
+  APIs and MCP services, delegation scopes, admin user-review policies,
+  unattended runs, `/cos confirm` and `allow_persistent_choices`.
+- `README.md`, `CLAUDE.md`, `docs/SECURITY_MODEL.md` (Google's prompt as a
+  second gate), `docs/HERMES_CATALOG.md` (disclosure) and
+  `company.yaml.example` are updated.
 
 ## v0.9.1 (beta) — v1.0 readiness hardening
 

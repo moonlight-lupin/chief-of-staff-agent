@@ -146,7 +146,16 @@ def resolve_tag_id(client: Any, label_name: str,
             return str(tag.get("id") or name)
     if not create_if_missing:
         return None
-    result = client.mail_create_tag(label_name)
+    from workspace_guardrails import ConfirmationRequired
+
+    try:
+        result = client.mail_create_tag(label_name)
+    except ConfirmationRequired as prompt:
+        # The server paused for the user's answer; this never answers it.
+        from google_confirmation import DIRECT_NEXT_STEP
+
+        print(f"{prompt.summary()} (label {label_name!r} not created). {DIRECT_NEXT_STEP}", file=sys.stderr)
+        return None
     if isinstance(result, Mapping):
         data = result.get("data") if isinstance(result.get("data"), Mapping) else result
         return str(data.get("id") or data.get("name") or label_name)

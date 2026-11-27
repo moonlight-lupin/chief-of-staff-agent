@@ -209,9 +209,20 @@ integrations:
     # delegate_email is the user acted as; service_account_path (or, under Hermes,
     # the GOOGLE_SERVICE_ACCOUNT_JSON secret) is a key with domain-wide delegation
     # for gmail.modify, calendar.events and drive. Google may pause a call for the
-    # user's own approval; Chief of Staff never answers that prompt by itself.
+    # user's own approval; Chief of Staff never answers that prompt by itself:
+    # you answer it at your terminal (review_queue.py execute) or with
+    # /cos confirm <id> in Hermes. A "Don't allow" or an admin block is final.
     # Not supported there: calendar cancel/uncancel, Drive untrash, contacts.
-    # Refused in hosted cloud sessions (it holds a key). Never live-verified yet.
+    # Refused in hosted cloud sessions (it holds a key). Never live-verified yet
+    # (catalog level): run connect_workspace.py --provider google_mcp
+    # --verify-writes --record-evidence on your own machine.
+    # google_api and composio (google) call the REST APIs: capabilities and
+    # doctor warn that the addendum requires google_mcp from 2027-02-01.
+    # google_mcp:
+    #   # Offer Google's persistent "Always allow ..." choices (they save an
+    #   # approval at Google that skips its prompt next time). Default false:
+    #   # only "Allow once" and "Don't allow" are ever offered.
+    #   allow_persistent_choices: false
     # provider: agent — Python client is a no-op. Hermes (or another host)
     # fetches *reads* with its own connectors / already-authed Composio MCP,
     # writes a schemas.py envelope, and passes --input to compute scripts.

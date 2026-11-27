@@ -385,6 +385,9 @@ def cmd_preview(args: argparse.Namespace) -> int:
             print(_json_dump(preview))
         print(f"Approval command: {item['approval_command']}")
         print(f"Execute command: {item['execute_command']}")
+        waiting = _google_prompt(config, args.action_id)
+        if waiting:
+            print(_google_wait_text(args.action_id, waiting))
         return 0
 
     suggestion = get_suggestion(config, args.action_id)
@@ -560,6 +563,25 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
 
     print(f"Review item not found: {args.action_id}", file=sys.stderr)
     return 1
+
+
+def _google_prompt(config: Any, action_id: str) -> dict[str, Any] | None:
+    try:
+        from google_confirmation import get_prompt
+
+        return get_prompt(config, action_id)
+    except Exception:
+        return None
+
+
+def _google_wait_text(action_id: str, record: Mapping[str, Any]) -> str:
+    """The preview's "waiting on Google" block. Answered only by the user."""
+    choices = ", ".join(str(c.get("label")) for c in record.get("choices") or [] if isinstance(c, Mapping))
+    return (f"Waiting on Google's confirmation: {record.get('product')} asked before running "
+            f"{record.get('tool')} ({record.get('recorded_at')}); nothing was run.\n"
+            f"  Choices: {choices or 'none'}\n"
+            f"  Answer it yourself: {_command('execute', action_id)} in your own terminal, "
+            f"or /<assistant name> confirm {action_id} (also /cos confirm {action_id}) in Hermes.")
 
 
 def cmd_execute(args: argparse.Namespace) -> int:
@@ -851,7 +873,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
     if actionable:
         actionable.sort(key=lambda item: (_RISK_ORDER.get(str(item.get("risk")), 99), _STATE_ORDER.get(str(item.get("state")), 99), str(item.get("created_at") or "")))
         next_item = actionable[0]
-        if next_item.get("state") == "approved":
+        waiting = _google_prompt(config, str(next_item.get("id"))) if next_item.get("state") == "approved" else None
+        if waiting:
+            verb = "Answer Google's confirmation for"
+            command = f"{next_item.get('execute_command')}  (or /cos confirm {next_item.get('id')} in Hermes)"
+        elif next_item.get("state") == "approved":
             verb = "Execute approved item"
             command = next_item.get("execute_command")
         else:
