@@ -1037,10 +1037,17 @@ def render_html(briefing: dict[str, Any], title: str | None = None) -> str:
 
     pl = sections.get("pipeline", {})
     if pl:
-        stale = pl.get("stale_deals", [])
-        if stale:
+        stale = pl.get("stale_deals", 0)
+        if isinstance(stale, list) and stale:
             sections_html.append(_html_section("Pipeline", _html_table(
                 stale, [("client_name", "Client"), ("stage", "Stage"), ("stale_days", "Days idle")])))
+        elif isinstance(stale, int) and stale > 0:
+            # collect_pipeline_stats reports a count plus the oldest stale deal.
+            body = f'<p><strong>{stale} stale deal(s)</strong> of {_esc(pl.get("active_deals", 0))} active.'
+            if pl.get("oldest_stale_id"):
+                body += (f' Oldest: {_esc(pl["oldest_stale_id"])} — {_esc(pl.get("oldest_stale_stage", "?"))}, '
+                         f'{_esc(pl.get("oldest_stale_days", 0))} days inactive.')
+            sections_html.append(_html_section("Pipeline", body + "</p>"))
         else:
             sections_html.append(_html_section("Pipeline", '<p class="muted">No stale deals.</p>'))
 

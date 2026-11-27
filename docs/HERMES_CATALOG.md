@@ -13,7 +13,7 @@ are in [`NousResearch/hermes-agent` → `plugin-catalog/README.md`](https://gith
 | 2: exact SHA pin | Pin the release commit, not the tag. |
 | 3: no self-updating code | None. Updates arrive only through `hermes plugins update`. |
 | 6: declared capabilities match | `plugin.yaml` declares the six read-only `cos_*` tools and the five hooks `register()` registers. Skills come through `register_skill`; the slash commands `/<assistant name>` and `/cos` through `register_command`. Tested. |
-| 7: install scanner | Run `hermes plugins validate . --install-deps` at the commit you pin, and read every warning. Expect one `caution`: the repository has just over the scanner's 400-file soft limit (most are tests). It is a warning for the reviewer, not a failure. See "Validation status" below. |
+| 7: install scanner | Run `hermes plugins validate . --install-deps` at the commit you pin, and read every warning. The release passes with the scan verdict `safe`. See "Validation status" below. |
 | 8: Desktop SDK | No Desktop half. |
 | 9: no core overrides | Only `register_skill`, `register_hook`, `register_session_env`, `register_tool` and `register_command`. Nothing is patched. |
 | 10: dependency policy | Each dependency has a floor and an upper bound, declared in both `pyproject.toml` and `plugin.yaml` → `python_dependencies`. Tested. |
@@ -28,23 +28,34 @@ are in [`NousResearch/hermes-agent` → `plugin-catalog/README.md`](https://gith
 
 ## Validation status
 
-Last checked on 2026-11-12, against `hermes-agent` at `72c880370f`, by
-reading `hermes_cli/plugin_validate.py` and `tools/plugin_guard.py`.
-`tests/test_hermes_catalog.py` mirrors these static checks:
+`hermes plugins validate <checkout> --install-deps` was run on 2026-11-27 with
+Hermes v0.23.1 (`hermes-agent` `555e8c2`), on a clean checkout of the 0.9.1
+release tree. Result: **Validation passed**, with no warnings.
 
 | Check | Result |
 |---|---|
-| Manifest fields (`name`, `version`, `description`) | Pass |
-| `requires_hermes` parses strictly | Pass (`>=0.23.0`) |
-| `config_schema` types | Pass: every field is `type: secret`, which Hermes accepts |
-| `requires_env` upper snake case | Pass (none declared) |
-| Python dependencies are PEP 508 with bounds | Pass |
-| Declared tools and hooks match `register()` | Pass (capability tests above) |
-| Rule 17: no binaries or bytecode, no file over 1 MB | Pass |
-| Install scanner file count | **Caution**: about 410 tracked files against a 400-file soft limit. A medium finding, so the verdict is `caution`, not `dangerous`. |
-| Install scanner content patterns | **Not run here.** Run `hermes plugins validate` at the release SHA before submitting. |
+| Manifest parses; `name`, `version`, `description` present | Pass |
+| `requires_hermes` parses | Pass (`>=0.23.0`) |
+| `config_schema` shape; `requires_env` upper snake case | Pass |
+| OAuth clients | None declared |
+| Loadable (`__init__.py`) | Pass |
+| Python dependencies | Pass: 7 requirements, installed with `--install-deps` |
+| Capability probe: declared tools, hooks and middleware match `register()` | Pass |
+| No collisions with built-in tools | Pass |
+| Security scan | **`safe`** |
+| No runtime rebinds of Hermes core | Pass |
 
-Before submitting, run Hermes's own validator at the release commit, and
+Two notes:
+
+- The 0.9.0 tree scanned `caution`, because two example snippets in skill
+  reference docs used `os.environ`. 0.9.1 rewrites both.
+- The scanner raised no file-count finding, despite the repository's ~410
+  tracked files.
+
+`tests/test_hermes_catalog.py` mirrors the static checks and rule 17, so CI
+catches a regression before a submission does.
+
+For each new release, run the validator again at the release commit, and
 paste its report into the entry PR:
 
 ```bash
@@ -75,7 +86,7 @@ tier: community
 category: automation
 requires_hermes: ">=0.23.0"
 docs_url: https://github.com/moonlight-lupin/chief-of-staff-agent#readme
-version: "0.9.0"
+version: "0.9.1"
 readme: true
 capabilities:
   provides_tools: [cos_capabilities, cos_daily, cos_review_queue, cos_preview, cos_pipeline, cos_spend_status]
