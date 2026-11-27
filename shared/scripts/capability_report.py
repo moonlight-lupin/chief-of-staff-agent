@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -75,7 +75,7 @@ GOOGLE_REST_DEPRECATION = (
 
 def google_rest_deprecation(workspace: Any) -> str:
     """The addendum warning for a provider that reaches Google through its REST APIs, else ""."""
-    if not isinstance(workspace, dict):
+    if not isinstance(workspace, Mapping):
         workspace = {}
     provider = str(workspace.get("provider", "google_api") or "google_api")
     if provider == "google_api":
@@ -102,8 +102,8 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
     ever been live-verified, where state lives, and whether that state will
     survive the session.
     """
-    integrations = config.get("integrations", {}) if isinstance(config, dict) else {}
-    workspace = integrations.get("workspace", {}) if isinstance(integrations, dict) else {}
+    integrations = config.get("integrations", {}) if isinstance(config, Mapping) else {}
+    workspace = integrations.get("workspace", {}) if isinstance(integrations, Mapping) else {}
     provider = str(workspace.get("provider", "google_api") or "google_api")
 
     supported: list[str] = []
@@ -142,8 +142,8 @@ def build_capability_report(config: Any, version: str = "") -> dict[str, Any]:
             unsupported_reasons["_contacts_probe"] = f"contacts probe unavailable: {exc}"
 
     project_root = ""
-    paths = config.get("paths", {}) if isinstance(config, dict) else {}
-    if isinstance(paths, dict):
+    paths = config.get("paths", {}) if isinstance(config, Mapping) else {}
+    if isinstance(paths, Mapping):
         project_root = str(paths.get("project_root") or "")
 
     hosted = workspace_guardrails.in_hosted_session()

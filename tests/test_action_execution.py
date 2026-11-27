@@ -332,7 +332,9 @@ def test_delete_executor_missing_method_is_not_an_attempt(cfg):
 def test_webhook_unknown_type_is_refused_with_json_and_stays_approved(cfg, capsys):
     import webhook_events
 
-    action = _approved(cfg, "mail.send", payload={"to": "x@example.com", "subject": "s", "body": "b"})
+    # mail.send is dispatchable now (send_email.py prepare queues it); a type
+    # no branch handles is refused before the claim, never after.
+    action = _approved(cfg, "made.up", payload={"to": "x@example.com", "subject": "s", "body": "b"})
     client = _client()
     with patch("webhook_events.load_config", return_value=cfg), \
          patch("workspace_client.get_workspace_client", return_value=client):
@@ -343,6 +345,7 @@ def test_webhook_unknown_type_is_refused_with_json_and_stays_approved(cfg, capsy
     assert json.loads(capsys.readouterr().out)["attempted"] is False
     client.mail_send.assert_not_called()
     assert _state(cfg, action) == "approved"
+    assert not state_db.get_pending_action(cfg, action["id"]).get("executing_at")
 
 
 def test_webhook_payload_refusal_keeps_an_upload_approved(cfg, tmp_path, capsys):

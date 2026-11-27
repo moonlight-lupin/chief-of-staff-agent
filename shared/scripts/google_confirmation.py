@@ -15,7 +15,14 @@ holds the pieces around it:
   preview`` can show it. ``state_db`` clears it when the action completes,
   fails finally, or is cancelled.
 * :func:`terminal_confirmer` / :func:`default_confirmer` — a numbered prompt
-  for a human at a real terminal. Never under Hermes, never without a TTY.
+  at a terminal. Never under Hermes, never without a TTY, and never on a store
+  enrolled for signed approvals: there ``/cos confirm`` in the gateway is the
+  only answer path. A TTY can be faked (a pty, an unset ``HERMES_SESSION_*``),
+  so on an unsigned standalone install the terminal prompt is a convenience,
+  not proof that a human answered — the same "not a sandbox" limit as the
+  other TTY prompts. It never offers or accepts a persistent ``*_ALWAYS``
+  choice, even when the operator opted in; those go only through
+  ``/cos confirm``.
 * :func:`next_step` — what to tell the user when nobody could be asked.
 """
 from __future__ import annotations
@@ -30,7 +37,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import plugin_secrets  # noqa: E402
-from workspace_guardrails import ConfirmationRequired  # noqa: E402
+from workspace_guardrails import ConfirmationRequired, is_persistent_choice  # noqa: E402
 
 STORE = "google_confirmations"      # == state_db.CONFIRMATIONS_STORE
 _MAX_TERMINAL_TRIES = 3
@@ -143,12 +150,24 @@ def render(item: ConfirmationRequired | Mapping[str, Any], *, footer: str = "") 
     return "\n".join(lines)
 
 
-def next_step(action_id: str) -> str:
+def signing_enforced(config: Any) -> bool:
+    """True when the store is enrolled for signed approvals (fails closed)."""
+    try:
+        from approval_signing import enforced
+
+        return bool(enforced(config))
+    except Exception:  # noqa: BLE001 — unknown means enforced: no terminal answers
+        return True
+
+
+def next_step(action_id: str, config: Any = None) -> str:
     """What the user does when nobody could be asked here. Never done for them."""
-    return (f"Google is waiting for your confirmation; nothing was run and {action_id} stays approved. "
-            f"Answer it yourself: run `review_queue.py execute --action-id {action_id}` in your own "
-            f"terminal, or `/<assistant name> confirm {action_id}` (also `/cos confirm {action_id}`) "
-            f"in Hermes.")
+    lead = f"Google is waiting for your confirmation; nothing was run and {action_id} stays approved. "
+    hermes = f"`/<assistant name> confirm {action_id}` (also `/cos confirm {action_id}`) in Hermes"
+    if config is not None and signing_enforced(config):
+        return lead + f"This install uses signed approvals, so the only way to answer it is {hermes}."
+    return (lead + f"Answer it yourself: run `review_queue.py execute --action-id {action_id}` in your own "
+            f"terminal, or {hermes}.")
 
 
 DIRECT_NEXT_STEP = ("Google is waiting for your confirmation; nothing was run. Run this command again "
@@ -169,16 +188,19 @@ def paused_result(prompt: ConfirmationRequired, *, action: str, provider: str, t
 
 def terminal_confirmer(config: Any = None, *, input_fn: Callable[[str], str] = input,
                        out: Any = None) -> Confirmer:
-    """A confirmer that shows the prompt and returns the human's numbered choice.
+    """A confirmer that shows the prompt and returns the typed numbered choice.
 
-    Only the offered choices are listed. ``c``, an empty line, end of input or
-    three answers that are not a listed number return None (nothing is sent).
+    Only the offered one-off choices are listed: a persistent ``*_ALWAYS``
+    choice is never shown or returned here, whatever the opt-in. ``c``, an
+    empty line, end of input or three answers that are not a listed number
+    return None (nothing is sent).
     """
 
     def confirm(prompt: ConfirmationRequired) -> str | None:
         stream = out if out is not None else sys.stdout
-        choices = list(prompt.offered)
-        print(render(prompt), file=stream, flush=True)
+        choices = [c for c in prompt.offered if not is_persistent_choice(c[0])]
+        shown = {**_record(prompt), "choices": [{"id": cid, "label": label} for cid, label in choices]}
+        print(render(shown), file=stream, flush=True)
         if not choices:
             return None
         for _ in range(_MAX_TERMINAL_TRIES):
@@ -190,7 +212,8 @@ def terminal_confirmer(config: Any = None, *, input_fn: Callable[[str], str] = i
             if raw in ("", "c", "cancel", "q"):
                 return None
             if raw.isdigit() and 1 <= int(raw) <= len(choices):
-                return choices[int(raw) - 1][0]
+                choice = choices[int(raw) - 1][0]
+                return None if is_persistent_choice(choice) else choice
             print(f"Choose a number from 1 to {len(choices)}, or c to cancel.", file=stream, flush=True)
         return None
 
@@ -205,8 +228,13 @@ def _interactive() -> bool:
 
 
 def default_confirmer(config: Any) -> Confirmer | None:
-    """A terminal confirmer when a human is at a real terminal outside Hermes, else None."""
-    if not _interactive() or plugin_secrets.under_hermes():
+    """A terminal confirmer at a TTY outside Hermes on an unsigned store, else None.
+
+    On a store enrolled for signed approvals there is never a terminal
+    confirmer: a pty and an unset ``HERMES_SESSION_*`` fake the other two
+    checks, so ``/cos confirm`` in the gateway is the only answer path.
+    """
+    if signing_enforced(config) or not _interactive() or plugin_secrets.under_hermes():
         return None
     return terminal_confirmer(config)
 

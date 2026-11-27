@@ -1264,8 +1264,6 @@ class StateDB:
         elif new_state == "failed":
             audit_extra["error"] = updated.get("last_error") or ""
         _audit_action(self.config, updated, new_state, audit_extra or None)
-        if new_state in _PROMPT_CLEARING_STATES:
-            self.clear_confirmation(action_id)
         if new_state == "executed":
             _log_event(
                 "action_executed",
@@ -1342,6 +1340,10 @@ class StateDB:
             if cur.rowcount == 0:
                 return None
             self._bump_meta("pending_actions_version")
+        if new_state in _PROMPT_CLEARING_STATES:
+            # Every terminal transition — including the direct ones (lapsed at
+            # claim, stale claim) — forgets a stored server prompt.
+            self.clear_confirmation(action_id)
         return self.get_action(action_id)
 
     # ── Events ──
@@ -1554,7 +1556,30 @@ class StateDB:
                 """,
                 (cutoff, cutoff, cutoff, cutoff, cutoff),
             )
-            return int(cur.rowcount or 0)
+            removed = int(cur.rowcount or 0)
+        if removed:
+            self._prune_confirmations()
+        return removed
+
+    def _prune_confirmations(self) -> None:
+        """Drop stored server prompts whose action is gone (best-effort)."""
+        try:
+            data = self.get_kv(CONFIRMATIONS_STORE)
+            ids = set((data or {}).get("prompts") or {})
+            if not ids:
+                return
+            live = {r[0] for r in self.conn.execute("SELECT id FROM pending_actions").fetchall()}
+            stale = ids - live
+            if not stale:
+                return
+
+            def drop(d: dict[str, Any]) -> None:
+                for action_id in stale:
+                    (d.get("prompts") or {}).pop(action_id, None)
+
+            self.mutate_kv(CONFIRMATIONS_STORE, drop)
+        except Exception:  # pragma: no cover - a stale record must never break a purge
+            pass
 
     # ── Migration ──
 
@@ -2291,7 +2316,6 @@ def revert_stuck_action(config: Any, action_id: str, max_minutes: int = 15) -> d
         if updated is None:
             return None
         _audit_action(config, updated, "failed", {"action_id": action_id, "reason": "stale_claim"})
-        db.clear_confirmation(action_id)
         return updated
 
 

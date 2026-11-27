@@ -193,9 +193,14 @@ your approval in the review queue, and only you answer it:
   signature and binding are re-checked, and it gets a new single-use grant.
 - `review_queue.py preview --action-id <id>` shows "Waiting on Google's
   confirmation" with the commands to answer it.
-- **At your own terminal**, `review_queue.py execute --action-id <id>` shows
-  Google's question (product, tool, message) with numbered choices and sends
-  the number you type. Without a terminal it prints the next step instead.
+- **At a terminal, on an unsigned standalone install**,
+  `review_queue.py execute --action-id <id>` shows Google's question (product,
+  tool, message) with numbered "Allow once" / "Don't allow" choices and sends
+  the number typed. Without a terminal it prints the next step instead. This
+  is a convenience, not proof that a human answered: a pty can fake the
+  terminal, the same limit as the plugin's other TTY prompts
+  ([security model](SECURITY_MODEL.md#limits-we-state-plainly)). On a store
+  enrolled for signed approvals (Hermes) there is no terminal prompt at all.
 - **Under Hermes**, `/<assistant name> confirm <id>` (or `/cos confirm <id>`)
   shows the stored question and `/cos confirm <id> <n>` answers it. The same
   people as `approve` may answer: your own surfaces, or users listed in
@@ -209,7 +214,12 @@ By default only **Allow once** and **Don't allow** are offered. Google may
 also offer persistent choices such as "Always allow this tool"
 (`ALLOW_TOOL_ALWAYS`). Those save an approval at Google that skips its prompt
 next time, so they are refused unless the operator sets
-`integrations.workspace.google_mcp.allow_persistent_choices: true`.
+`integrations.workspace.google_mcp.allow_persistent_choices: true`. Even then
+they are offered only through `/cos confirm`, never at the terminal.
+
+The pending question (including Google's message) is kept in `state.db`. With
+git-backed storage, `sync push` commits it to your private data repo with the
+rest of the state.
 
 **Unattended runs** (cron, webhooks, a headless agent) have nobody to answer
 the prompt. They can complete only what your administrator set to Allow.

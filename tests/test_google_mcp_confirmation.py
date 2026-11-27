@@ -695,7 +695,7 @@ def surface(cfg, client, monkeypatch):
 
 
 def _paused(cfg, surface, http, client):
-    action = _create(cfg, "gmail.send")       # the queue's type, as webhook_events dispatches it
+    action = _create(cfg, "mail.send")        # what send_email.py prepare queues
     assert "approved" in surface.cos_command(f"approve {action['id']} fine", platform="cli").lower()
     action = _row(cfg, action)
     http.add(input_required())
@@ -836,3 +836,228 @@ class TestDeprecation:
         ok_check = doctor_base._check_google_rest_deprecation(
             False, {"integrations": {"workspace": {"provider": "google_mcp"}}}, Path("company.yaml"))
         assert ok_check.status == "pass"
+
+
+# ── hardening from the adversarial review ───────────────────────────────────
+
+def _spoof_tty(monkeypatch):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(gc.plugin_secrets, "under_hermes", lambda: False)
+
+
+class TestPtyOnEnrolledStore:
+    def test_no_terminal_confirmer_on_an_enrolled_store(self, cfg, signer, monkeypatch):
+        _spoof_tty(monkeypatch)              # a pty (script -qec ...) and env -u HERMES_SESSION_ID
+        assert gc.default_confirmer(cfg) is None
+        c = _PausingClient()
+        gc.attach_confirmer(c, cfg)
+        assert c.confirmer is None
+
+    def test_unsigned_store_still_gets_one(self, cfg, monkeypatch):
+        _spoof_tty(monkeypatch)
+        assert callable(gc.default_confirmer(cfg))
+
+    def test_next_step_on_an_enrolled_store_names_only_cos_confirm(self, cfg, signer):
+        text = gc.next_step("a-1", cfg)
+        assert "/cos confirm a-1" in text and "review_queue.py execute" not in text
+
+    def test_executor_on_an_enrolled_store_never_answers(self, cfg, client, http, signer, monkeypatch, capsys):
+        mod = _load_script("send_email_pty_t", "skills/document-preparer/scripts/send_email.py")
+        action = _approve(cfg, _create(cfg), signer)
+        http.add(input_required())
+        _spoof_tty(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda *_a: "1")
+        monkeypatch.setattr(mod, "get_client", lambda _c: client, raising=False)
+        monkeypatch.setattr(mod, "load_config", lambda *_a, **_k: cfg, raising=False)
+        with patch("company_registry.preflight", return_value=(None, {})):
+            rc = mod.cmd_execute(types.SimpleNamespace(action_id=action["id"], config=None, summary=False))
+        assert rc == 1 and len(http.calls) == 1
+        assert "inputResponses" not in http.tool_calls[0]
+        assert _row(cfg, action)["state"] == "approved"
+        assert f"/cos confirm {action['id']}" in capsys.readouterr().err
+
+    def test_terminal_never_offers_persistent_choices_even_opted_in(self, cfg):
+        cfg["integrations"]["workspace"]["google_mcp"] = {"allow_persistent_choices": True}
+        p = _prompt(choices=list(zip(ENUM, ["Allow once", "Aud", "Tool", "Don't allow"])),
+                    offered=list(zip(ENUM, ["Allow once", "Aud", "Tool", "Don't allow"])))
+        out = io.StringIO()
+        answers = iter(["2"])
+        choice = gc.terminal_confirmer(cfg, input_fn=lambda _p="": next(answers), out=out)(p)
+        assert choice == "DENY_ONCE"
+        assert "ALWAYS" not in out.getvalue()
+
+    def test_terminal_answer_cannot_be_persistent_through_the_client(self, cfg, http):
+        cfg["integrations"]["workspace"]["google_mcp"] = {"allow_persistent_choices": True}
+        c = gmw.GoogleMCPWorkspaceClient(cfg)
+        http.add(input_required())
+        confirm = gc.terminal_confirmer(cfg, input_fn=lambda _p="": "3", out=io.StringIO())
+        c.confirmer = confirm
+        with granted(cfg, "mail.send", "bob@partner.example"):
+            with pytest.raises(gmt.GoogleConfirmationRequired):   # "3" is not a listed number
+                c.mail_send("bob@partner.example", "Hi", "Body")
+        assert len(http.calls) == 1
+
+
+class TestDispatch:
+    QUEUED = ["mail.send", "gmail.send", "gmail.label", "gmail.archive", "gmail.create_label",
+              "gmail.trash", "drive.trash", "calendar.cancel", "calendar.update", "calendar.create",
+              "drive.upload", "drive.download"]
+
+    def _mod(self):
+        return _load_script("webhook_dispatch_t", "skills/document-preparer/scripts/webhook_events.py")
+
+    @pytest.mark.parametrize("action_type", QUEUED)
+    def test_each_queued_type_is_dispatchable(self, action_type):
+        mod = self._mod()
+        assert mod.dispatch_key(action_type) in mod.DISPATCHABLE_TYPES
+
+    def test_neutral_aliases_of_dispatchable_types_are_dispatchable(self):
+        import workspace_capabilities as caps
+
+        mod = self._mod()
+        for legacy, neutral in caps.LEGACY_ACTION_ALIASES.items():
+            if legacy in mod.DISPATCHABLE_TYPES:
+                assert mod.dispatch_key(neutral) == legacy
+
+    def test_mail_send_runs(self, cfg, client, http, monkeypatch):
+        mod = self._mod()
+        action = _approve(cfg, _create(cfg, "mail.send"))
+        http.add(ok({"id": "m-new"}))
+        monkeypatch.setattr("workspace_client.get_workspace_client", lambda _c: client)
+        with patch("company_registry.preflight", return_value=(None, {})):
+            assert mod.execute_action(cfg, action["id"]).ok
+        assert http.tool_calls[0]["name"] == "send_message"
+
+    @pytest.mark.parametrize("action_type", ["mail.draft", "calendar.delete", "made.up"])
+    def test_unknown_type_is_refused_before_the_claim(self, cfg, client, http, signer, monkeypatch, action_type):
+        mod = self._mod()
+        action = _approve(cfg, _create(cfg, action_type, "x", {"target": "x"}), signer)
+        monkeypatch.setattr("workspace_client.get_workspace_client", lambda _c: client)
+        out = mod.execute_action(cfg, action["id"])
+        assert out.stage == "lookup" and not out.ok
+        row = _row(cfg, action)
+        assert row["state"] == "approved" and not row.get("executing_at")
+        assert len(http.calls) == 0
+
+
+class TestRpcOutcome:
+    @pytest.mark.parametrize("code", [-32603, -32001, -32000])
+    def test_other_rpc_codes_on_a_send_are_final(self, cfg, client, http, code):
+        action = _approve(cfg, _create(cfg))
+        http.add(FakeResponse(body={"jsonrpc": "2.0", "id": 1, "error": {"code": code, "message": "internal"}}))
+        out = _run(cfg, client, action)
+        assert not out.ok
+        assert _row(cfg, action)["state"] == "failed"
+
+    @pytest.mark.parametrize("code", [-32603, -32001])
+    def test_transport_marks_them_unknown(self, creds, code):
+        fake = FakeHTTP(FakeResponse(body={"jsonrpc": "2.0", "id": 1, "error": {"code": code, "message": "x"}}))
+        with patch("google_mcp_transport.requests.post", side_effect=fake):
+            with pytest.raises(gmt.GoogleMCPRPCError) as exc:
+                _transport().call_tool("gmail", "send_message", {"to": ["x@y.z"]}, read_only=False)
+        assert not isinstance(exc.value, ax.NotAttempted)
+        assert exc.value.outcome_unknown is True
+
+    @pytest.mark.parametrize("code", [-32021, -32600, -32601, -32602, -32700])
+    def test_protocol_refusals_are_not_attempted(self, creds, code):
+        fake = FakeHTTP(FakeResponse(body={"jsonrpc": "2.0", "id": 1, "error": {"code": code, "message": "x"}}))
+        with patch("google_mcp_transport.requests.post", side_effect=fake):
+            with pytest.raises(gmt.GoogleMCPRPCError) as exc:
+                _transport().call_tool("gmail", "send_message", {"to": ["x@y.z"]}, read_only=False)
+        assert isinstance(exc.value, ax.NotAttempted) and exc.value.outcome_unknown is False
+
+    def test_failed_precondition_retry_without_input_responses_is_not_attempted(self, cfg, client, http):
+        action = _approve(cfg, _create(cfg))
+        http.add(FakeResponse(body={"jsonrpc": "2.0", "id": 1, "error": {
+            "code": -32000, "message": "FAILED_PRECONDITION: retry without inputResponses"}}))
+        _run(cfg, client, action)
+        assert _row(cfg, action)["state"] == "approved"
+
+
+class TestStalePrompts:
+    def test_lapsed_at_claim_clears_the_record(self, cfg, client, http):
+        import sqlite3
+
+        action = _approve(cfg, _create(cfg))
+        http.add(input_required())
+        _run(cfg, client, action)
+        assert gc.get_prompt(cfg, action["id"])
+        db = Path(cfg["paths"]["project_root"]) / "state.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE pending_actions SET approved_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+                         (action["id"],))
+        assert state_db.mark_executing(cfg, action["id"]) is None
+        assert _row(cfg, action)["state"] == "expired"
+        assert gc.get_prompt(cfg, action["id"]) is None
+
+    def test_purge_clears_the_record(self, cfg):
+        import sqlite3
+
+        action = _create(cfg)
+        gc.record_prompt(cfg, action["id"], _prompt())
+        db = Path(cfg["paths"]["project_root"]) / "state.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE pending_actions SET state='executed', executed_at='2000-01-01T00:00:00+00:00' "
+                         "WHERE id=?", (action["id"],))
+        assert state_db.cleanup_old_actions(cfg, days=30) == 1
+        assert gc.get_prompt(cfg, action["id"]) is None
+
+    @pytest.mark.parametrize("answer", ["", " 1"])
+    def test_cos_confirm_needs_an_approved_action(self, cfg, surface, http, answer):
+        action = _create(cfg)                     # requested, never approved
+        gc.record_prompt(cfg, action["id"], _prompt())
+        out = surface.cos_command(f"confirm {action['id']}{answer}", platform="cli")
+        assert "no longer waiting" in out.lower()
+        assert MESSAGE_TEXT not in out
+        assert gc.get_prompt(cfg, action["id"]) is None
+        assert len(http.calls) == 0
+
+
+class TestGatewayEnv:
+    FLAGS = ("CHIEF_OF_STAFF_AUTO_APPROVE", "CHIEF_OF_STAFF_ALLOW_DESTRUCTIVE")
+
+    def _watch(self, monkeypatch):
+        import os
+
+        seen = []
+        original = workspace_guardrails.confirm_action
+
+        def watching(*a, **k):
+            seen.append({f: os.environ.get(f) for f in self.FLAGS})
+            return original(*a, **k)
+        monkeypatch.setattr(workspace_guardrails, "confirm_action", watching)
+        return seen
+
+    def test_cos_confirm_never_sets_break_glass_in_the_gateway(self, cfg, surface, http, client, monkeypatch):
+        import os
+
+        action = _paused(cfg, surface, http, client)
+        seen = self._watch(monkeypatch)
+        http.add(input_required(), ok({"id": "m-new"}))
+        with patch("company_registry.preflight", return_value=(None, {})):
+            surface.cos_command(f"confirm {action['id']} 1", platform="cli")
+        assert _row(cfg, action)["state"] == "executed"
+        assert seen and all(v is None for snap in seen for v in snap.values())
+        assert not any(os.environ.get(f) for f in self.FLAGS)
+
+    def test_unsigned_store_keeps_the_env_gate(self, cfg, client, http, monkeypatch):
+        seen = self._watch(monkeypatch)
+        action = _approve(cfg, _create(cfg))
+        http.add(ok({"id": "m-new"}))
+        assert _run(cfg, client, action).ok
+        assert seen and seen[0]["CHIEF_OF_STAFF_AUTO_APPROVE"] == "1"
+
+
+class TestMappingConfig:
+    def test_mapping_proxy_config_is_read(self):
+        from types import MappingProxyType
+
+        from capability_report import build_capability_report, google_rest_deprecation
+
+        workspace = MappingProxyType({"provider": "m365"})
+        assert google_rest_deprecation(workspace) == ""
+        report = build_capability_report(MappingProxyType(
+            {"integrations": MappingProxyType({"workspace": workspace})}))
+        assert report["provider"] == "m365"
+        assert not report["warnings"]

@@ -357,12 +357,23 @@ def _audit_confirm(config: Any, action_id: str, approver: str, choice: str, answ
 
 def _confirm(config: Any, action_id: str, rest: list[str], approver: str, command: str, platform: str) -> str:
     """Show, or answer with the user's numbered choice, Google's stored prompt for one action."""
-    from google_confirmation import get_prompt, render, same_prompt
+    from google_confirmation import clear_prompt, get_prompt, render, same_prompt
+    from state_db import get_pending_action
 
     record = get_prompt(config, action_id)
     if not record:
         return (f"No Google confirmation is waiting for {action_id}. "
                 f"/{command} preview {action_id} shows the action.")
+    action = get_pending_action(config, action_id) or {}
+    if action.get("state") != "approved":
+        # Only an approved action can be waiting on Google: anything else is a
+        # stale record. Forget it, and show nothing from it.
+        try:
+            clear_prompt(config, action_id)
+        except Exception:
+            pass
+        return (f"{action_id} is no longer waiting on Google's confirmation "
+                f"(state={action.get('state', 'unknown')}).")
     choices = [c for c in record.get("choices") or [] if isinstance(c, Mapping)]
     footer = f"Answer with /{command} confirm {action_id} <n>"
     if not rest:

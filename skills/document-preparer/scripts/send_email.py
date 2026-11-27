@@ -229,7 +229,7 @@ def cmd_execute(args: argparse.Namespace) -> int:
     out = run_approved(cfg, action, get_client(cfg), send, confirmer=default_confirmer(cfg))
     if out.stage == "confirm":
         print(f"⏸ {out.error}", file=sys.stderr)
-        print(next_step(args.action_id), file=sys.stderr)
+        print(next_step(args.action_id, cfg), file=sys.stderr)
         return 1
     if out.stage == "claim":
         print(f"Action {args.action_id} cannot be executed (approval may have lapsed). "

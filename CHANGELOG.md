@@ -43,7 +43,8 @@ execution path, the state machine and the Hermes slash command.
 
 - **The plugin never answers it.** An `input_required` result raises
   `GoogleConfirmationRequired` unless the caller passes a `confirmer`. The only
-  confirmers are a human at a real terminal and `/cos confirm`.
+  confirmers are `/cos confirm` and, on unsigned installs only, a terminal
+  prompt.
 - **Choices.** The answer is checked against a snapshot of the offered choices,
   taken before the confirmer runs. By default only `ALLOW_ONCE` and `DENY_ONCE`
   are offered. Persistent `*_ALWAYS` choices need
@@ -86,6 +87,37 @@ execution path, the state machine and the Hermes slash command.
 - An SSE body with no response for our request id is now an error.
 - Drive downloads decode base64 strictly. Corrupt content raises and writes
   nothing.
+
+### Hardening from an adversarial review
+
+- **No terminal answer on signed stores.** A pty and an unset
+  `HERMES_SESSION_*` can fake the TTY and Hermes checks. So on a store
+  enrolled for signed approvals, no terminal confirmer is ever built, and
+  `/cos confirm` in the gateway is the only answer path; the next-step text
+  says so. On unsigned installs the terminal prompt is documented as a
+  convenience, not proof that a human answered.
+- **No persistent choices at the terminal.** `*_ALWAYS` choices are never
+  shown or returned there, even with `allow_persistent_choices`. They are
+  offered only through `/cos confirm`.
+- **`mail.send` is dispatchable.** `webhook_events.execute_action` maps the
+  neutral types back through `LEGACY_ACTION_ALIASES`. Before, an action queued
+  by `send_email.py prepare` failed with "Unknown action type" under
+  `/cos confirm` and was burned. An unknown type is now refused before the
+  claim, never after.
+- **Only protocol refusals are "not attempted".** These are -32021, -32600,
+  -32601, -32602 and -32700, plus "retry without inputResponses". Any other
+  JSON-RPC code on a write (for example -32603 or -32001) has an unknown
+  outcome, so a send stays final.
+- **No stale prompts.** Every terminal transition clears the stored prompt,
+  including expiry at claim and purge. `/cos confirm` shows nothing for an
+  action that is no longer approved, and drops its record.
+- **No break-glass env flags on signed stores.** `run_approved` does not set
+  the flags there (the grant authorises). They no longer leak from the
+  long-lived gateway to concurrent child commands.
+- **Mapping configs.** `capabilities` reads any `Mapping` config, so the
+  deprecation warning no longer fires for m365 given a non-dict mapping.
+- **Docs.** The security model now says that git-backed `sync push` commits
+  the stored prompt's message (in `state.db`) to the private data repo.
 
 ### Deprecation warnings
 

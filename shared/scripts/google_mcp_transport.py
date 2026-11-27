@@ -25,8 +25,8 @@ Retries: a read may be re-sent once on HTTP 429/503 (the server refused
 before doing anything). A write is never re-sent automatically — after a
 timeout, a 408 or a 5xx the outcome is unknown, and the error says so. Where
 the server certainly ran nothing (any other 4xx including 429, a JSON-RPC
-error, a non-form elicitation, a "retry without inputResponses" refusal) the
-error is also a :class:`workspace_guardrails.NotAttempted`, so an executor
+protocol refusal -32021/-32600/-32601/-32602/-32700, a non-form elicitation,
+a "retry without inputResponses" refusal) the error is also a :class:`workspace_guardrails.NotAttempted`, so an executor
 keeps the action approved. ``UserDeniedAction`` and ``AdminPolicyBlock`` are
 :class:`workspace_guardrails.FinalFailure`: never retried.
 
@@ -76,6 +76,10 @@ PRODUCTS: dict[str, str] = {
 MAX_ELICITATION_ROUNDS = 3          # the same bound as Google's reference clients
 READ_RETRY_STATUS = frozenset({429, 503})
 MISSING_CLIENT_CAPABILITY = -32021
+# JSON-RPC errors where the server certainly ran nothing: a missing client
+# capability, and the protocol's own invalid request / method / params / parse
+# errors. Every other code on a write has an unknown outcome.
+NOT_RUN_RPC_CODES = frozenset({MISSING_CLIENT_CAPABILITY, -32600, -32601, -32602, -32700})
 _ERROR_TEXT_LIMIT = 300
 
 _DENIED_TEXT = "declined the confirmation request"
@@ -112,17 +116,28 @@ class GoogleMCPInputUnsupported(GoogleMCPError, NotAttempted):
     """The server asked for input this client cannot show (not a form). Nothing ran."""
 
 
-class GoogleMCPRPCError(GoogleMCPError, NotAttempted):
-    """A top-level JSON-RPC ``error`` object: the call was refused, nothing ran."""
+class GoogleMCPRPCError(GoogleMCPError):
+    """A top-level JSON-RPC ``error`` object.
+
+    Only the protocol refusals (:class:`GoogleMCPRPCRefused`) certainly ran
+    nothing. Any other code (-32603 internal error, -32001, a server-defined
+    code) on a write may have run: ``outcome_unknown`` is True, and a send or
+    create is final.
+    """
 
     def __init__(self, message: str, *, code: int | None = None, data: Any = None,
-                 server: str = "", tool: str = "") -> None:
+                 server: str = "", tool: str = "", outcome_unknown: bool = False) -> None:
         super().__init__(message, server=server, tool=tool)
         self.code = code
         self.data = data
+        self.outcome_unknown = outcome_unknown
 
 
-class MissingClientCapability(GoogleMCPRPCError):
+class GoogleMCPRPCRefused(GoogleMCPRPCError, NotAttempted):
+    """-32021, -32600, -32601, -32602, -32700, or "retry without inputResponses": nothing ran."""
+
+
+class MissingClientCapability(GoogleMCPRPCRefused):
     """JSON-RPC -32021: the call needs form elicitation the request did not declare."""
 
 
@@ -394,8 +409,14 @@ class GoogleMCPTransport:
                         raise MissingClientCapability(
                             f"{what} refused [MissingRequiredClientCapability -32021]: {text}",
                             code=code, data=err.get("data"), server=server, tool=tool)
-                    raise GoogleMCPRPCError(f"{what} JSON-RPC error {code}: {text}",
-                                            code=code, data=err.get("data"), server=server, tool=tool)
+                    if code in NOT_RUN_RPC_CODES or _REBIND_TEXT in text.lower():
+                        raise GoogleMCPRPCRefused(f"{what} refused (JSON-RPC {code}): {text}; nothing was run",
+                                                  code=code, data=err.get("data"), server=server, tool=tool)
+                    unknown = not read_only
+                    suffix = "; it may or may not have run — check before trying again" if unknown else ""
+                    raise GoogleMCPRPCError(f"{what} JSON-RPC error {code}: {text}{suffix}",
+                                            code=code, data=err.get("data"), server=server, tool=tool,
+                                            outcome_unknown=unknown)
                 return msg
             if read_only and status in READ_RETRY_STATUS and attempt + 1 < attempts:
                 continue

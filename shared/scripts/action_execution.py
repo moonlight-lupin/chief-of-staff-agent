@@ -39,7 +39,7 @@ prints the outcome its own way.
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
@@ -74,6 +74,24 @@ def _approved_env() -> Iterator[None]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+def _approval_gate(cfg: Any) -> Any:
+    """The env gate for an unsigned store; nothing for a signed one.
+
+    On a store enrolled for signed approvals the execution grant (a
+    contextvar) is what authorises the write, and ``confirm_action`` ignores
+    the env flags. Setting them there would only leak them process-wide — in
+    the long-lived Hermes gateway (``/cos confirm`` runs in-process) to every
+    child it starts meanwhile — so they are never set.
+    """
+    try:
+        from approval_signing import enforced
+
+        signed = bool(enforced(cfg))
+    except Exception:  # noqa: BLE001 — unknown means signed: never touch the env
+        signed = True
+    return nullcontext() if signed else _approved_env()
 
 
 def run_approved(
@@ -133,7 +151,7 @@ def run_approved(
     try:
         if has_confirmer:
             client.confirmer = confirmer
-        with _approved_env():
+        with _approval_gate(cfg):
             result = call(client, action)
     except ConfirmationRequired as exc:
         # The server asked the user and ran nothing: not an attempt and not a

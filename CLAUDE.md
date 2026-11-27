@@ -25,11 +25,14 @@ response is to explain the block to the user, not to route around it.
 blocked, and inventing one to match an allowlist is a bypass attempt.
 
 **Never** answer Google's own confirmation prompt (provider `google_mcp`). It
-is a second gate after the user's approval, and only the user answers it: at
-their own terminal (`review_queue.py execute --action-id <id>`), or with
-`/<assistant name> confirm <id> <n>` in Hermes. Never type `/cos confirm` for
-the user, never pick a choice for them, and never turn on
-`allow_persistent_choices`. When an action is waiting on Google, show
+is a second gate after the user's approval, and only the user answers it:
+with `/<assistant name> confirm <id> <n>` in Hermes, or on an unsigned
+standalone install at their own terminal (`review_queue.py execute --action-id
+<id>`). Never type `/cos confirm` for the user, never pick a choice for them,
+never turn on `allow_persistent_choices`, and never fake a terminal (a pty,
+`script`, piped input, unsetting `HERMES_SESSION_*`) to answer the terminal
+prompt. The terminal prompt is a convenience, not a proof a human answered;
+using it yourself is a bypass attempt. When an action is waiting on Google, show
 `review_queue.py preview --action-id <id>` and tell the user the next step.
 
 **Never** call your own connector write tools (Gmail send, Outlook move, Drive

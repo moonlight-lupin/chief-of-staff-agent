@@ -386,8 +386,8 @@ def cmd_preview(args: argparse.Namespace) -> int:
         print(f"Approval command: {item['approval_command']}")
         print(f"Execute command: {item['execute_command']}")
         waiting = _google_prompt(config, args.action_id)
-        if waiting:
-            print(_google_wait_text(args.action_id, waiting))
+        if waiting and action.get("state") == "approved":
+            print(_google_wait_text(args.action_id, waiting, config))
         return 0
 
     suggestion = get_suggestion(config, args.action_id)
@@ -574,14 +574,17 @@ def _google_prompt(config: Any, action_id: str) -> dict[str, Any] | None:
         return None
 
 
-def _google_wait_text(action_id: str, record: Mapping[str, Any]) -> str:
+def _google_wait_text(action_id: str, record: Mapping[str, Any], config: Any = None) -> str:
     """The preview's "waiting on Google" block. Answered only by the user."""
+    from google_confirmation import signing_enforced
+
     choices = ", ".join(str(c.get("label")) for c in record.get("choices") or [] if isinstance(c, Mapping))
+    hermes = f"/<assistant name> confirm {action_id} (also /cos confirm {action_id}) in Hermes"
+    how = (f"  Signed approvals: answer it only with {hermes}." if config is not None and signing_enforced(config)
+           else f"  Answer it yourself: {_command('execute', action_id)} in your own terminal, or {hermes}.")
     return (f"Waiting on Google's confirmation: {record.get('product')} asked before running "
             f"{record.get('tool')} ({record.get('recorded_at')}); nothing was run.\n"
-            f"  Choices: {choices or 'none'}\n"
-            f"  Answer it yourself: {_command('execute', action_id)} in your own terminal, "
-            f"or /<assistant name> confirm {action_id} (also /cos confirm {action_id}) in Hermes.")
+            f"  Choices: {choices or 'none'}\n" + how)
 
 
 def cmd_execute(args: argparse.Namespace) -> int:
