@@ -36,21 +36,21 @@ lenses and to a deep-research pass; it replaces neither, and it is **never a scr
   `stopReason` and `usage` (`searches`, `emails`, `phoneNumbers`). **Check that `emails` and
   `phoneNumbers` are 0.**
 
-A minimal stdlib call (Python):
+A minimal stdlib call (Python). Pass the key in as `key` from wherever your agent keeps
+`EXA_API_KEY`, and never print or commit it:
 
 ```python
-import json, os, time, urllib.request
-KEY = os.environ["EXA_API_KEY"]                     # never print or commit it
-def call(method, path, body=None):
+import json, time, urllib.request
+def call(key, method, path, body=None):
     req = urllib.request.Request("https://api.exa.ai" + path, method=method,
                                  data=json.dumps(body).encode() if body else None,
-                                 headers={"x-api-key": KEY, "Content-Type": "application/json"})
+                                 headers={"x-api-key": key, "Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(req))
-run = call("POST", "/agent/runs", {"query": TASK, "effort": "medium",
-                                   "input": {"data": [{"organisation": n} for n in NAMES]},
-                                   "outputSchema": SCHEMA, "budget": {"maxCostDollars": 1}})
+run = call(key, "POST", "/agent/runs", {"query": TASK, "effort": "medium",
+                                        "input": {"data": [{"organisation": n} for n in NAMES]},
+                                        "outputSchema": SCHEMA, "budget": {"maxCostDollars": 1}})
 while run.get("status") not in ("completed", "failed", "cancelled"):
-    time.sleep(5); run = call("GET", f"/agent/runs/{run['id']}")
+    time.sleep(5); run = call(key, "GET", f"/agent/runs/{run['id']}")
 json.dump(run, open("exa_run.json", "w"), indent=2)  # keep the raw run as the working record
 ```
 

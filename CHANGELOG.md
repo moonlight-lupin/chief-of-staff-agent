@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## v0.9.1 (beta) — v1.0 readiness hardening
+
+A hardening release. It ships the v1.0 readiness work (#40–#45, #49, #50):
+- signed approvals and per-action execution grants;
+- account binding;
+- untrusted-content confinement;
+- a live-verification evidence matrix;
+- spend-envelope hardening;
+- supply-chain controls;
+- one shared execution path;
+- the seven-step `demo --flow`.
+
+Each is detailed below. The 1.0 go/no-go is in `docs/V1_READINESS_ASSESSMENT.md`.
+
+### Catalog validation
+
+- `hermes plugins validate --install-deps` passes on this release, with
+  Hermes v0.23.1. The security scan is `safe`.
+- The two skill reference snippets behind 0.9.0's `caution` no longer use
+  `os.environ`:
+  - the Exa example takes the key as a parameter;
+  - the SearXNG fallback test sets the variable in the shell.
+- `docs/HERMES_CATALOG.md` and `docs/V1_READINESS_ASSESSMENT.md` record the
+  real result, including that there was no file-count finding.
+
+### Fix
+
+- **The HTML daily briefing crashed as soon as any deal went stale.** The
+  pipeline section reports `stale_deals` as a count, but the HTML renderer
+  iterated it as a list. It now shows the count and the oldest stale deal,
+  and still accepts a list. The text briefing was not affected.
 
 ### Flagship demo, catalog check, onboarding
 

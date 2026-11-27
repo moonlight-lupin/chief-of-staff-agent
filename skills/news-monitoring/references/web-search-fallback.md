@@ -43,13 +43,13 @@ This means: if SearXNG (NAS) is down → DDGS picks up automatically → Firecra
 
 ## Verifying the Fallback
 
-```python
-# Test: point SearXNG at a dead port to trigger fallback
-import os
-os.environ['SEARXNG_URL'] = 'http://127.0.0.1:9999/'  # dead port
+Point SearXNG at a dead port for one run, and check the search still succeeds via DDGS:
+
+```bash
+SEARXNG_URL=http://127.0.0.1:9999/ python -c "
 from tools.web_tools import web_search_tool
-result = web_search_tool('test query', limit=2)
-# Should succeed via DDGS fallback
+print(web_search_tool('test query', limit=2))
+"
 ```
 
 ## Available Backends

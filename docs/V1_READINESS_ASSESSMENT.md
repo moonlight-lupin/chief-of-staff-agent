@@ -1,14 +1,15 @@
 # v1.0 readiness: go/no-go
 
-Assessed 2026-11-12, after the eight readiness PRs (#40–#45, #49, and the demo/docs PR).
-The version stays at 0.9.0 until the owner decides.
+Assessed 2026-11-12, after the eight readiness PRs (#40–#45, #49, #50). Updated
+2026-11-27 for 0.9.1, a hardening release that ships that work. 1.0 waits on the
+owner steps below.
 
 ## Verdict
 
-**Not yet: conditional GO.** No known code blocker remains. Four steps belong to the
-owner and can't be done from a pull request: run Hermes's validator, refresh the live
-evidence, turn on repository protections, and publish the advisory. Tag 1.0 once
-those four are done.
+**Not yet: conditional GO.** No known code blocker remains. Of the four owner steps,
+Hermes's validator is done: it passed with a `safe` scan on 2026-11-27. Three remain:
+refresh the live evidence, turn on repository protections, and publish the advisory.
+Tag 1.0 once those three are done.
 
 ## What changed since 0.9.0
 
@@ -29,11 +30,11 @@ below.
 
 ## Blockers: owner actions before tagging 1.0
 
-1. **Run Hermes's validator at the release commit:**
-   `hermes plugins validate <checkout> --install-deps`. Paste the report into the
-   catalog PR. It was not run in this assessment: installing and running Hermes's code was
-   outside the permissions here. Expect one `caution`: about 410 tracked files against a
-   400-file soft limit. Accept it or consolidate the test files.
+1. ~~**Run Hermes's validator at the release commit.**~~ **Done, 2026-11-27.**
+   Validation passed and the scan verdict is `safe` (Hermes v0.23.1). The two
+   `os.environ` doc snippets behind the 0.9.0 `caution` were rewritten. Paste the
+   report into the catalog PR, and run it again for each release
+   (`docs/HERMES_CATALOG.md`).
 2. **Refresh the live evidence** for every provider you advertise:
    `connect_workspace.py --verify-writes --record-evidence`, then promote the candidates
    in a reviewed change. The recorded runs are from July 2026. `google_api` has only
@@ -69,4 +70,3 @@ below.
 - `bootstrap.py --workspace-provider agent` for hosted sessions. Drop the Google
   placeholder on m365 installs, and stop `readiness` repeating the hosted-session
   refusal five times.
-- Get under the scanner's 400-file soft limit if the catalog reviewer asks.
